@@ -57,11 +57,11 @@ cdef class Context:
         return bytes(self) == bytes(other)
 
     def __bool__(self):
-        return not self.iszero()
+        return not self.is_zero()
 
     @classmethod
     def zero(cls):
         return cls()
 
-    cpdef iszero(self):
+    cpdef is_zero(self):
         return bytes(self) == b' ' * hydro_hash_CONTEXTBYTES
