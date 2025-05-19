@@ -8,8 +8,18 @@ name = "cydrogen"
 version = "0.0.1"
 description = "cython bindings for the libhydrogen library"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 
 [tool.cython-lint]
 max-line-length = 140
+
+[tool.ruff]
+line-length = 140
+indent-width = 4
+target-version = "py312"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
