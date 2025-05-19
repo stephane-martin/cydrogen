@@ -11,6 +11,19 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 
+[dependency-groups]
+develop = [
+  "ruff>=0.11.10",
+  "mypy>=1.15.0",
+  "mypy-extensions>=1.1.0",
+  "cython-lint>=0.16.6",
+  "meson>=1.8.0",
+  "meson-python>=0.18.0",
+  "build>=0.11.0",
+  "nox",
+  "pre-commit",
+]
+
 [tool.cython-lint]
 max-line-length = 140
 
