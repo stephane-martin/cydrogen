@@ -59,7 +59,8 @@ cdef class MasterKey(BaseKey):
         """
         if password is None:
             raise ValueError("Password cannot be None")
-        if len(password) == 0:
+        cdef size_t password_length = len(password)
+        if password_length == 0:
             raise ValueError("Password cannot be empty")
         if length == 0:
             raise ValueError("Length cannot be 0")
@@ -67,7 +68,7 @@ cdef class MasterKey(BaseKey):
         cdef Context myctx = Context(ctx)
         derived_key = bytearray(length)
         cdef uint8_t* derived_key_ptr = derived_key
-        if hydro_pwhash_deterministic(derived_key_ptr, length, password_ptr, len(password), myctx.ctx, self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>password_ptr, password_length, myctx.ctx, self.key, opslimit, 0, 1) != 0:
             raise DeriveException("Failed to derive key from password")
         return bytes(derived_key)
 
@@ -119,7 +120,7 @@ cdef class MasterKey(BaseKey):
             raise ValueError("Password cannot be empty")
         cdef const unsigned char* password_ptr = &password[0]
         cdef uint8_t stored[hydro_pwhash_STOREDBYTES]
-        if hydro_pwhash_create(stored, password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_create(stored, <const char*>password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
             raise DeriveException("Failed to hash password")
         cdef bytearray res = bytearray(hydro_pwhash_STOREDBYTES)
         cdef unsigned char* res_ptr = res
@@ -141,10 +142,10 @@ cdef class MasterKey(BaseKey):
         cdef size_t stored_length = len(stored)
         if stored_length != hydro_pwhash_STOREDBYTES:
             raise ValueError("Stored hash must be 128 bytes long")
-        cdef unsigned char* stored_ptr = &stored[0]
+        cdef const unsigned char* stored_ptr = &stored[0]
         cdef uint8_t stored_array[hydro_pwhash_STOREDBYTES]
         memcpy(&stored_array[0], stored_ptr, hydro_pwhash_STOREDBYTES)
         cdef const unsigned char* password_ptr = &password[0]
-        if hydro_pwhash_verify(stored_array, password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_verify(stored_array, <const char*>password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
             return False
         return True
