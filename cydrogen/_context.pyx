@@ -23,7 +23,7 @@ cdef class Context:
         # if ctx is None, return the empty context
         # the empty context is all spaces
         if ctx is None:
-            spaces = b' ' * hydro_hash_CONTEXTBYTES
+            spaces = b" " * hydro_hash_CONTEXTBYTES
             src_ptr = spaces
             memcpy(&self.ctx[0], src_ptr, hydro_hash_CONTEXTBYTES)
             return
@@ -36,7 +36,7 @@ cdef class Context:
 
         # if ctx is a string, encode it to bytes
         if isinstance(ctx, str):
-            ctx = ctx.encode('ascii')
+            ctx = ctx.encode("ascii")
 
         # else, assume ctx is a bytes like object
         cdef const unsigned char[:] ctx_view = ctx
@@ -51,7 +51,7 @@ cdef class Context:
         if other is None:
             return False
         if isinstance(other, str):
-            other = other.encode('ascii')
+            other = other.encode("ascii")
         if not isinstance(other, Context) and not isinstance(other, bytes):
             return False
         return bytes(self) == bytes(other)
@@ -64,4 +64,4 @@ cdef class Context:
         return cls()
 
     cpdef is_zero(self):
-        return bytes(self) == b' ' * hydro_hash_CONTEXTBYTES
+        return bytes(self) == b" " * hydro_hash_CONTEXTBYTES

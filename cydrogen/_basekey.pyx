@@ -48,7 +48,7 @@ cdef class BaseKey:
 
     @classmethod
     def zero(cls):
-        return cls(b'\x00' * hydro_hash_KEYBYTES)
+        return cls(b"\x00" * hydro_hash_KEYBYTES)
 
     cpdef is_zero(self):
         cdef uint8_t z[hydro_hash_KEYBYTES]
