@@ -20,7 +20,7 @@ from ._utils cimport TeeWriter
 from ._decls cimport *
 
 
-cdef bytes enc_msg_header = b'qN\x00\x00'
+cdef bytes enc_msg_header = b"qN\x00\x00"
 
 
 cdef class SecretBoxKey(BaseKey):
