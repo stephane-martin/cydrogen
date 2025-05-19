@@ -5,7 +5,9 @@ import pathlib
 
 
 cdef class FileOpener:
-    def __init__(self, fileobj_or_path, mode="rb"):
+    def __init__(self, fileobj_or_path, *, mode="rb"):
+        if fileobj_or_path is None:
+            raise ValueError("fileobj_or_path cannot be None")
         self.fileobj = None
         self.path = None
         self.mode = mode
@@ -34,6 +36,8 @@ cdef class SafeReader:
     """
 
     def __init__(self, fileobj):
+        if fileobj is None:
+            raise ValueError("fileobj cannot be None")
         self.direct = 0
         self.fileobj = fileobj
         if isinstance(fileobj, SafeReader) or isinstance(fileobj, io.BufferedReader):
@@ -43,6 +47,8 @@ cdef class SafeReader:
         """
         Read bytes into the buffer. Raises OSError if not all bytes can't be read.
         """
+        if buf is None:
+            raise ValueError("buf cannot be None")
         if self.direct == 1:
             return self.fileobj.readinto(buf)
         cdef size_t offset = 0
@@ -73,6 +79,8 @@ cdef class SafeWriter:
     """
 
     def __init__(self, fileobj):
+        if fileobj is None:
+            raise ValueError("fileobj cannot be None")
         self.direct = 0
         self.fileobj = fileobj
         if isinstance(fileobj, SafeWriter) or isinstance(fileobj, io.BufferedWriter):
@@ -82,6 +90,8 @@ cdef class SafeWriter:
         """
         Write bytes to the file-like object. Raises OSError if not all bytes can't be written.
         """
+        if buf is None:
+            raise ValueError("buf cannot be None")
         if self.direct == 1:
             return self.fileobj.write(buf)
         cdef size_t offset = 0

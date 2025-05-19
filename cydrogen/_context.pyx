@@ -48,11 +48,20 @@ cdef class Context:
         PyBuffer_FillInfo(buffer, self, self.ctx, hydro_hash_CONTEXTBYTES, 1, flags)
 
     def __eq__(self, other):
-        if not isinstance(other, Context):
+        if other is None:
             return False
-        cdef Context o = <Context>other
-        cdef const char* self_ptr = &self.ctx[0]
-        cdef const char* other_ptr = &o.ctx[0]
-        if self_ptr == other_ptr:
-            return True
-        return hydro_equal(self_ptr, other_ptr, hydro_hash_CONTEXTBYTES) == 1
+        if isinstance(other, str):
+            other = other.encode('ascii')
+        if not isinstance(other, Context) and not isinstance(other, bytes):
+            return False
+        return bytes(self) == bytes(other)
+
+    def __bool__(self):
+        return not self.iszero()
+
+    @classmethod
+    def zero(cls):
+        return cls()
+
+    cpdef iszero(self):
+        return bytes(self) == b' ' * hydro_hash_CONTEXTBYTES

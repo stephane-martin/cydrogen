@@ -22,6 +22,8 @@ cpdef randomize_buffer(unsigned char[:] buf):
     """
     Fill a buffer with random bytes.
     """
+    if buf is None:
+        raise ValueError("Buffer cannot be None")
     hydro_random_buf(<void*>&buf[0], len(buf))
 
 

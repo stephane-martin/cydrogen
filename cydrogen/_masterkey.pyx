@@ -4,6 +4,7 @@ import base64
 
 from libc.string cimport memcpy
 from libc.stdint cimport uint8_t
+from libc.stdint cimport uint64_t
 
 from ._decls cimport *
 
@@ -41,30 +42,32 @@ cdef class MasterKey(BaseKey):
         cdef MasterKey o = <MasterKey>other
         return self.eq(o)
 
-    cpdef derive_key_from_password(self, password, ctx=None, opslimit=10000):
+    cpdef derive_key_from_password(self, const unsigned char[:] password, ctx=None, uint64_t opslimit=10000):
         """
         Derive a key from a password using the master key.
         The derived key is returned as a BaseKey.
         """
+        if password is None:
+            raise ValueError("Password cannot be None")
         return BaseKey(self.derive_key_from_password_with_length(password, length=32, ctx=ctx, opslimit=opslimit))
 
-    cpdef derive_key_from_password_with_length(self, password, length=32, ctx=None, opslimit=10000):
+    cpdef derive_key_from_password_with_length(self, const unsigned char[:] password, size_t length=32, ctx=None, uint64_t opslimit=10000):
         """
         Derive a key from a password using the master key.
         The length of the derived key in bytes is specified by the length argument.
         The derived key is returned as bytes.
         """
-        password = bytes(password)
+        if password is None:
+            raise ValueError("Password cannot be None")
         if len(password) == 0:
             raise ValueError("Password cannot be empty")
-        cdef size_t clen = int(length)
-        if clen == 0:
+        if length == 0:
             raise ValueError("Length cannot be 0")
-        cdef const char* password_ptr = password
+        cdef const unsigned char* password_ptr = &password[0]
         cdef Context myctx = Context(ctx)
-        derived_key = bytearray(clen)
+        derived_key = bytearray(length)
         cdef uint8_t* derived_key_ptr = derived_key
-        if hydro_pwhash_deterministic(derived_key_ptr, clen, password_ptr, len(password), myctx.ctx, self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_deterministic(derived_key_ptr, length, password_ptr, len(password), myctx.ctx, self.key, opslimit, 0, 1) != 0:
             raise DeriveException("Failed to derive key from password")
         return bytes(derived_key)
 
@@ -75,7 +78,7 @@ cdef class MasterKey(BaseKey):
         """
         return BaseKey(self.derive_subkey_with_length(subkey_id, length=32, ctx=ctx))
 
-    cpdef derive_subkey_with_length(self, uint64_t subkey_id, length=32, ctx=None):
+    cpdef derive_subkey_with_length(self, uint64_t subkey_id, size_t length=32, ctx=None):
         """
         Derive a subkey from the master key using the subkey_id.
         The length of the derived key in bytes is specified by the length argument.
@@ -83,13 +86,12 @@ cdef class MasterKey(BaseKey):
         """
         if self.is_zero():
             raise ValueError("A zero key cannot be used to derive a subkey")
-        cdef size_t clen = int(length)
-        if clen < hydro_kdf_BYTES_MIN or clen > hydro_kdf_BYTES_MAX:
+        if length < hydro_kdf_BYTES_MIN or length > hydro_kdf_BYTES_MAX:
             raise ValueError("Subkey length must be between 16 and 65535 bytes")
         cdef Context myctx = Context(ctx)
-        cdef bytearray subkey = bytearray(clen)
+        cdef bytearray subkey = bytearray(length)
         cdef uint8_t* subkey_ptr = subkey
-        if hydro_kdf_derive_from_key(subkey_ptr, clen, subkey_id, myctx.ctx, self.key) != 0:
+        if hydro_kdf_derive_from_key(subkey_ptr, length, subkey_id, myctx.ctx, self.key) != 0:
             raise DeriveException("Failed to derive subkey")
         return bytes(subkey)
 
@@ -105,38 +107,44 @@ cdef class MasterKey(BaseKey):
         cdef bytes secret_key = kp.sk[:hydro_sign_SECRETKEYBYTES]
         return SignKeyPair(secret_key)
 
-    cpdef hash_password(self, password, opslimit=10000):
+    cpdef hash_password(self, const unsigned char[:] password, uint64_t opslimit=10000):
         """
         Returns a representation of the password suitable for storage.
         The returned value is a bytes object.
         """
-        password = bytes(password)
-        if len(password) == 0:
+        if password is None:
+            raise ValueError("Password cannot be None")
+        cdef size_t password_length = len(password)
+        if password_length == 0:
             raise ValueError("Password cannot be empty")
-        cdef const char* password_ptr = password
+        cdef const unsigned char* password_ptr = &password[0]
         cdef uint8_t stored[hydro_pwhash_STOREDBYTES]
-        if hydro_pwhash_create(stored, password_ptr, len(password), self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_create(stored, password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
             raise DeriveException("Failed to hash password")
         cdef bytearray res = bytearray(hydro_pwhash_STOREDBYTES)
-        cdef uint8_t* res_ptr = res
+        cdef unsigned char* res_ptr = res
         memcpy(res_ptr, stored, hydro_pwhash_STOREDBYTES)
         return bytes(res)
 
-    cpdef verify_password(self, password, stored, opslimit=10000):
+    cpdef verify_password(self, const unsigned char[:] password, const unsigned char[:] stored, uint64_t opslimit=10000):
         """
         Verify a password against a stored hash.
         Returns True if the password is correct, False otherwise.
         """
-        password = bytes(password)
-        if len(password) == 0:
+        if password is None:
+            raise ValueError("Password cannot be None")
+        if stored is None:
+            raise ValueError("Stored hash cannot be None")
+        cdef size_t password_length = len(password)
+        if password_length == 0:
             raise ValueError("Password cannot be empty")
-        stored = bytes(stored)
-        if len(stored) != hydro_pwhash_STOREDBYTES:
+        cdef size_t stored_length = len(stored)
+        if stored_length != hydro_pwhash_STOREDBYTES:
             raise ValueError("Stored hash must be 128 bytes long")
-        cdef uint8_t* stored_ptr = stored
+        cdef unsigned char* stored_ptr = &stored[0]
         cdef uint8_t stored_array[hydro_pwhash_STOREDBYTES]
         memcpy(&stored_array[0], stored_ptr, hydro_pwhash_STOREDBYTES)
-        cdef const char* password_ptr = password
-        if hydro_pwhash_verify(stored_array, password_ptr, len(password), self.key, opslimit, 0, 1) != 0:
+        cdef const unsigned char* password_ptr = &password[0]
+        if hydro_pwhash_verify(stored_array, password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
             return False
         return True

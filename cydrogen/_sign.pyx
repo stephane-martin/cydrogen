@@ -41,6 +41,8 @@ cdef class SignPublicKey:
         return base64.standard_b64encode(self).decode("ascii")
 
     cdef eq(self, SignPublicKey other):
+        if other is None:
+            return False
         cdef const uint8_t* self_ptr = &self.key[0]
         cdef const uint8_t* other_ptr = &other.key[0]
         if self_ptr == other_ptr:
@@ -58,6 +60,10 @@ cdef class SignPublicKey:
         Verify a signature for a message using the public key and an optional context.
         Returns True if the signature is valid, False otherwise.
         """
+        if message is None:
+            raise ValueError("Message cannot be None")
+        if signature is None:
+            raise ValueError("Signature cannot be None")
         if len(signature) != hydro_sign_BYTES:
             raise ValueError("Signature must be 64 bytes long")
         cdef Context myctx = Context(ctx)
@@ -102,6 +108,8 @@ cdef class SignSecretKey:
         return base64.standard_b64encode(self).decode("ascii")
 
     cdef eq(self, SignSecretKey other):
+        if other is None:
+            return False
         cdef const uint8_t* self_ptr = &self.key[0]
         cdef const uint8_t* other_ptr = &other.key[0]
         if self_ptr == other_ptr:
@@ -119,6 +127,8 @@ cdef class SignSecretKey:
         Sign a message using the secret key and an optional context.
         Returns the signature as a bytes object.
         """
+        if message is None:
+            raise ValueError("Message cannot be None")
         cdef Context myctx = Context(ctx)
         cdef const unsigned char* msg_ptr = &message[0]
         cdef uint8_t csig[hydro_sign_BYTES]
@@ -141,6 +151,8 @@ cdef class SignSecretKey:
         return SignPublicKey(bytes(pk))
 
     cpdef check_publick_key(self, SignPublicKey other):
+        if other is None:
+            return False
         return other.eq(self.public_key())
 
 
@@ -185,7 +197,7 @@ cdef class SignKeyPair:
 
 
 cdef class BaseSigner:
-    def __init__(self, ctx=None, data=None):
+    def __init__(self, *, ctx=None, data=None):
         self.ctx = Context(ctx)
         self.finalized = 0
         if hydro_sign_init(&self.state, self.ctx.ctx) != 0:
@@ -194,12 +206,16 @@ cdef class BaseSigner:
             self.update(data)
 
     cpdef update(self, const unsigned char[:] data):
+        if data is None:
+            return
         if hydro_sign_update(&self.state, &data[0], len(data)) != 0:
             raise SignException("Failed to update signer")
 
 
 cdef class Signer(BaseSigner):
-    def __init__(self, SignSecretKey private_key, ctx=None, data=None):
+    def __init__(self, SignSecretKey private_key, *, ctx=None, data=None):
+        if private_key is None:
+            raise ValueError("Private key cannot be None")
         super().__init__(ctx=ctx, data=data)
         self.key = private_key
 
@@ -217,11 +233,15 @@ cdef class Signer(BaseSigner):
 
 
 cdef class Verifier(BaseSigner):
-    def __init__(self, SignPublicKey public_key, ctx=None, data=None):
+    def __init__(self, SignPublicKey public_key, *, ctx=None, data=None):
+        if public_key is None:
+            raise ValueError("Public key cannot be None")
         super().__init__(ctx=ctx, data=data)
         self.key = public_key
 
     cpdef verify(self, const unsigned char[:] signature):
+        if signature is None:
+            raise ValueError("Signature cannot be None")
         if len(signature) != hydro_sign_BYTES:
             raise ValueError("Signature must be 64 bytes long")
         if self.finalized == 1:

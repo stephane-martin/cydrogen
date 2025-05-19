@@ -4,7 +4,6 @@ import base64
 import io
 import struct
 
-
 from libc.stdint cimport uint64_t
 
 from ._basekey cimport BaseKey
@@ -53,11 +52,13 @@ cdef class SecretBoxKey(BaseKey):
         return self.eq(o)
 
     @classmethod
-    def from_password(cls, password, master_key=None, ctx=None, opslimit=10000):
+    def from_password(cls, const unsigned char[:] password, *, master_key=None, ctx=None, opslimit=10000):
         """
         Derive a key from a password using the master key.
         The derived key is returned as a SecretBoxKey.
         """
+        if password is None:
+            raise ValueError("Password cannot be None")
         cdef mkey = MasterKey(master_key)
         cdef BaseKey derived = mkey.derive_key_from_password(password, ctx=ctx, opslimit=opslimit)
         return cls(derived)
@@ -68,8 +69,8 @@ cdef class EncryptedMessage:
         """
         Initialize the encrypted message.
         """
-        if message is None or msg_id is None:
-            raise ValueError("Message and message ID cannot be None")
+        if message is None:
+            raise ValueError("Message cannot be None")
         self.message = message
         self.msg_id = msg_id
 
@@ -88,26 +89,32 @@ cdef class EncryptedMessage:
         """
         Write the encrypted message to a file-like object.
         """
+        if fileobj is None:
+            raise ValueError("File object cannot be None")
         cdef bytes header = enc_msg_header + struct.pack("<Q", len(self.message)) + struct.pack("<Q", self.msg_id)
         cdef SafeWriter w
-        with FileOpener(fileobj, "wb") as f:
+        with FileOpener(fileobj, mode="wb") as f:
             w = SafeWriter(f)
             w.write(header)
             w.write(self.message)
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed):
+        if framed is None:
+            raise ValueError("Framed message cannot be None")
         return cls.readfrom(io.BytesIO(framed))
 
     @classmethod
-    def readfrom(cls, fileobj, max_msg_size=None):
+    def readfrom(cls, fileobj, *, max_msg_size=None):
+        if fileobj is None:
+            raise ValueError("File object cannot be None")
         cdef size_t msg_size = 0
         cdef uint64_t msg_id = 0
         cdef bytearray msg
         cdef bytearray header_buf = bytearray(20)
         cdef SafeReader r
 
-        with FileOpener(fileobj, "rb") as f:
+        with FileOpener(fileobj, mode="rb") as f:
             r = SafeReader(f)
             try:
                 r.readinto(header_buf)
@@ -131,52 +138,56 @@ cdef class EncryptedMessage:
         Decrypt the message using the secret box key and context.
         Returns the decrypted message as bytes.
         """
+        if key is None:
+            raise ValueError("Key cannot be None")
         return SecretBox(key, ctx=ctx).decrypt(self.message, msg_id=self.msg_id, out=out)
 
 
 cdef class SecretBox:
-    def __init__(self, key, ctx=None):
+    def __init__(self, key, *, ctx=None):
         """
         Initialize the secret box with a key and context.
         """
+        if key is None:
+            raise ValueError("Key cannot be None")
         self.key = SecretBoxKey(key)
         self.ctx = Context(ctx)
 
-    cpdef encrypt(self, const unsigned char[:] plaintext, msg_id=0, out=None):
+    cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, out=None):
         """
         Encrypt the plaintext using the secret box key and context.
         The optional msg_id can be used to differentiate between different messages.
         If out is provided, the ciphertext will be written to it.
         Returns the encrypted message as an EncryptedMessage object.
         """
-
+        if plaintext is None:
+            raise ValueError("Plaintext cannot be None")
         cdef const unsigned char* plaintext_ptr = &plaintext[0]
         cdef size_t plaintext_len = len(plaintext)
         cdef size_t ciphertext_len = plaintext_len + hydro_secretbox_HEADERBYTES
-        cdef uint64_t cmsg_id = int(msg_id)
         cdef bytearray ciphertext = bytearray(ciphertext_len)
         cdef unsigned char* ciphertext_ptr = ciphertext
-        if hydro_secretbox_encrypt(ciphertext_ptr, plaintext_ptr, plaintext_len, cmsg_id, self.ctx.ctx, self.key.key) != 0:
+        if hydro_secretbox_encrypt(ciphertext_ptr, plaintext_ptr, plaintext_len, msg_id, self.ctx.ctx, self.key.key) != 0:
             raise EncryptException("Failed to encrypt message")
-        cdef EncryptedMessage msg = EncryptedMessage(ciphertext, cmsg_id)
+        cdef EncryptedMessage msg = EncryptedMessage(ciphertext, msg_id)
         if out is not None:
             msg.writeto(out)
         return msg
 
-    cpdef decrypt(self, const unsigned char[:] ciphertext, msg_id=0, out=None):
+    cpdef decrypt(self, const unsigned char[:] ciphertext, uint64_t msg_id=0, out=None):
         """
         Decrypt the ciphertext using the secret box key and context.
         The optional msg_id must match the one used during encryption.
         If out is provided, the plaintext will be written to it.
         """
-
+        if ciphertext is None:
+            raise ValueError("Ciphertext cannot be None")
         cdef const unsigned char* ciphertext_ptr = &ciphertext[0]
         cdef size_t ciphertext_len = len(ciphertext)
         cdef size_t plaintext_len = ciphertext_len - hydro_secretbox_HEADERBYTES
-        cdef uint64_t cmsg_id = int(msg_id)
         cdef bytearray plaintext = bytearray(plaintext_len)
         cdef unsigned char* plaintext_ptr = plaintext
-        if hydro_secretbox_decrypt(plaintext_ptr, ciphertext_ptr, ciphertext_len, cmsg_id, self.ctx.ctx, self.key.key) != 0:
+        if hydro_secretbox_decrypt(plaintext_ptr, ciphertext_ptr, ciphertext_len, msg_id, self.ctx.ctx, self.key.key) != 0:
             raise DecryptException("Failed to decrypt message")
         cdef SafeWriter w
         if out is not None:
@@ -184,15 +195,18 @@ cdef class SecretBox:
             w.write(plaintext)
         return bytes(plaintext)
 
-    cpdef encrypt_file(self, src, dst, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cpdef encrypt_file(self, src, dst, size_t chunk_size=io.DEFAULT_BUFFER_SIZE):
         """
         Encrypt a file-like object and write the ciphertext to another file-like object.
         """
-        with FileOpener(src, "rb") as src_obj, FileOpener(dst, "wb") as dst_obj:
+        if src is None or dst is None:
+            raise ValueError("Source and destination file objects cannot be None")
+        with FileOpener(src, mode="rb") as src_obj, FileOpener(dst, mode="wb") as dst_obj:
             return self._encrypt_file(src_obj, dst_obj, chunk_size=chunk_size)
 
-    cdef _encrypt_file(self, fileobj, out, chunk_size=io.DEFAULT_BUFFER_SIZE):
-        chunk_size = int(chunk_size)
+    cdef _encrypt_file(self, fileobj, out, size_t chunk_size=io.DEFAULT_BUFFER_SIZE):
+        if fileobj is None or out is None:
+            raise ValueError("Source and destination file objects cannot be None")
         if chunk_size <= hydro_secretbox_HEADERBYTES:
             raise ValueError("Chunk size must be greater than the header size")
         cdef Hash hasher = Hash(ctx=self.ctx, key=self.key)
@@ -225,10 +239,14 @@ cdef class SecretBox:
         """
         Decrypt a file-like object and write the plaintext to another file-like object.
         """
-        with FileOpener(src, "rb") as src_obj, FileOpener(out, "wb") as out_obj:
+        if src is None or out is None:
+            raise ValueError("Source and destination file objects cannot be None")
+        with FileOpener(src, mode="rb") as src_obj, FileOpener(out, mode="wb") as out_obj:
             return self._decrypt_file(src_obj, out_obj)
 
     cdef _decrypt_file(self, fileobj, out):
+        if fileobj is None or out is None:
+            raise ValueError("Source and destination file objects cannot be None")
         cdef uint64_t msg_id = 1
         cdef uint64_t total_bytes_written = 0
         cdef bytearray sbuf = bytearray(8)
