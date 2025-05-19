@@ -59,16 +59,16 @@ cdef class MasterKey(BaseKey):
         """
         if password is None:
             raise ValueError("Password cannot be None")
-        cdef size_t password_length = len(password)
-        if password_length == 0:
+        cdef size_t pwdlen = len(password)
+        if pwdlen == 0:
             raise ValueError("Password cannot be empty")
         if length == 0:
             raise ValueError("Length cannot be 0")
-        cdef const unsigned char* password_ptr = &password[0]
+        cdef const unsigned char* pwdptr = &password[0]
         cdef Context myctx = Context(ctx)
         derived_key = bytearray(length)
         cdef uint8_t* derived_key_ptr = derived_key
-        if hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>password_ptr, password_length, myctx.ctx, self.key, opslimit, 0, 1) != 0:
+        if hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>pwdptr, pwdlen, myctx.ctx, self.key, opslimit, 0, 1) != 0:
             raise DeriveException("Failed to derive key from password")
         return bytes(derived_key)
 
