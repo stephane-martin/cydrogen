@@ -34,6 +34,8 @@ cdef class BaseKey:
         PyBuffer_FillInfo(buffer, self, self.key, hydro_hash_KEYBYTES, 1, flags)
 
     cdef eq(self, BaseKey other):
+        if other is None:
+            return False
         cdef const uint8_t* self_ptr = &self.key[0]
         cdef const uint8_t* other_ptr = &other.key[0]
         if self_ptr == other_ptr:

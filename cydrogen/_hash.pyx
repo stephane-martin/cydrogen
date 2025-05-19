@@ -37,6 +37,8 @@ cdef class HashKey(BaseKey):
         super().__init__(bytes(key))
 
     def __eq__(self, other):
+        if other is None:
+            return False
         if not isinstance(other, HashKey):
             return False
         cdef HashKey o = <HashKey>other
@@ -44,13 +46,12 @@ cdef class HashKey(BaseKey):
 
 
 cdef class Hash:
-    def __init__(self, *, ctx=None, data=None, digest_size=16, key=None):
+    def __init__(self, *, ctx=None, data=None, size_t digest_size=16, key=None):
         """
         Initialize the hash with a context and an optional key.
         """
         cdef Context myctx = Context(ctx)
         cdef HashKey ckey = HashKey(key)
-        digest_size = int(digest_size)
         if digest_size < hydro_hash_BYTES_MIN or digest_size > hydro_hash_BYTES_MAX:
             raise ValueError("Hash length must be between 16 and 65535 bytes")
         self.digest_size = digest_size
@@ -68,7 +69,7 @@ cdef class Hash:
         """
         if self.finalized == 1:
             raise RuntimeError("Hash has already been finalized")
-        if len(data) == 0:
+        if data is None or len(data) == 0:
             return
         if hydro_hash_update(&self.state, &data[0], len(data)) != 0:
             raise RuntimeError("Failed to update hash")
@@ -77,6 +78,8 @@ cdef class Hash:
         """
         Write data to the hash.
         """
+        if data is None:
+            return 0
         self.update(data)
         return len(data)
 
@@ -101,15 +104,17 @@ cdef class Hash:
         return self.digest().hex()
 
     @classmethod
-    def file_digest(cls, fileobj, *, ctx=None, digest_size=16, key=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    def file_digest(cls, fileobj, *, ctx=None, size_t digest_size=16, key=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
         """
         Compute the hash of a binary file-like object.
         """
+        if fileobj is None:
+            raise ValueError("File object cannot be None")
         cdef bytearray buf = bytearray(chunk_size)
         cdef Hash h = cls(ctx=ctx, digest_size=digest_size, key=key)
         cdef size_t n = 0
 
-        with FileOpener(fileobj, "rb") as f:
+        with FileOpener(fileobj, mode="rb") as f:
             while True:
                 n = f.readinto(buf)
                 if n == 0:
