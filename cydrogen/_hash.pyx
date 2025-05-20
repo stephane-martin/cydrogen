@@ -6,6 +6,9 @@ import io
 from libc.stdint cimport uint8_t
 
 from ._basekey cimport BaseKey
+from ._masterkey cimport MasterKey
+from ._secretbox cimport SecretBoxKey
+from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._context cimport Context
 from ._utils cimport FileOpener
 
@@ -27,6 +30,9 @@ cdef class HashKey(BaseKey):
         if isinstance(key, HashKey):
             super().__init__(bytes(key))
             return
+
+        if isinstance(key, (MasterKey, SignKeyPair, SignPublicKey, SignSecretKey, SecretBoxKey)):
+            raise TypeError("can't create a HashKey from another concrete key type")
 
         # when key argument is a string, assume it's a base64 encoded key
         if isinstance(key, str):
