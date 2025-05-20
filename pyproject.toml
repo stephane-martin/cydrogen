@@ -31,10 +31,6 @@ classifiers = [
   "Topic :: Security :: Cryptography",
 ]
 
-[project.optional-dependencies]
-test = ["build>=0.11.0", "pytest>=8.3.5"]
-
-
 [dependency-groups]
 develop = [
   "ruff>=0.11.10",
@@ -46,9 +42,13 @@ develop = [
   "build>=0.11.0",
   "nox",
   "pre-commit",
+  "build>=0.11.0",
   "pytest>=8.3.5",
   "pip-audit",
+  "twine",
 ]
+build = ["build>=0.11.0", "twine"]
+test = ["build>=0.11.0", "pytest>=8.3.5"]
 
 [tool.cython-lint]
 max-line-length = 140
