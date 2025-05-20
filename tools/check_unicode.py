@@ -18,7 +18,6 @@ def check_unicode():
     root_dir = dirname(dirname(__file__))
 
     nbad = 0
-    print("Check for invalid characters")
     for name in chain(
         iglob(os.path.join(root_dir, "cydrogen/**/*.py"), recursive=True),
         iglob(os.path.join(root_dir, "tools/**/*.py"), recursive=True),
@@ -26,7 +25,7 @@ def check_unicode():
         iglob(os.path.join(root_dir, "cydrogen/**/*.px[di]"), recursive=True),
         ["pyproject.toml", "noxfile.py"],
     ):
-        print(f"- {name}")
+        # print(f"- {name}")
         # Read the file as bytes, and check for any bytes greater than 127.
         with open(name, "rb") as f:
             content = f.read()

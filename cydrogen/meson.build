@@ -46,6 +46,31 @@ cydrogen_pyx_sources = [
   ['_utils', '_utils.pyx'],
 ]
 
+cydrogen_dir = py.get_install_dir() / 'cydrogen'
+
+# Generate version.py for sdist
+meson.add_dist_script(
+   ['../tools/gitversion.py', '--meson-dist', '--write', 'cydrogen/version.py']
+)
+
+if not fs.exists('version.py')
+  generate_version = custom_target(
+    'generate-version',
+    install: true,
+    build_always_stale: true,
+    build_by_default: true,
+    output: 'version.py',
+    input: '../tools/gitversion.py',
+    command: ['../tools/gitversion.py', '--meson-dist', '--write', 'cydrogen/version.py'],
+    install_dir: cydrogen_dir,
+    install_tag: 'python-runtime',
+  )
+else
+  # When building from sdist, version.py exists and should be included
+  py.install_sources(['version.py'], subdir : 'cydrogen')
+endif
+
+
 foreach gen: cydrogen_pyx_sources
   py.extension_module(gen[0],
     [gen[1], _cython_tree_cydrogen],
