@@ -75,6 +75,7 @@ foreach gen: cydrogen_pyx_sources
   py.extension_module(gen[0],
     [gen[1], _cython_tree_cydrogen],
     c_args: cython_c_args,
+    link_args: version_link_args,
     dependencies: [py_dep],
     install: true,
     subdir: 'cydrogen',
