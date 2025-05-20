@@ -77,6 +77,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: cydrogen-${{matrix.python-version}}-build
+          path: dist
       - name: install cydrogen
         run: |
           pip install dist/*.whl
