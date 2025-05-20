@@ -10,6 +10,30 @@ description = "cython bindings for the libhydrogen library"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
+classifiers = [
+  # Complete classifiers list is available here: https://pypi.org/classifiers/
+  "Development Status :: 3 - Alpha",
+  # "Development Status :: 4 - Beta",
+  # "Development Status :: 5 - Production/Stable",
+
+  # Indicate who your project is intended for
+  "Intended Audience :: Developers",
+  # Specify the Python versions you support here.
+  # These classifiers are *not* checked by 'pip install'. See instead
+  # 'requires-python'.
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Cython",
+  "Programming Language :: Python :: Implementation :: CPython",
+  # others
+  "License :: OSI Approved :: Apache Software License",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Security :: Cryptography",
+]
+
+[project.optional-dependencies]
+test = ["build>=0.11.0", "pytest>=8.3.5"]
+
 
 [dependency-groups]
 develop = [
@@ -22,6 +46,7 @@ develop = [
   "build>=0.11.0",
   "nox",
   "pre-commit",
+  "pytest>=8.3.5",
 ]
 
 [tool.cython-lint]
@@ -36,3 +61,8 @@ target-version = "py312"
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.pytest.ini_options]
+console_output_style = "classic"
+testpaths = "tests"
+addopts = "--import-mode=importlib"
