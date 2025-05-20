@@ -46,8 +46,10 @@ develop = [
   "build>=0.11.0",
   "nox",
   "pre-commit",
+  "build>=0.11.0",
   "pytest>=8.3.5",
   "pip-audit",
+  "twine",
 ]
 
 [tool.cython-lint]
