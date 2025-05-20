@@ -15,25 +15,24 @@ def develop(session: nox.Session):
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def lint(session: nox.Session):
+    print()
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
+    print("\n=== linters ===\n")
     print("check unicode")
     session.run("python", "tools/check_unicode.py")
-    print()
-    print("cython-lint")
+    print("\ncython-lint")
     session.run("cython-lint", "cydrogen")
-    print()
-    print("ruff")
+    print("\nruff")
     session.run("ruff", "check")
-    print()
-    print("ruff format")
+    print("\nruff format")
     session.run("ruff", "format", "--check")
-    print()
-    print("mypi")
+    print("\nmypi")
     session.run("mypy", "cydrogen")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def test(session: nox.Session):
+    print("\n=== tests ===\n")
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
     session.install(".[test]")
     session.run("pytest")
@@ -41,7 +40,9 @@ def test(session: nox.Session):
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def build(session: nox.Session):
+    print("\n=== build ===\n")
     session.run("rm", "-rf", "dist", external=True)
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
     session.run("python", "-m", "build", "--sdist", "--wheel")
+    print("\n check wheels using twine")
     session.run("twine", "check", "dist/*")
