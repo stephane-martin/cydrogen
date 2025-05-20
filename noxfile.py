@@ -16,9 +16,15 @@ def develop(session: nox.Session):
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def lint(session: nox.Session):
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
+    print("check unicode")
+    session.run("python", "tools/check_unicode.py")
+    print("cython-lint")
     session.run("cython-lint", "cydrogen")
+    print("ruff")
     session.run("ruff", "check")
+    print("ruff format")
     session.run("ruff", "format", "--check")
+    print("mypi")
     session.run("mypy", "cydrogen")
 
 
