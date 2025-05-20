@@ -34,6 +34,14 @@ def lint(session: nox.Session):
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def test(session: nox.Session):
-    session.install("build >= 0.11.0")
+    session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
     session.install(".[test]")
     session.run("pytest")
+
+
+@nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
+def build(session: nox.Session):
+    session.run("rm", "-rf", "dist", external=True)
+    session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
+    session.run("python", "-m", "build", "--sdist", "--wheel")
+    session.run("twine", "check", "dist/*")
