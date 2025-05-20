@@ -46,6 +46,7 @@ develop = [
   "pytest>=8.3.5",
   "pip-audit",
   "twine",
+  "zizmor",
 ]
 build = ["build>=0.11.0", "twine"]
 test = ["build>=0.11.0", "pytest>=8.3.5"]
