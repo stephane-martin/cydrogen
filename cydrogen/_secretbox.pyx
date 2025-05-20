@@ -10,8 +10,9 @@ from ._basekey cimport BaseKey
 from ._context cimport Context
 from ._exceptions cimport DecryptException
 from ._exceptions cimport EncryptException
-from ._hash cimport Hash
+from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey
+from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._utils cimport FileOpener
 from ._utils cimport SafeReader
 from ._utils cimport SafeWriter
@@ -36,6 +37,9 @@ cdef class SecretBoxKey(BaseKey):
         if isinstance(key, SecretBoxKey):
             super().__init__(bytes(key))
             return
+
+        if isinstance(key, (HashKey, MasterKey, SignKeyPair, SignPublicKey, SignSecretKey)):
+            raise TypeError("can't create a SecretBoxKey from another concrete key type")
 
         # when key argument is a string, assume it's a base64 encoded key
         if isinstance(key, str):

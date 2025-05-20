@@ -10,8 +10,10 @@ from ._decls cimport *
 
 from ._context cimport Context
 from ._basekey cimport BaseKey
+from ._hash import HashKey
+from ._secretbox import SecretBoxKey
+from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._exceptions cimport DeriveException
-from ._sign import SignKeyPair
 
 
 cdef class MasterKey(BaseKey):
@@ -27,6 +29,10 @@ cdef class MasterKey(BaseKey):
         if isinstance(key, MasterKey):
             super().__init__(bytes(key))
             return
+
+        if isinstance(key, (BaseKey, SignKeyPair, SignPublicKey, SignSecretKey, HashKey, SecretBoxKey)):
+            # when key argument is a BaseKey or a derived key, copy the key
+            raise TypeError("can't create a MasterKey from another key type")
 
         # when key argument is a string, assume it's a base64 encoded key
         if isinstance(key, str):
