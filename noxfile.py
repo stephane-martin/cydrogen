@@ -1,3 +1,6 @@
+import glob
+import shutil
+
 import nox
 
 nox.options.reuse_existing_virtualenvs = True
@@ -18,16 +21,23 @@ def lint(session: nox.Session):
     print()
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
     print("\n=== linters ===\n")
-    print("check unicode")
+    print("= check unicode= ")
     session.run("python", "tools/check_unicode.py")
-    print("\ncython-lint")
+    print("\n= cython-lint= ")
     session.run("cython-lint", "cydrogen")
-    print("\nruff")
+    print("\n= ruff =")
     session.run("ruff", "check")
-    print("\nruff format")
+    print("\n= ruff format =")
     session.run("ruff", "format", "--check")
-    print("\nmypi")
+    print("\n= mypi =")
     session.run("mypy", "cydrogen")
+    print("\n= shellcheck =")
+    if shutil.which("shellcheck") is None:
+        print("===> shellcheck not found, skipping")
+    else:
+        bash_files = glob.glob("**/*.sh", recursive=True)
+        for bash_file in bash_files:
+            session.run("shellcheck", bash_file, external=True)
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
@@ -44,5 +54,9 @@ def build(session: nox.Session):
     session.run("rm", "-rf", "dist", external=True)
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
     session.run("python", "-m", "build", "--sdist", "--wheel")
-    print("\n check wheels using twine")
+    print("\n= twine check =")
     session.run("twine", "check", "dist/*")
+    print("\n= check symbols =")
+    if shutil.which("nm") is None:
+        print("===> nm not found, skipping")
+    session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
