@@ -43,28 +43,40 @@ cdef class HashKey(BaseKey):
         super().__init__(bytes(key))
 
     def __eq__(self, other):
-        if other is None:
-            return False
         if not isinstance(other, HashKey):
             return False
         cdef HashKey o = <HashKey>other
         return self.eq(o)
 
+    def __repr__(self):
+        return f'HashKey("{str(self)}")'
+
+    cpdef hasher(self, data=None, ctx=None, size_t digest_size=16):
+        """
+        Hash the data with the key.
+        """
+        return Hash(data, ctx=ctx, digest_size=digest_size, key=self)
+
+    cpdef hash_file(self, fileobj, ctx=None, size_t digest_size=16, chunk_size=io.DEFAULT_BUFFER_SIZE):
+        return hash_file(fileobj, ctx=ctx, digest_size=digest_size, key=self, chunk_size=chunk_size)
+
 
 cdef class Hash:
-    def __init__(self, *, ctx=None, data=None, size_t digest_size=16, key=None):
+    def __init__(self, data=None, *, ctx=None, size_t digest_size=16, key=None):
         """
         Initialize the hash with a context and an optional key.
         """
-        cdef Context myctx = Context(ctx)
-        cdef HashKey ckey = HashKey(key)
         if digest_size < hydro_hash_BYTES_MIN or digest_size > hydro_hash_BYTES_MAX:
             raise ValueError("Hash length must be between 16 and 65535 bytes")
+
+        self.ctx = Context(ctx)
+        self.key = HashKey(key)
         self.digest_size = digest_size
         self.block_size = 64
         self.finalized = 0
         self.result = bytes()
-        if hydro_hash_init(&self.state, myctx.ctx, ckey.key) != 0:
+
+        if hydro_hash_init(&self.state, self.ctx.ctx, self.key.key) != 0:
             raise RuntimeError("Failed to initialize hash state")
         if data is not None:
             self.update(data)
@@ -79,6 +91,22 @@ cdef class Hash:
             return
         if hydro_hash_update(&self.state, &data[0], len(data)) != 0:
             raise RuntimeError("Failed to update hash")
+
+    cpdef readfrom(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
+        """
+        Read data from a file-like object and update the hash.
+        """
+        if fileobj is None:
+            raise ValueError("File object cannot be None")
+        cdef bytearray buf = bytearray(chunk_size)
+        cdef size_t n = 0
+
+        with FileOpener(fileobj, mode="rb") as f:
+            while True:
+                n = f.readinto(buf)
+                if n == 0:
+                    return
+                self.update(buf[:n])
 
     cpdef write(self, const unsigned char[:] data):
         """
@@ -109,20 +137,13 @@ cdef class Hash:
         """
         return self.digest().hex()
 
-    @classmethod
-    def file_digest(cls, fileobj, *, ctx=None, size_t digest_size=16, key=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
-        """
-        Compute the hash of a binary file-like object.
-        """
-        if fileobj is None:
-            raise ValueError("File object cannot be None")
-        cdef bytearray buf = bytearray(chunk_size)
-        cdef Hash h = cls(ctx=ctx, digest_size=digest_size, key=key)
-        cdef size_t n = 0
 
-        with FileOpener(fileobj, mode="rb") as f:
-            while True:
-                n = f.readinto(buf)
-                if n == 0:
-                    return h.digest()
-                h.update(buf[:n])
+cpdef hash_file(fileobj, ctx=None, size_t digest_size=16, key=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    """
+    Compute the hash of a binary file-like object.
+    """
+    if fileobj is None:
+        raise ValueError("File object cannot be None")
+    cdef Hash hasher = Hash(ctx=ctx, digest_size=digest_size, key=key)
+    hasher.readfrom(fileobj, chunk_size=chunk_size)
+    return hasher.digest()
