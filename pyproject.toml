@@ -47,6 +47,7 @@ develop = [
   "pip-audit",
   "twine",
   "zizmor",
+  "pyflakes",
 ]
 build = ["build>=0.11.0", "twine"]
 test = ["build>=0.11.0", "pytest>=8.3.5"]
