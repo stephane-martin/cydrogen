@@ -48,6 +48,9 @@ cdef class MasterKey(BaseKey):
         cdef MasterKey o = <MasterKey>other
         return self.eq(o)
 
+    def __repr__(self):
+        return f"MasterKey({str(self)})"
+
     cpdef derive_key_from_password(self, const unsigned char[:] password, ctx=None, uint64_t opslimit=10000):
         """
         Derive a key from a password using the master key.
@@ -74,7 +77,10 @@ cdef class MasterKey(BaseKey):
         cdef Context myctx = Context(ctx)
         derived_key = bytearray(length)
         cdef uint8_t* derived_key_ptr = derived_key
-        if hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>pwdptr, pwdlen, myctx.ctx, self.key, opslimit, 0, 1) != 0:
+        cdef int res
+        with nogil:
+            res = hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>pwdptr, pwdlen, myctx.ctx, self.key, opslimit, 0, 1)
+        if res != 0:
             raise DeriveException("Failed to derive key from password")
         return bytes(derived_key)
 
