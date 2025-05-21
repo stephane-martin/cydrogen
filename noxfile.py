@@ -53,7 +53,7 @@ def lint(session: nox.Session):
 def test(session: nox.Session):
     print("\n=== tests ===\n")
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
-    session.install(".[test]")
+    session.install(".")
     session.run("pytest")
 
 
