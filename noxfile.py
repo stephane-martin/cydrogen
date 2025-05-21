@@ -30,14 +30,23 @@ def lint(session: nox.Session):
     print("\n= ruff format =")
     session.run("ruff", "format", "--check")
     print("\n= mypi =")
-    session.run("mypy", "cydrogen")
+    session.run("mypy", "--pretty", "--no-color-output", "cydrogen")
     print("\n= shellcheck =")
     if shutil.which("shellcheck") is None:
         print("===> shellcheck not found, skipping")
     else:
         bash_files = glob.glob("**/*.sh", recursive=True)
-        for bash_file in bash_files:
-            session.run("shellcheck", bash_file, external=True)
+        if not bash_files:
+            print("no bash files found")
+        else:
+            for bash_file in bash_files:
+                print(f"- checking {bash_file}")
+                session.run("shellcheck", bash_file, external=True)
+    print("\n= actionlint =")
+    if shutil.which("actionlint") is None:
+        print("===> actionlint not found, skipping")
+    else:
+        session.run("actionlint", "-verbose", external=True)
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
