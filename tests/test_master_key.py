@@ -55,7 +55,7 @@ def test_master_key_equality():
 def test_master_key_repr():
     key_str = base64.standard_b64encode(KEY_BYTES).decode("utf-8")
     key = cydrogen.MasterKey(KEY_BYTES)
-    assert repr(key) == f'MasterKey("{key_str}")'
+    assert repr(key) == f"MasterKey({repr(key_str)})"
 
 
 def test_no_convert_masterkey_hashkey():

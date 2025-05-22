@@ -55,6 +55,9 @@ cdef class SecretBoxKey(BaseKey):
         cdef SecretBoxKey o = <SecretBoxKey>other
         return self.eq(o)
 
+    def __repr__(self):
+        return f'SecretBoxKey({repr(str(self))})'
+
     @classmethod
     def from_password(cls, const unsigned char[:] password, *, master_key=None, ctx=None, opslimit=10000):
         """
