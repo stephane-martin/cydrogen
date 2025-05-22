@@ -4,12 +4,19 @@ on:
   pull_request:
     branches: [develop,master]
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
       - name: set up python
         uses: actions/setup-python@v5
         with:
@@ -28,6 +35,8 @@ jobs:
           sudo mv actionlint /usr/local/bin
 
       - name: run linters
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for zizmor
         run: |
           nox -s lint
 
@@ -41,6 +50,9 @@ jobs:
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
       - name: set up python
         uses: actions/setup-python@v5
         with:
@@ -72,6 +84,9 @@ jobs:
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
       - name: set up python
         uses: actions/setup-python@v5
         with:
