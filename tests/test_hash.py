@@ -61,7 +61,7 @@ def test_hash_key_equality():
 def test_hash_key_repr():
     key_str = base64.standard_b64encode(KEY_BYTES).decode("utf-8")
     key = cydrogen.HashKey(KEY_BYTES)
-    assert repr(key) == f'HashKey("{key_str}")'
+    assert repr(key) == f"HashKey({repr(key_str)})"
 
 
 def test_no_convert_hashkey_secretboxkey():
