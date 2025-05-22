@@ -47,6 +47,12 @@ cdef class Context:
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.ctx, hydro_hash_CONTEXTBYTES, 1, flags)
 
+    def __str__(self):
+        return bytes(self).decode("ascii")
+
+    def __repr__(self):
+        return f"Context({repr(str(self))})"
+
     def __eq__(self, other):
         if other is None:
             return False
@@ -57,11 +63,11 @@ cdef class Context:
         return bytes(self) == bytes(other)
 
     def __bool__(self):
-        return not self.is_zero()
+        return not self.is_empty()
 
     @classmethod
-    def zero(cls):
+    def empty(cls):
         return cls()
 
-    cpdef is_zero(self):
+    cpdef is_empty(self):
         return bytes(self) == b" " * hydro_hash_CONTEXTBYTES
