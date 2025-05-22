@@ -40,6 +40,9 @@ cdef class SignPublicKey:
     def __str__(self):
         return base64.standard_b64encode(self).decode("ascii")
 
+    def __repr__(self):
+        return f'SignPublicKey({repr(str(self))})'
+
     cdef eq(self, SignPublicKey other):
         if other is None:
             return False
@@ -107,6 +110,9 @@ cdef class SignSecretKey:
     def __str__(self):
         return base64.standard_b64encode(self).decode("ascii")
 
+    def __repr__(self):
+        return f'SignSecretKey({repr(str(self))})'
+
     cdef eq(self, SignSecretKey other):
         if other is None:
             return False
@@ -172,6 +178,9 @@ cdef class SignKeyPair:
 
     def __str__(self):
         return base64.standard_b64encode(self).decode("ascii")
+
+    def __repr__(self):
+        return f'SignKeyPair({repr(str(self))})'
 
     @classmethod
     def gen(cls):

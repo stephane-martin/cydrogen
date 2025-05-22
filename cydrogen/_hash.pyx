@@ -49,7 +49,7 @@ cdef class HashKey(BaseKey):
         return self.eq(o)
 
     def __repr__(self):
-        return f'HashKey("{str(self)}")'
+        return f'HashKey({repr(str(self))})'
 
     cpdef hasher(self, data=None, ctx=None, size_t digest_size=16):
         """

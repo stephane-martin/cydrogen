@@ -49,7 +49,7 @@ cdef class MasterKey(BaseKey):
         return self.eq(o)
 
     def __repr__(self):
-        return f'MasterKey("{str(self)}")'
+        return f'MasterKey({repr(str(self))})'
 
     cpdef derive_key_from_password(self, const unsigned char[:] password, ctx=None, uint64_t opslimit=10000):
         """
