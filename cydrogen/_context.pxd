@@ -4,4 +4,4 @@ from ._decls cimport hydro_hash_CONTEXTBYTES
 
 cdef class Context:
     cdef char ctx[hydro_hash_CONTEXTBYTES]
-    cpdef is_zero(self)
+    cpdef is_empty(self)
