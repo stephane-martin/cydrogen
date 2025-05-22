@@ -3,13 +3,15 @@ name: "CodeQL Advanced"
 on:
   pull_request:
     branches: ["develop"]
+  push:
+    branches: ["develop"]
   schedule:
     - cron: '43 8 * * 3'
 
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       security-events: write
       packages: read
@@ -23,7 +25,7 @@ jobs:
         - language: actions
           build-mode: none
         - language: c-cpp
-          build-mode: autobuild
+          build-mode: manual
         - language: python
           build-mode: none
     steps:
@@ -51,15 +53,23 @@ jobs:
         # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
         # queries: security-extended,security-and-quality
 
-    - if: matrix.build-mode == 'manual'
-      shell: bash
+    - if: matrix.build-mode == 'manual' && matrix.language == 'c-cpp'
+      name: set up python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.13
+    - if: matrix.build-mode == 'manual' && matrix.language == 'c-cpp'
+      name: install nox
       run: |
-        echo 'If you are using a "manual" build mode for one or more of the' \
-          'languages you are analyzing, replace this with the commands to build' \
-          'your code, for example:'
-        echo '  make bootstrap'
-        echo '  make release'
-        exit 1
+        python -m pip install --upgrade pip && pip install nox
+    - if: matrix.build-mode == 'manual' && matrix.language == 'c-cpp'
+      name: install build dependencies
+      run: |
+        sudo apt-get install -y build-essential binutils
+    - if: matrix.build-mode == 'manual' && matrix.language == 'c-cpp'
+      name: build cydrogen
+      run: |
+        nox -s build-3.13
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
