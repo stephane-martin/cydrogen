@@ -47,6 +47,8 @@ def lint(session: nox.Session):
         print("===> actionlint not found, skipping")
     else:
         session.run("actionlint", "-verbose", external=True)
+    print("\n= zizmor =")
+    session.run("zizmor", "--no-progress", ".")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
