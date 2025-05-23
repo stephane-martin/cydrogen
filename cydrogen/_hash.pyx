@@ -92,7 +92,7 @@ cdef class Hash:
         if hydro_hash_update(&self.state, &data[0], len(data)) != 0:
             raise RuntimeError("Failed to update hash")
 
-    cpdef readfrom(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cpdef update_from(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
         """
         Read data from a file-like object and update the hash.
         """
@@ -145,5 +145,5 @@ cpdef hash_file(fileobj, ctx=None, size_t digest_size=16, key=None, chunk_size=i
     if fileobj is None:
         raise ValueError("File object cannot be None")
     cdef Hash hasher = Hash(ctx=ctx, digest_size=digest_size, key=key)
-    hasher.readfrom(fileobj, chunk_size=chunk_size)
+    hasher.update_from(fileobj, chunk_size=chunk_size)
     return hasher.digest()
