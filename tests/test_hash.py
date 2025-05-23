@@ -9,6 +9,7 @@ from cydrogen._basekey import BaseKey  # type: ignore[import]
 
 KEY_BYTES = b"\xeaCU\x91\xdb?\xc2\xefZ\xb9HO\x84\xc5\xf3\xbf\x07\xecunR\xab\xa4\xa7`\r=\xe5\xf0e\xfb%"
 KEY_BYTES_2 = b")\xf5G\x95\xa9e\xeb\xb3\xfcU1?[\x9f\xd1\x8b6\xe4\x8a\xac\xf1 \xf5\xd3\xf8\x98c\xae\xce\xdcoA"
+
 MESSAGES = [
     b"Nobody inspects the spammish repetition",
     b"Then shalt thou count to three, no more, no less. Three shall be the number thou shalt count, and the number of the counting shall be three.",
@@ -113,12 +114,12 @@ def test_digest():
 
 
 def test_hash_file():
+    key = cydrogen.HashKey(KEY_BYTES)
     buf = cydrogen.gen_random_buffer(70000)
     fobj = io.BytesIO(buf)
 
     # call function hash_file with default chunk size
     fobj.seek(0)
-    key = cydrogen.HashKey(KEY_BYTES)
     digest1 = cydrogen.hash_file(fobj, ctx=b"CONTEXTS", digest_size=16, key=key, chunk_size=io.DEFAULT_BUFFER_SIZE)
     assert len(digest1) == 16
     # call function hash_file with custom chunk size
