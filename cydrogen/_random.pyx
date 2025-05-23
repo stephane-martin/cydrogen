@@ -36,3 +36,20 @@ cpdef gen_random_buffer(size_t size):
     cdef bytearray buf = bytearray(size)
     randomize_buffer(buf)
     return bytes(buf)
+
+
+cpdef shuffle_buffer(unsigned char[:] buf):
+    """
+    Shuffle a buffer in place.
+    """
+    if buf is None:
+        raise ValueError("Buffer cannot be None")
+    cdef size_t n = len(buf)
+    if n == 0 or n == 1:
+        return
+    if n == 2:
+        buf[0], buf[1] = buf[1], buf[0]
+        return
+    for i in range(n - 1, 0, -1):
+        j = random_uniform(i + 1)
+        buf[i], buf[j] = buf[j], buf[i]

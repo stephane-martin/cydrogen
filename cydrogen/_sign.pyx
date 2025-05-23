@@ -27,6 +27,8 @@ cdef class SignPublicKey:
     def __init__(self, key):
         if key is None:
             raise ValueError("Public key cannot be None")
+        if isinstance(key, str):
+            key = base64.standard_b64decode(key)
         if isinstance(key, SignPublicKey):
             key = bytes(key)
         if not isinstance(key, bytes):
@@ -60,30 +62,7 @@ cdef class SignPublicKey:
         cdef SignPublicKey o = <SignPublicKey>other
         return self.eq(o)
 
-    cpdef verify(self, const unsigned char[:] message, const unsigned char[:] signature, ctx=None):
-        """
-        Verify a signature for a message using the public key and an optional context.
-        Returns True if the signature is valid, False otherwise.
-        """
-        if message is None:
-            raise ValueError("Message cannot be None")
-        if signature is None:
-            raise ValueError("Signature cannot be None")
-        if len(signature) != hydro_sign_BYTES:
-            raise ValueError("Signature must be 64 bytes long")
-        cdef Context myctx = Context(ctx)
-        cdef const unsigned char* msg_ptr = &message[0]
-        cdef uint8_t csig[hydro_sign_BYTES]
-        cdef const unsigned char* sig_ptr = &signature[0]
-        memcpy(&csig[0], sig_ptr, hydro_sign_BYTES)
-        if hydro_sign_verify(csig, msg_ptr, len(message), myctx.ctx, self.key) != 0:
-            return False
-        return True
-
     cpdef verifier(self, ctx=None):
-        """
-        Create a Verifier object for this public key.
-        """
         return Verifier(self, ctx=ctx)
 
 
@@ -97,12 +76,14 @@ cdef class SignSecretKey:
     def __init__(self, key):
         if key is None:
             raise ValueError("Secret key cannot be None")
+        if isinstance(key, str):
+            key = base64.standard_b64decode(key)
         if isinstance(key, SignSecretKey):
             key = bytes(key)
         if not isinstance(key, bytes):
             raise TypeError("Secret key must be a bytes object")
         if len(key) != hydro_sign_SECRETKEYBYTES:
-            raise ValueError("Secret key must be 64 bytes long")
+            raise ValueError(f"Secret key must be 64 bytes long (length: {len(key)})")
         cdef const unsigned char* key_ptr = key
         memcpy(&self.key[0], key_ptr, hydro_sign_SECRETKEYBYTES)
 
@@ -130,38 +111,18 @@ cdef class SignSecretKey:
         cdef SignSecretKey o = <SignSecretKey>other
         return self.eq(o)
 
-    cpdef sign(self, const unsigned char[:] message, ctx=None):
-        """
-        Sign a message using the secret key and an optional context.
-        Returns the signature as a bytes object.
-        """
-        if message is None:
-            raise ValueError("Message cannot be None")
-        cdef Context myctx = Context(ctx)
-        cdef const unsigned char* msg_ptr = &message[0]
-        cdef uint8_t csig[hydro_sign_BYTES]
-        if hydro_sign_create(csig, msg_ptr, len(message), myctx.ctx, self.key) != 0:
-            raise SignException("Failed to sign message")
-        cdef bytearray sig = bytearray(hydro_sign_BYTES)
-        cdef uint8_t* sig_ptr = sig
-        memcpy(sig_ptr, &csig[0], hydro_sign_BYTES)
-        return bytes(sig)
-
-    cpdef signer(self, ctx=None):
-        """
-        Create a Signer object for this secret key.
-        """
-        return Signer(self, ctx=ctx)
-
     cdef public_key(self):
         cdef bytearray pk = bytearray(hydro_x25519_PUBLICKEYBYTES)
         memcpy(<uint8_t*>pk, &self.key[hydro_x25519_SECRETKEYBYTES], hydro_x25519_PUBLICKEYBYTES)
         return SignPublicKey(bytes(pk))
 
-    cpdef check_publick_key(self, SignPublicKey other):
+    cpdef check_public_key(self, SignPublicKey other):
         if other is None:
             return False
         return other.eq(self.public_key())
+
+    cpdef signer(self, ctx=None):
+        return Signer(self, ctx=ctx)
 
 
 cdef class SignKeyPair:
@@ -193,12 +154,6 @@ cdef class SignKeyPair:
         hydro_sign_keygen(&kp)
         cdef bytes secret_key = kp.sk[:hydro_sign_SECRETKEYBYTES]
         return cls(secret_key)
-
-    cpdef sign(self, const unsigned char[:] message, ctx=None):
-        return self.secret_key.sign(message, ctx=ctx)
-
-    cpdef verify(self, const unsigned char[:] message, const unsigned char[:] signature, ctx=None):
-        return self.public_key.verify(message, signature, ctx=ctx)
 
     cpdef signer(self, ctx=None):
         return self.secret_key.signer(ctx=ctx)
@@ -293,7 +248,7 @@ cpdef sign_file(SignSecretKey key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFF
     return signer.sign()
 
 
-cpdef verify_file_signature(SignPublicKey key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef verify_file(SignPublicKey key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
     if key is None:
         raise ValueError("Key cannot be None")
     if fileobj is None:
