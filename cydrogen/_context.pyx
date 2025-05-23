@@ -39,9 +39,14 @@ cdef class Context:
             ctx = ctx.encode("ascii")
 
         # else, assume ctx is a bytes like object
+        ctx = bytes(ctx)
+        if len(ctx) > hydro_hash_CONTEXTBYTES:
+            raise ValueError("Context must be 8 bytes long maximum")
+        if len(ctx) < hydro_hash_CONTEXTBYTES:
+            # complete with spaces
+            ctx += b" " * (hydro_hash_CONTEXTBYTES - len(ctx))
+
         cdef const unsigned char[:] ctx_view = ctx
-        if len(ctx_view) != hydro_hash_CONTEXTBYTES:
-            raise ValueError("Context must be 8 bytes long")
         memcpy(&self.ctx[0], &ctx_view[0], hydro_hash_CONTEXTBYTES)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
