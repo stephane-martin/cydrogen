@@ -23,7 +23,7 @@ cdef class Hash:
 
     cpdef update(self, const unsigned char[:] data)
     cpdef write(self, const unsigned char[:] data)
-    cpdef readfrom(self, fileobj, chunk_size=*)
+    cpdef update_from(self, fileobj, chunk_size=*)
     cpdef digest(self)
     cpdef hexdigest(self)
 
