@@ -109,10 +109,10 @@ cdef class EncryptedMessage:
     def from_bytes(cls, const unsigned char[:] framed):
         if framed is None:
             raise ValueError("Framed message cannot be None")
-        return cls.readfrom(io.BytesIO(framed))
+        return cls.read_from(io.BytesIO(framed))
 
     @classmethod
-    def readfrom(cls, fileobj, *, max_msg_size=None):
+    def read_from(cls, fileobj, *, max_msg_size=None):
         if fileobj is None:
             raise ValueError("File object cannot be None")
         cdef size_t msg_size = 0
@@ -278,7 +278,7 @@ cdef class SecretBox:
 
         while True:
             try:
-                enc_msg = EncryptedMessage.readfrom(r, max_msg_size=max_buf_size)
+                enc_msg = EncryptedMessage.read_from(r, max_msg_size=max_buf_size)
             except OSError:
                 # we have reached the end of the file without having seen the hash
                 raise DecryptException("final hash not found")
