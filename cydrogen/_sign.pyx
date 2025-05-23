@@ -1,6 +1,7 @@
 # cython: language_level=3
 
 import base64
+import io
 
 from cpython.buffer cimport PyBuffer_FillInfo
 from libc.stdint cimport uint8_t
@@ -8,7 +9,8 @@ from libc.string cimport memcpy
 
 from ._decls cimport *
 from ._context cimport Context
-from ._exceptions cimport SignException
+from ._exceptions cimport SignException, VerifyException
+from ._utils cimport FileOpener
 
 
 cdef const int hydro_x25519_PUBLICKEYBYTES = 32
@@ -220,6 +222,25 @@ cdef class BaseSigner:
         if hydro_sign_update(&self.state, &data[0], len(data)) != 0:
             raise SignException("Failed to update signer")
 
+    cpdef write(self, const unsigned char[:] data):
+        if data is None:
+            return 0
+        self.update(data)
+        return len(data)
+
+    cpdef update_from(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
+        if fileobj is None:
+            raise ValueError("File object cannot be None")
+        cdef bytearray buf = bytearray(chunk_size)
+        cdef size_t n = 0
+
+        with FileOpener(fileobj, mode="rb") as f:
+            while True:
+                n = f.readinto(buf)
+                if n == 0:
+                    return
+                self.update(buf[:n])
+
 
 cdef class Signer(BaseSigner):
     def __init__(self, SignSecretKey private_key, *, ctx=None, data=None):
@@ -259,5 +280,28 @@ cdef class Verifier(BaseSigner):
         cdef uint8_t csig[hydro_sign_BYTES]
         memcpy(&csig[0], &signature[0], hydro_sign_BYTES)
         if hydro_sign_final_verify(&self.state, csig, self.key.key) != 0:
-            return False
-        return True
+            raise VerifyException("Failed to verify signature")
+
+
+cpdef sign_file(SignSecretKey key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    if key is None:
+        raise ValueError("Key cannot be None")
+    if fileobj is None:
+        raise ValueError("File object cannot be None")
+    cdef Signer signer = Signer(key, ctx=ctx)
+    signer.update_from(fileobj, chunk_size=chunk_size)
+    return signer.sign()
+
+
+cpdef verify_file_signature(SignPublicKey key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    if key is None:
+        raise ValueError("Key cannot be None")
+    if fileobj is None:
+        raise ValueError("File object cannot be None")
+    if signature is None:
+        raise ValueError("Signature cannot be None")
+    if len(signature) != hydro_sign_BYTES:
+        raise ValueError("Signature must be 64 bytes long")
+    cdef Verifier verifier = Verifier(key, ctx=ctx)
+    verifier.update_from(fileobj, chunk_size=chunk_size)
+    verifier.verify(signature)

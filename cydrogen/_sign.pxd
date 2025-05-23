@@ -35,6 +35,8 @@ cdef class BaseSigner:
     cdef hydro_sign_state state
     cdef bint finalized
     cpdef update(self, const unsigned char[:] data)
+    cpdef write(self, const unsigned char[:] data)
+    cpdef update_from(self, fileobj, chunk_size=*)
 
 
 cdef class Signer(BaseSigner):
@@ -45,3 +47,7 @@ cdef class Signer(BaseSigner):
 cdef class Verifier(BaseSigner):
     cdef SignPublicKey key
     cpdef verify(self, const unsigned char[:] signature)
+
+
+cpdef sign_file(SignSecretKey key, fileobj, ctx=*, chunk_size=*)
+cpdef verify_file_signature(SignPublicKey key, fileobj, const unsigned char[:] signature, ctx=*, chunk_size=*)
