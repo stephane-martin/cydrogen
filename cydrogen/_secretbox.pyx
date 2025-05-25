@@ -2,26 +2,22 @@
 
 import base64
 import io
-import struct
 
 from libc.stdint cimport uint64_t
 
 from ._basekey cimport BaseKey
 from ._context cimport Context
-from ._exceptions cimport DecryptException
-from ._exceptions cimport EncryptException
+from ._exceptions cimport DecryptException, EncryptException
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
-from ._utils cimport FileOpener
-from ._utils cimport SafeReader
-from ._utils cimport SafeWriter
-from ._utils cimport TeeWriter
+from ._utils cimport FileOpener, SafeReader, SafeWriter, TeeWriter
+from ._utils cimport store64, load64, store32, load32
 
-from ._decls cimport *
+from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
 
 
-cdef bytes enc_msg_header = b"qN\x00\x00"
+cdef bytes ENC_MSG_HEADER = b"qN\x00\x00"
 
 
 cdef class SecretBoxKey(BaseKey):
@@ -70,6 +66,9 @@ cdef class SecretBoxKey(BaseKey):
         cdef BaseKey derived = mkey.derive_key_from_password(password, ctx=ctx, opslimit=opslimit)
         return cls(derived)
 
+    cpdef secretbox(self, ctx=None):
+        return SecretBox(self, ctx=ctx)
+
 
 cdef class EncryptedMessage:
     def __init__(self, const unsigned char[:] message, uint64_t msg_id):
@@ -92,13 +91,31 @@ cdef class EncryptedMessage:
         self.writeto(w)
         return w.getvalue()
 
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, EncryptedMessage):
+            return False
+        cdef EncryptedMessage o = <EncryptedMessage>other
+        if self.msg_id != o.msg_id:
+            return False
+        if len(self.message) != len(o.message):
+            return False
+        return bytes(self.message) == bytes(o.message)
+
     cpdef writeto(self, fileobj):
         """
-        Write the encrypted message to a file-like object.
+        Write the framed encrypted message to a file-like object.
         """
         if fileobj is None:
             raise ValueError("File object cannot be None")
-        cdef bytes header = enc_msg_header + struct.pack("<Q", len(self.message)) + struct.pack("<Q", self.msg_id)
+
+        cdef bytearray header = bytearray(4 + 8 + 8)
+        header[0:4] = ENC_MSG_HEADER
+        cdef unsigned char[:] header_view = header
+        store64(header_view[4:12], len(self.message))
+        store64(header_view[12:20], self.msg_id)
+
         cdef SafeWriter w
         with FileOpener(fileobj, mode="wb") as f:
             w = SafeWriter(f)
@@ -127,12 +144,12 @@ cdef class EncryptedMessage:
                 r.readinto(header_buf)
             except OSError as ex:
                 raise OSError("Failed to read next message header") from ex
-            if header_buf[:4] != enc_msg_header:
+            if header_buf[:4] != ENC_MSG_HEADER:
                 raise ValueError("Invalid message header")
-            msg_size = struct.unpack("<Q", header_buf[4:12])[0]
+            msg_size = load64(header_buf[4:12])
             if max_msg_size is not None and msg_size > max_msg_size:
                 raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
-            msg_id = struct.unpack("<Q", header_buf[12:20])[0]
+            msg_id = load64(header_buf[12:20])
             msg = bytearray(msg_size)
             try:
                 r.readinto(msg)
@@ -164,24 +181,24 @@ cdef class SecretBox:
         """
         Encrypt the plaintext using the secret box key and context.
         The optional msg_id can be used to differentiate between different messages.
-        If out is provided, the ciphertext will be written to it.
-        Returns the encrypted message as an EncryptedMessage object.
+        If out is provided, the framed ciphertext will be written to it.
+        Returns the encrypted message as a bytes-like object.
         """
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
-        cdef const unsigned char* plaintext_ptr = &plaintext[0]
-        cdef size_t plaintext_len = len(plaintext)
-        cdef size_t ciphertext_len = plaintext_len + hydro_secretbox_HEADERBYTES
-        cdef bytearray ciphertext = bytearray(ciphertext_len)
-        cdef unsigned char* ciphertext_ptr = ciphertext
-        if hydro_secretbox_encrypt(ciphertext_ptr, plaintext_ptr, plaintext_len, msg_id, self.ctx.ctx, self.key.key) != 0:
-            raise EncryptException("Failed to encrypt message")
+        cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
+        try:
+            secretbox_encrypt(plaintext, msg_id, self.ctx, self.key, ciphertext)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise EncryptException("Encryption failed") from ex
         cdef EncryptedMessage msg = EncryptedMessage(ciphertext, msg_id)
         if out is not None:
             msg.writeto(out)
-        return msg
+        return msg.message
 
-    cpdef decrypt(self, const unsigned char[:] ciphertext, uint64_t msg_id=0, out=None):
+    cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None):
         """
         Decrypt the ciphertext using the secret box key and context.
         The optional msg_id must match the one used during encryption.
@@ -189,13 +206,27 @@ cdef class SecretBox:
         """
         if ciphertext is None:
             raise ValueError("Ciphertext cannot be None")
-        cdef const unsigned char* ciphertext_ptr = &ciphertext[0]
-        cdef size_t ciphertext_len = len(ciphertext)
-        cdef size_t plaintext_len = ciphertext_len - hydro_secretbox_HEADERBYTES
+
+        cdef const unsigned char[:] ciphertext_view
+        if isinstance(ciphertext, EncryptedMessage):
+            ciphertext_view = (<EncryptedMessage>ciphertext).message
+            _id = (<EncryptedMessage>ciphertext).msg_id
+            if msg_id != 0 and _id != msg_id:
+                raise DecryptException("Message ID does not match")
+            msg_id = _id
+        else:
+            ciphertext_view = ciphertext
+
+        if len(ciphertext_view) < hydro_secretbox_HEADERBYTES:
+            raise ValueError("Ciphertext is too short")
+        cdef size_t plaintext_len = len(ciphertext_view) - hydro_secretbox_HEADERBYTES
         cdef bytearray plaintext = bytearray(plaintext_len)
-        cdef unsigned char* plaintext_ptr = plaintext
-        if hydro_secretbox_decrypt(plaintext_ptr, ciphertext_ptr, ciphertext_len, msg_id, self.ctx.ctx, self.key.key) != 0:
-            raise DecryptException("Failed to decrypt message")
+        try:
+            secretbox_decrypt(ciphertext_view, msg_id, self.ctx, self.key, plaintext)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise DecryptException("Decryption failed") from ex
         cdef SafeWriter w
         if out is not None:
             w = SafeWriter(out)
@@ -216,7 +247,7 @@ cdef class SecretBox:
             raise ValueError("Source and destination file objects cannot be None")
         if chunk_size <= hydro_secretbox_HEADERBYTES:
             raise ValueError("Chunk size must be greater than the header size")
-        cdef Hash hasher = Hash(ctx=self.ctx, key=self.key)
+        cdef Hash hasher = Hash(ctx=self.ctx, key=bytes(self.key))
         cdef uint64_t total_bytes_written = 0
         cdef bytearray buf = bytearray(chunk_size - hydro_secretbox_HEADERBYTES)     # the buffer used to read a chunk of the file
         cdef unsigned char[:] buf_view = buf
@@ -226,7 +257,11 @@ cdef class SecretBox:
         cdef SafeWriter w = SafeWriter(out)
 
         # write the max buffer size to the output file so that we can read it at decrypt time
-        w.write(enc_msg_header + struct.pack("<L", chunk_size))
+        cdef bytearray header = bytearray(8)
+        header[0:4] = ENC_MSG_HEADER
+        cdef unsigned char[:] header_view = header
+        store32(header_view[4:8], chunk_size)  # store the chunk size in the header
+        w.write(header)  # write the header to the output file
         total_bytes_written += 8
 
         while True:
@@ -259,7 +294,7 @@ cdef class SecretBox:
         cdef bytearray sbuf = bytearray(8)
         cdef size_t max_buf_size = 0
         cdef EncryptedMessage enc_msg
-        cdef Hash hasher = Hash(ctx=self.ctx, key=self.key)
+        cdef Hash hasher = Hash(ctx=self.ctx, key=bytes(self.key))
         cdef TeeWriter tee
         cdef bytes transmitted_hash
         cdef bytes computed_hash
@@ -271,9 +306,9 @@ cdef class SecretBox:
             r.readinto(sbuf)
         except OSError as ex:
             raise OSError("Failed to read max buffer size") from ex
-        if sbuf[:4] != enc_msg_header:
+        if sbuf[:4] != ENC_MSG_HEADER:
             raise ValueError("Invalid message header")
-        max_buf_size = struct.unpack("<L", sbuf[4:])[0]
+        max_buf_size = load32(sbuf[4:8])
         tee = TeeWriter(w, hasher)
 
         while True:

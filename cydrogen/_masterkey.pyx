@@ -2,11 +2,11 @@
 
 import base64
 
-from libc.string cimport memcpy
-from libc.stdint cimport uint8_t
 from libc.stdint cimport uint64_t
 
-from ._decls cimport *
+from ._decls cimport pwhash_deterministic, kdf_derive_from_key
+from ._decls cimport sign_keygen_deterministic, pwhash_create, pwhash_verify
+from ._decls cimport hydro_pwhash_STOREDBYTES, hydro_kdf_BYTES_MIN, hydro_kdf_BYTES_MAX
 
 from ._context cimport Context
 from ._basekey cimport BaseKey
@@ -73,15 +73,14 @@ cdef class MasterKey(BaseKey):
             raise ValueError("Password cannot be empty")
         if length == 0:
             raise ValueError("Length cannot be 0")
-        cdef const unsigned char* pwdptr = &password[0]
         cdef Context myctx = Context(ctx)
         derived_key = bytearray(length)
-        cdef uint8_t* derived_key_ptr = derived_key
-        cdef int res
-        with nogil:
-            res = hydro_pwhash_deterministic(derived_key_ptr, length, <const char*>pwdptr, pwdlen, myctx.ctx, self.key, opslimit, 0, 1)
-        if res != 0:
-            raise DeriveException("Failed to derive key from password")
+        try:
+            pwhash_deterministic(password, myctx, self, opslimit, derived_key)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise DeriveException("Failed to derive key from password") from ex
         return bytes(derived_key)
 
     cpdef derive_subkey(self, uint64_t subkey_id, ctx=None):
@@ -103,9 +102,12 @@ cdef class MasterKey(BaseKey):
             raise ValueError("Subkey length must be between 16 and 65535 bytes")
         cdef Context myctx = Context(ctx)
         cdef bytearray subkey = bytearray(length)
-        cdef uint8_t* subkey_ptr = subkey
-        if hydro_kdf_derive_from_key(subkey_ptr, length, subkey_id, myctx.ctx, self.key) != 0:
-            raise DeriveException("Failed to derive subkey")
+        try:
+            kdf_derive_from_key(self, subkey_id, myctx, subkey)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise DeriveException("Failed to derive subkey") from ex
         return bytes(subkey)
 
     cpdef derive_sign_keypair(self):
@@ -115,10 +117,7 @@ cdef class MasterKey(BaseKey):
         """
         if self.is_zero():
             raise ValueError("A zero key cannot be used to derive a sign keypair")
-        cdef hydro_sign_keypair kp
-        hydro_sign_keygen_deterministic(&kp, self.key)
-        cdef bytes secret_key = kp.sk[:hydro_sign_SECRETKEYBYTES]
-        return SignKeyPair(secret_key)
+        return SignKeyPair(sign_keygen_deterministic(self))
 
     cpdef hash_password(self, const unsigned char[:] password, uint64_t opslimit=10000):
         """
@@ -127,17 +126,17 @@ cdef class MasterKey(BaseKey):
         """
         if password is None:
             raise ValueError("Password cannot be None")
-        cdef size_t password_length = len(password)
-        if password_length == 0:
+        if len(password) == 0:
             raise ValueError("Password cannot be empty")
-        cdef const unsigned char* password_ptr = &password[0]
-        cdef uint8_t stored[hydro_pwhash_STOREDBYTES]
-        if hydro_pwhash_create(stored, <const char*>password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
-            raise DeriveException("Failed to hash password")
-        cdef bytearray res = bytearray(hydro_pwhash_STOREDBYTES)
-        cdef unsigned char* res_ptr = res
-        memcpy(res_ptr, stored, hydro_pwhash_STOREDBYTES)
-        return bytes(res)
+        cdef bytearray stored = bytearray(hydro_pwhash_STOREDBYTES)
+
+        try:
+            pwhash_create(password, self, opslimit, stored)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise DeriveException("Failed to hash password") from ex
+        return bytes(stored)
 
     cpdef verify_password(self, const unsigned char[:] password, const unsigned char[:] stored, uint64_t opslimit=10000):
         """
@@ -148,16 +147,8 @@ cdef class MasterKey(BaseKey):
             raise ValueError("Password cannot be None")
         if stored is None:
             raise ValueError("Stored hash cannot be None")
-        cdef size_t password_length = len(password)
-        if password_length == 0:
+        if len(password) == 0:
             raise ValueError("Password cannot be empty")
-        cdef size_t stored_length = len(stored)
-        if stored_length != hydro_pwhash_STOREDBYTES:
+        if len(stored) != hydro_pwhash_STOREDBYTES:
             raise ValueError("Stored hash must be 128 bytes long")
-        cdef const unsigned char* stored_ptr = &stored[0]
-        cdef uint8_t stored_array[hydro_pwhash_STOREDBYTES]
-        memcpy(&stored_array[0], stored_ptr, hydro_pwhash_STOREDBYTES)
-        cdef const unsigned char* password_ptr = &password[0]
-        if hydro_pwhash_verify(stored_array, <const char*>password_ptr, password_length, self.key, opslimit, 0, 1) != 0:
-            return False
-        return True
+        return pwhash_verify(stored, password, self, opslimit)

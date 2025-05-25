@@ -6,13 +6,13 @@ from ._context cimport Context
 
 
 cdef class SignPublicKey:
-    cdef uint8_t key[hydro_sign_PUBLICKEYBYTES]
+    cdef uint8_t* key
     cdef eq(self, SignPublicKey other)
     cpdef verifier(self, ctx=*)
 
 
 cdef class SignSecretKey:
-    cdef uint8_t key[hydro_sign_SECRETKEYBYTES]
+    cdef uint8_t* key
     cdef eq(self, SignSecretKey other)
     cpdef signer(self, ctx=*)
     cdef public_key(self)
