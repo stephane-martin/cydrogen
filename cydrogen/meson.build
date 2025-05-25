@@ -27,23 +27,21 @@ _cython_tree_cydrogen = [
   fs.copyfile('_exceptions.pxd'),
   fs.copyfile('_hash.pxd'),
   fs.copyfile('_masterkey.pxd'),
-  fs.copyfile('_random.pxd'),
   fs.copyfile('_secretbox.pxd'),
   fs.copyfile('_sign.pxd'),
   fs.copyfile('_utils.pxd'),
 ]
 
 cydrogen_pyx_sources = [
-  ['_basekey', ['_basekey.pyx', 'src/hydrogen.c']],
-  ['_context', ['_context.pyx', 'src/hydrogen.c']],
-  ['_cydrogen', ['_cydrogen.pyx', 'src/hydrogen.c']],
-  ['_exceptions', '_exceptions.pyx'],
-  ['_hash', ['_hash.pyx', 'src/hydrogen.c']],
-  ['_masterkey', ['_masterkey.pyx', 'src/hydrogen.c']],
-  ['_random', ['_random.pyx', 'src/hydrogen.c']],
-  ['_secretbox', ['_secretbox.pyx', 'src/hydrogen.c']],
-  ['_sign', ['_sign.pyx', 'src/hydrogen.c']],
-  ['_utils', '_utils.pyx'],
+  ['_basekey', ['_basekey.pyx']],
+  ['_context', ['_context.pyx']],
+  ['_exceptions', ['_exceptions.pyx']],
+  ['_hash', ['_hash.pyx']],
+  ['_masterkey', ['_masterkey.pyx']],
+  ['_secretbox', ['_secretbox.pyx']],
+  ['_sign', ['_sign.pyx']],
+  ['_utils', ['_utils.pyx', 'cyutils.c']],
+  ['_decls', ['_decls.pyx', 'src/hydrogen.c']],
 ]
 
 cydrogen_dir = py.get_install_dir() / 'cydrogen'
@@ -92,10 +90,10 @@ python_sources = [
   '_exceptions.pxd',
   '_hash.pxd',
   '_masterkey.pxd',
-  '_random.pxd',
   '_secretbox.pxd',
   '_sign.pxd',
   '_utils.pxd',
+  '_decls.pxd',
 ]
 
 py.install_sources(

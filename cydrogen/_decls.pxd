@@ -117,3 +117,68 @@ cdef extern from "hydrogen.h" nogil:
     int hydro_sign_update(hydro_sign_state *state, const void *m_, size_t mlen)
     int hydro_sign_final_create(hydro_sign_state *state, uint8_t csig[hydro_sign_BYTES], const uint8_t sk[hydro_sign_SECRETKEYBYTES])
     int hydro_sign_final_verify(hydro_sign_state *state, const uint8_t csig[hydro_sign_BYTES], const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
+
+
+cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES])
+cdef basekey_memzero(uint8_t* key)
+cdef pk_memzero(uint8_t* key)
+cdef sk_memzero(uint8_t* key)
+cdef keys_equal(const unsigned char[:] key1, const unsigned char[:] key2)
+
+
+cdef hash_init(hydro_hash_state *state, const unsigned char[:] ctx, const unsigned char[:] key)
+cdef hash_update(hydro_hash_state *state, const unsigned char[:] data)
+cdef hash_final(hydro_hash_state *state, unsigned char[:] out)
+
+cdef secretbox_encrypt(
+        const unsigned char[:] plaintext,
+        uint64_t msg_id,
+        const unsigned char[:] ctx,
+        const unsigned char[:] key,
+        unsigned char[:] ciphertext)
+
+cdef secretbox_decrypt(
+        const unsigned char[:] ciphertext,
+        uint64_t msg_id,
+        const unsigned char[:] ctx,
+        const unsigned char[:] key,
+        unsigned char[:] plaintext)
+
+
+cdef pwhash_deterministic(
+        const unsigned char[:] password,
+        const unsigned char[:] ctx,
+        const unsigned char[:] master_key,
+        uint64_t opslimit,
+        unsigned char[:] derived_key)
+
+cdef kdf_derive_from_key(
+        const unsigned char[:] master_key,
+        uint64_t subkey_id,
+        const unsigned char[:] ctx,
+        unsigned char[:] subkey)
+
+cdef pwhash_create(
+        const unsigned char[:] password,
+        const unsigned char[:] master_key,
+        uint64_t opslimit,
+        unsigned char[:] stored)
+
+cdef pwhash_verify(
+        const unsigned char[:] stored,
+        const unsigned char[:] password,
+        const unsigned char[:] master_key,
+        uint64_t opslimit_max)
+
+cdef sign_keygen_deterministic(const unsigned char[:] master_key)
+cdef sign_keygen()
+cdef sign_init(hydro_sign_state *state, const unsigned char[:] ctx)
+cdef sign_update(hydro_sign_state *state, const unsigned char[:] data)
+cdef sign_final_create(hydro_sign_state *state, const unsigned char[:] sk, unsigned char[:] signature)
+cdef sign_final_verify(hydro_sign_state *state, const unsigned char[:] pk, const unsigned char[:] signature)
+
+cpdef random_u32()
+cpdef random_uniform(uint32_t upper_bound)
+cpdef randomize_buffer(unsigned char[:] buf)
+cpdef gen_random_buffer(size_t size)
+cpdef shuffle_buffer(unsigned char[:] buf)

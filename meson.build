@@ -10,6 +10,51 @@ project(
 )
 
 cc = meson.get_compiler('c')
+
+if cc.check_header('sys/mman.h')
+  add_project_arguments('-DHAVE_SYS_MMAN_H', language: 'c')
+  if cc.has_function('mmap', prefix : '#include <sys/mman.h>')
+    add_project_arguments('-DHAVE_MMAP', language: 'c')
+  endif
+  if cc.has_function('mprotect', prefix : '#include <sys/mman.h>')
+    add_project_arguments('-DHAVE_MPROTECT', language: 'c')
+  endif
+  if cc.has_function('mlock', prefix : '#include <sys/mman.h>')
+    add_project_arguments('-DHAVE_MLOCK', language: 'c')
+  endif
+  # madvise
+  if cc.has_function('madvise', prefix : '#include <sys/mman.h>')
+    add_project_arguments('-DHAVE_MADVISE', language: 'c')
+  endif
+endif
+if cc.check_header('sys/param.h')
+  add_project_arguments('-DHAVE_SYS_PARAM_H', language: 'c')
+endif
+if cc.check_header('signal.h')
+  add_project_arguments('-DHAVE_SIGNAL_H', language: 'c')
+  if cc.has_function('raise', prefix : '#include <signal.h>')
+    add_project_arguments('-DHAVE_RAISE', language: 'c')
+  endif
+endif
+if cc.has_function('posix_memalign', prefix : '#include <stdlib.h>')
+  add_project_arguments('-DHAVE_POSIX_MEMALIGN', language: 'c')
+endif
+if cc.has_function('memset_s', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_MEMSET_S', language: 'c')
+endif
+if cc.has_function('explicit_bzero', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_EXPLICIT_BZERO', language: 'c')
+endif
+if cc.has_function('memset_explicit', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_MEMSET_EXPLICIT', language: 'c')
+endif
+if cc.has_function('explicit_memset', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_EXPLICIT_MEMSET', language: 'c')
+endif
+if cc.has_function_attribute('weak')
+  add_project_arguments('-DHAVE_WEAK_SYMBOLS', language: 'c')
+endif
+
 py = import('python').find_installation(pure: false)
 py_dep = py.dependency()
 fs = import('fs')

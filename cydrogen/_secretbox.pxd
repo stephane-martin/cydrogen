@@ -7,7 +7,7 @@ from ._context cimport Context
 
 
 cdef class SecretBoxKey(BaseKey):
-    pass
+    cpdef secretbox(self, ctx=*)
 
 
 cdef class EncryptedMessage:
@@ -21,7 +21,7 @@ cdef class SecretBox:
     cdef SecretBoxKey key
     cdef Context ctx
     cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=*, out=*)
-    cpdef decrypt(self, const unsigned char[:] ciphertext, uint64_t msg_id=*, out=*)
+    cpdef decrypt(self, ciphertext, uint64_t msg_id=*, out=*)
     cpdef encrypt_file(self, src, dst, size_t chunk_size=*)
     cdef _encrypt_file(self, fileobj, out, size_t chunk_size=*)
     cpdef decrypt_file(self, src, out)
