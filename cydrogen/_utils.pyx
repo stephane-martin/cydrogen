@@ -1,7 +1,81 @@
 # cython: language_level=3
 
+from libc.stdint cimport uint64_t
+from libc.stdint cimport uint32_t
+from libc.stdint cimport uint16_t
+
 import io
 import pathlib
+
+
+cdef mprotect_readonly(void *ptr):
+    if cyd_mprotect_readonly(ptr) != 0:
+        raise OSError("Failed to change memory protection to read-only")
+
+
+cdef uint8_t* malloc_key(size_t size) noexcept nogil:
+    return <uint8_t*>cyd_malloc(size)
+
+
+cdef void free_key(uint8_t* ptr) noexcept nogil:
+    cyd_free(ptr)
+
+
+cdef key_is_zero(const unsigned char[:] key):
+    if key is None:
+        raise ValueError("key cannot be None")
+    cdef size_t lenk = len(key)
+    if lenk == 0:
+        return True
+    return cyd_is_zero(&key[0], lenk) == 1
+
+
+cpdef load64(const unsigned char[:] src):
+    if len(src) < 8:
+        raise ValueError(f"src must be 8 bytes long, got {len(src)} bytes")
+    return _load64(src)
+
+
+cpdef store64(unsigned char[:] dst, uint64_t src):
+    if len(dst) < 4:
+        raise ValueError(f"dst must be 8 bytes long, got {len(dst)} bytes")
+    _store64(dst, src)
+
+
+cpdef load32(const unsigned char[:] src):
+    if len(src) < 4:
+        raise ValueError(f"src must be 4 bytes long, got {len(src)} bytes")
+    return _load32(src)
+
+
+cpdef store32(unsigned char[:] dst, uint32_t src):
+    if len(dst) < 4:
+        raise ValueError(f"dst must be 4 bytes long, got {len(dst)} bytes")
+    _store32(dst, src)
+
+
+cpdef load16(const unsigned char[:] src):
+    if len(src) < 2:
+        raise ValueError(f"src must be 2 bytes long, got {len(src)} bytes")
+    return _load16(src)
+
+
+cpdef store16(unsigned char[:] dst, uint16_t src):
+    if len(dst) < 2:
+        raise ValueError(f"dst must be 2 bytes long, got {len(dst)} bytes")
+    _store16(dst, src)
+
+
+def have_mman():
+    return cyd_have_mman() == 1
+
+
+def little_endian():
+    return cyd_is_little_endian() == 1
+
+
+def big_endian():
+    return cyd_is_big_endian() == 1
 
 
 cdef class FileOpener:

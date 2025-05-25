@@ -3,8 +3,6 @@
 import base64
 import io
 
-from libc.stdint cimport uint8_t
-
 from ._basekey cimport BaseKey
 from ._masterkey cimport MasterKey
 from ._secretbox cimport SecretBoxKey
@@ -12,7 +10,7 @@ from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._context cimport Context
 from ._utils cimport FileOpener
 
-from ._decls cimport *
+from ._decls cimport hydro_hash_BYTES_MIN, hydro_hash_BYTES_MAX, hash_init, hash_update, hash_final
 
 
 cdef class HashKey(BaseKey):
@@ -76,8 +74,8 @@ cdef class Hash:
         self.finalized = 0
         self.result = bytes()
 
-        if hydro_hash_init(&self.state, self.ctx.ctx, self.key.key) != 0:
-            raise RuntimeError("Failed to initialize hash state")
+        hash_init(&self.state, self.ctx, self.key)
+
         if data is not None:
             self.update(data)
 
@@ -87,10 +85,12 @@ cdef class Hash:
         """
         if self.finalized == 1:
             raise RuntimeError("Hash has already been finalized")
-        if data is None or len(data) == 0:
+        if data is None:
             return
-        if hydro_hash_update(&self.state, &data[0], len(data)) != 0:
-            raise RuntimeError("Failed to update hash")
+        cdef size_t n = len(data)
+        if n == 0:
+            return
+        hash_update(&self.state, data)
 
     cpdef update_from(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
         """
@@ -124,9 +124,7 @@ cdef class Hash:
         if self.finalized == 1:
             return self.result
         cdef bytearray res = bytearray(self.digest_size)
-        cdef uint8_t* res_ptr = res
-        if hydro_hash_final(&self.state, res_ptr, self.digest_size) != 0:
-            raise RuntimeError("Failed to finalize hash")
+        hash_final(&self.state, res)
         self.result = bytes(res)
         self.finalized = 1
         return self.result

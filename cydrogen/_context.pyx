@@ -3,7 +3,7 @@
 from cpython.buffer cimport PyBuffer_FillInfo
 from libc.string cimport memcpy
 
-from ._decls cimport *
+from ._decls cimport hydro_hash_CONTEXTBYTES, ctx_memzero
 
 
 cdef class Context:
@@ -14,7 +14,7 @@ cdef class Context:
     """
 
     def __cinit__(self, ctx=None):
-        hydro_memzero(&self.ctx[0], hydro_hash_CONTEXTBYTES)
+        ctx_memzero(self.ctx)
 
     def __init__(self, ctx=None):
         cdef Context other

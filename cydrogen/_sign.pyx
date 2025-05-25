@@ -7,11 +7,11 @@ from cpython.buffer cimport PyBuffer_FillInfo
 from libc.stdint cimport uint8_t
 from libc.string cimport memcpy
 
-from ._decls cimport *
+from ._decls cimport hydro_sign_PUBLICKEYBYTES, hydro_sign_SECRETKEYBYTES
+from ._decls cimport pk_memzero, sk_memzero, keys_equal, sign_keygen, sign_init, sign_update, sign_final_create, sign_final_verify
 from ._context cimport Context
 from ._exceptions cimport SignException, VerifyException
-from ._utils cimport FileOpener
-
+from ._utils cimport FileOpener, free_key, malloc_key, mprotect_readonly
 
 cdef const int hydro_x25519_PUBLICKEYBYTES = 32
 cdef const int hydro_x25519_SECRETKEYBYTES = 32
@@ -19,12 +19,16 @@ cdef const int hydro_x25519_SECRETKEYBYTES = 32
 
 cdef class SignPublicKey:
     def __cinit__(self, key):
-        hydro_memzero(&self.key[0], hydro_sign_PUBLICKEYBYTES)
+        self.key = malloc_key(hydro_sign_PUBLICKEYBYTES)
 
     def __dealloc__(self):
-        hydro_memzero(&self.key[0], hydro_sign_PUBLICKEYBYTES)
+        if self.key != NULL:
+            free_key(self.key)
 
     def __init__(self, key):
+        if self.key == NULL:
+            raise MemoryError("Failed to allocate memory for key")
+        pk_memzero(self.key)
         if key is None:
             raise ValueError("Public key cannot be None")
         if isinstance(key, str):
@@ -36,7 +40,8 @@ cdef class SignPublicKey:
         if len(key) != hydro_sign_PUBLICKEYBYTES:
             raise ValueError("Public key must be 32 bytes long")
         cdef const unsigned char* key_ptr = key
-        memcpy(&self.key[0], key_ptr, hydro_sign_PUBLICKEYBYTES)
+        memcpy(self.key, key_ptr, hydro_sign_PUBLICKEYBYTES)
+        mprotect_readonly(self.key)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.key, hydro_sign_PUBLICKEYBYTES, 1, flags)
@@ -50,11 +55,9 @@ cdef class SignPublicKey:
     cdef eq(self, SignPublicKey other):
         if other is None:
             return False
-        cdef const uint8_t* self_ptr = &self.key[0]
-        cdef const uint8_t* other_ptr = &other.key[0]
-        if self_ptr == other_ptr:
+        if self.key == other.key:
             return True
-        return hydro_equal(self_ptr, other_ptr, hydro_sign_PUBLICKEYBYTES) == 1
+        return keys_equal(self, other)
 
     def __eq__(self, other):
         if not isinstance(other, SignPublicKey):
@@ -68,12 +71,16 @@ cdef class SignPublicKey:
 
 cdef class SignSecretKey:
     def __cinit__(self, key):
-        hydro_memzero(&self.key[0], hydro_sign_SECRETKEYBYTES)
+        self.key = malloc_key(hydro_sign_SECRETKEYBYTES)
 
     def __dealloc__(self):
-        hydro_memzero(&self.key[0], hydro_sign_SECRETKEYBYTES)
+        if self.key != NULL:
+            free_key(self.key)
 
     def __init__(self, key):
+        if self.key == NULL:
+            raise MemoryError("Failed to allocate memory for key")
+        sk_memzero(self.key)
         if key is None:
             raise ValueError("Secret key cannot be None")
         if isinstance(key, str):
@@ -85,7 +92,8 @@ cdef class SignSecretKey:
         if len(key) != hydro_sign_SECRETKEYBYTES:
             raise ValueError(f"Secret key must be 64 bytes long (length: {len(key)})")
         cdef const unsigned char* key_ptr = key
-        memcpy(&self.key[0], key_ptr, hydro_sign_SECRETKEYBYTES)
+        memcpy(self.key, key_ptr, hydro_sign_SECRETKEYBYTES)
+        mprotect_readonly(self.key)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.key, hydro_sign_SECRETKEYBYTES, 1, flags)
@@ -99,11 +107,9 @@ cdef class SignSecretKey:
     cdef eq(self, SignSecretKey other):
         if other is None:
             return False
-        cdef const uint8_t* self_ptr = &self.key[0]
-        cdef const uint8_t* other_ptr = &other.key[0]
-        if self_ptr == other_ptr:
+        if self.key == other.key:
             return True
-        return hydro_equal(self_ptr, other_ptr, hydro_sign_SECRETKEYBYTES) == 1
+        return keys_equal(self, other)
 
     def __eq__(self, other):
         if not isinstance(other, SignSecretKey):
@@ -147,13 +153,7 @@ cdef class SignKeyPair:
 
     @classmethod
     def gen(cls):
-        """
-        Generate a new key pair.
-        """
-        cdef hydro_sign_keypair kp
-        hydro_sign_keygen(&kp)
-        cdef bytes secret_key = kp.sk[:hydro_sign_SECRETKEYBYTES]
-        return cls(secret_key)
+        return cls(sign_keygen())
 
     cpdef signer(self, ctx=None):
         return self.secret_key.signer(ctx=ctx)
@@ -166,16 +166,26 @@ cdef class BaseSigner:
     def __init__(self, *, ctx=None, data=None):
         self.ctx = Context(ctx)
         self.finalized = 0
-        if hydro_sign_init(&self.state, self.ctx.ctx) != 0:
-            raise SignException("Failed to initialize signer")
+        try:
+            sign_init(&self.state, self.ctx)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise SignException("Failed to initialize signer") from ex
         if data is not None:
             self.update(data)
 
     cpdef update(self, const unsigned char[:] data):
         if data is None:
             return
-        if hydro_sign_update(&self.state, &data[0], len(data)) != 0:
-            raise SignException("Failed to update signer")
+        if len(data) == 0:
+            return
+        try:
+            sign_update(&self.state, data)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise SignException("Failed to update signer") from ex
 
     cpdef write(self, const unsigned char[:] data):
         if data is None:
@@ -208,12 +218,13 @@ cdef class Signer(BaseSigner):
         if self.finalized == 1:
             raise RuntimeError("already finalized")
         self.finalized = 1
-        cdef uint8_t csig[hydro_sign_BYTES]
-        if hydro_sign_final_create(&self.state, csig, self.key.key) != 0:
-            raise SignException("Failed to create signature")
         cdef bytearray sig = bytearray(hydro_sign_BYTES)
-        cdef unsigned char* sig_ptr = sig
-        memcpy(sig_ptr, &csig[0], hydro_sign_BYTES)
+        try:
+            sign_final_create(&self.state, self.key, sig)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise SignException("Failed to create signature") from ex
         return bytes(sig)
 
 
@@ -232,10 +243,12 @@ cdef class Verifier(BaseSigner):
         if self.finalized == 1:
             raise RuntimeError("already finalized")
         self.finalized = 1
-        cdef uint8_t csig[hydro_sign_BYTES]
-        memcpy(&csig[0], &signature[0], hydro_sign_BYTES)
-        if hydro_sign_final_verify(&self.state, csig, self.key.key) != 0:
-            raise VerifyException("Failed to verify signature")
+        try:
+            sign_final_verify(&self.state, self.key, signature)
+        except ValueError:
+            raise
+        except Exception as ex:
+            raise VerifyException("Failed to verify signature") from ex
 
 
 cpdef sign_file(SignSecretKey key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
