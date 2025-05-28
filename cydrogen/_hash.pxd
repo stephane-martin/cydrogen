@@ -8,7 +8,6 @@ from ._decls cimport *
 
 cdef class HashKey(BaseKey):
     cpdef hasher(self, data=*, ctx=*, size_t digest_size=*)
-    cpdef hash_file(self, fileobj, ctx=*, size_t digest_size=*, chunk_size=*)
 
 
 cdef class Hash:

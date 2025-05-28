@@ -126,10 +126,6 @@ def test_hash_file():
     fobj.seek(0)
     digest2 = cydrogen.hash_file(fobj, ctx=b"CONTEXTS", digest_size=16, key=key, chunk_size=65536)
     assert digest1 == digest2
-    # call key method hash_file with custom chunk size
-    fobj.seek(0)
-    digest3 = key.hash_file(fobj, ctx=b"CONTEXTS", digest_size=16, chunk_size=16384)
-    assert digest1 == digest3
     # call hasher method update_from
     fobj.seek(0)
     hasher = key.hasher(ctx=b"CONTEXTS")

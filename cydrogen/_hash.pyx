@@ -55,9 +55,6 @@ cdef class HashKey(BaseKey):
         """
         return Hash(data, ctx=ctx, digest_size=digest_size, key=self)
 
-    cpdef hash_file(self, fileobj, ctx=None, size_t digest_size=16, chunk_size=io.DEFAULT_BUFFER_SIZE):
-        return hash_file(fileobj, ctx=ctx, digest_size=digest_size, key=self, chunk_size=chunk_size)
-
 
 cdef class Hash:
     def __init__(self, data=None, *, ctx=None, size_t digest_size=16, key=None):
