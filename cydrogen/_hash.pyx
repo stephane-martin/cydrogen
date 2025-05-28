@@ -44,6 +44,7 @@ cdef class HashKey(BaseKey):
         if not isinstance(other, HashKey):
             return False
         cdef HashKey o = <HashKey>other
+        # call the BaseKey equality method
         return self.eq(o)
 
     def __repr__(self):

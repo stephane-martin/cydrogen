@@ -72,13 +72,13 @@ cdef class SecretBoxKey(BaseKey):
 
 
 cdef class EncryptedMessage:
-    def __init__(self, const unsigned char[:] message, uint64_t msg_id):
+    def __init__(self, const unsigned char[:] ctext, uint64_t msg_id):
         """
         Initialize the encrypted message.
         """
-        if message is None:
+        if ctext is None:
             raise ValueError("Message cannot be None")
-        self.message = message
+        self.ciphertext = bytes(ctext)
         self.msg_id = msg_id
 
     def __bytes__(self):
@@ -100,9 +100,7 @@ cdef class EncryptedMessage:
         cdef EncryptedMessage o = <EncryptedMessage>other
         if self.msg_id != o.msg_id:
             return False
-        if len(self.message) != len(o.message):
-            return False
-        return bytes(self.message) == bytes(o.message)
+        return self.ciphertext == o.ciphertext
 
     cpdef writeto(self, fileobj):
         """
@@ -114,7 +112,7 @@ cdef class EncryptedMessage:
         cdef bytearray header = bytearray(4 + 8 + 8)
         header[0:4] = ENC_MSG_HEADER
         cdef unsigned char[:] header_view = header
-        store64(header_view[4:12], len(self.message))
+        store64(header_view[4:12], len(self.ciphertext))
         store64(header_view[12:20], self.msg_id)
 
         cdef SafeWriter w
@@ -122,8 +120,8 @@ cdef class EncryptedMessage:
         with FileOpener(fileobj, mode="wb") as f:
             w = SafeWriter(f)
             n_written += w.write(header)
-            n_written += w.write(self.message)
-        if n_written < len(header) + len(self.message):
+            n_written += w.write(self.ciphertext)
+        if n_written < len(header) + len(self.ciphertext):
             raise IOError("Failed to write the entire message to the file object")
         return n_written
 
@@ -165,7 +163,7 @@ cdef class EncryptedMessage:
         """
         if key is None:
             raise ValueError("Key cannot be None")
-        return SecretBox(key, ctx=ctx).decrypt(self.message, msg_id=self.msg_id, out=out)
+        return SecretBox(key, ctx=ctx).decrypt(self.ciphertext, msg_id=self.msg_id, out=out)
 
 
 cdef class SecretBox:
@@ -183,7 +181,7 @@ cdef class SecretBox:
         Encrypt the plaintext using the secret box key and context.
         The optional msg_id can be used to differentiate between different messages.
         If out is provided, the framed ciphertext will be written to it.
-        Returns the encrypted message as a read-only memoryview.
+        Returns the encrypted message as bytes.
         """
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
@@ -197,33 +195,31 @@ cdef class SecretBox:
         cdef EncryptedMessage msg = EncryptedMessage(ciphertext, msg_id)
         if out is not None:
             msg.writeto(out)
-        return msg.message
+        return msg.ciphertext
 
     cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None):
         """
         Decrypt the ciphertext using the secret box key and context.
         The optional msg_id must match the one used during encryption.
         If out is provided, the plaintext will be written to it.
+        Returns the decrypted message as bytes.
         """
         if ciphertext is None:
             raise ValueError("Ciphertext cannot be None")
 
-        cdef const unsigned char[:] ciphertext_view
         if isinstance(ciphertext, EncryptedMessage):
-            ciphertext_view = (<EncryptedMessage>ciphertext).message
-            _id = (<EncryptedMessage>ciphertext).msg_id
+            _id = ciphertext.msg_id
+            ciphertext = ciphertext.ciphertext
             if msg_id != 0U and _id != msg_id:
                 raise DecryptException("Message ID does not match")
             msg_id = _id
-        else:
-            ciphertext_view = ciphertext
 
-        if len(ciphertext_view) < hydro_secretbox_HEADERBYTES:
+        if len(ciphertext) < hydro_secretbox_HEADERBYTES:
             raise ValueError("Ciphertext is too short")
-        cdef size_t plaintext_len = len(ciphertext_view) - hydro_secretbox_HEADERBYTES
+        cdef size_t plaintext_len = len(ciphertext) - hydro_secretbox_HEADERBYTES
         cdef bytearray plaintext = bytearray(plaintext_len)
         try:
-            secretbox_decrypt(ciphertext_view, msg_id, self.ctx, self.key, plaintext)
+            secretbox_decrypt(ciphertext, msg_id, self.ctx, self.key, plaintext)
         except ValueError:
             raise
         except Exception as ex:
@@ -323,7 +319,7 @@ cdef class SecretBox:
             if enc_msg.msg_id != msg_id:
                 raise DecryptException("Invalid message ID")
             enc_msg.decrypt(self.key, ctx=self.ctx, out=tee)
-            total_bytes_written += len(enc_msg.message) - hydro_secretbox_HEADERBYTES
+            total_bytes_written += len(enc_msg.ciphertext) - hydro_secretbox_HEADERBYTES
             msg_id += 1
 
         # the last encrypted message contains hash of the original file

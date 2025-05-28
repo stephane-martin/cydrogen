@@ -31,6 +31,7 @@ def lint(session: nox.Session):
     session.run("ruff", "format", "--check")
     print("\n= mypi =")
     session.run("mypy", "--pretty", "--no-color-output", "cydrogen")
+    session.run("mypy", "--pretty", "--no-color-output", "tests")
     print("\n= shellcheck =")
     if shutil.which("shellcheck") is None:
         print("===> shellcheck not found, skipping")

@@ -39,6 +39,9 @@ cdef class BaseKey:
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.key, hydro_hash_KEYBYTES, 1, flags)
 
+    # because BaseKey does not implement __eq__, equality checks between
+    # base keys and subclasses will go through the __eq__ method of the subclass.
+    # so that basekey == specialized_key returns False
     cdef eq(self, BaseKey other):
         if other is None:
             return False

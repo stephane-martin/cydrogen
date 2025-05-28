@@ -30,7 +30,7 @@ cdef class MasterKey(BaseKey):
             super().__init__(bytes(key))
             return
 
-        if isinstance(key, (BaseKey, SignKeyPair, SignPublicKey, SignSecretKey, HashKey, SecretBoxKey)):
+        if isinstance(key, (SignKeyPair, SignPublicKey, SignSecretKey, HashKey, SecretBoxKey)):
             # when key argument is a BaseKey or a derived key, copy the key
             raise TypeError("can't create a MasterKey from another key type")
 
