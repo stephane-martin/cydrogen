@@ -4,6 +4,7 @@ import base64
 import io
 
 from libc.stdint cimport uint64_t
+from libc.stdint cimport uint32_t
 
 from ._basekey cimport BaseKey
 from ._context cimport Context
@@ -117,10 +118,14 @@ cdef class EncryptedMessage:
         store64(header_view[12:20], self.msg_id)
 
         cdef SafeWriter w
+        cdef size_t n_written = 0
         with FileOpener(fileobj, mode="wb") as f:
             w = SafeWriter(f)
-            w.write(header)
-            w.write(self.message)
+            n_written += w.write(header)
+            n_written += w.write(self.message)
+        if n_written < len(header) + len(self.message):
+            raise IOError("Failed to write the entire message to the file object")
+        return n_written
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed):
@@ -140,10 +145,8 @@ cdef class EncryptedMessage:
 
         with FileOpener(fileobj, mode="rb") as f:
             r = SafeReader(f)
-            try:
-                r.readinto(header_buf)
-            except OSError as ex:
-                raise OSError("Failed to read next message header") from ex
+            if (<uint32_t>r.readinto(header_buf)) != 20U:
+                raise IOError("Failed to read next message header")
             if header_buf[:4] != ENC_MSG_HEADER:
                 raise ValueError("Invalid message header")
             msg_size = load64(header_buf[4:12])
@@ -151,10 +154,8 @@ cdef class EncryptedMessage:
                 raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
             msg_id = load64(header_buf[12:20])
             msg = bytearray(msg_size)
-            try:
-                r.readinto(msg)
-            except OSError as ex:
-                raise OSError("Failed to read message") from ex
+            if r.readinto(msg) != msg_size:
+                raise IOError("Failed to read message")
             return cls(msg, msg_id)
 
     cpdef decrypt(self, key, ctx=None, out=None):
@@ -182,7 +183,7 @@ cdef class SecretBox:
         Encrypt the plaintext using the secret box key and context.
         The optional msg_id can be used to differentiate between different messages.
         If out is provided, the framed ciphertext will be written to it.
-        Returns the encrypted message as a bytes-like object.
+        Returns the encrypted message as a read-only memoryview.
         """
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
@@ -211,7 +212,7 @@ cdef class SecretBox:
         if isinstance(ciphertext, EncryptedMessage):
             ciphertext_view = (<EncryptedMessage>ciphertext).message
             _id = (<EncryptedMessage>ciphertext).msg_id
-            if msg_id != 0 and _id != msg_id:
+            if msg_id != 0U and _id != msg_id:
                 raise DecryptException("Message ID does not match")
             msg_id = _id
         else:
@@ -302,10 +303,8 @@ cdef class SecretBox:
         cdef SafeReader r = SafeReader(fileobj)
         cdef SafeWriter w = SafeWriter(out)
 
-        try:
-            r.readinto(sbuf)
-        except OSError as ex:
-            raise OSError("Failed to read max buffer size") from ex
+        if (<uint32_t>r.readinto(sbuf)) != 8U:
+            raise IOError("Failed to read max buffer size")
         if sbuf[:4] != ENC_MSG_HEADER:
             raise ValueError("Invalid message header")
         max_buf_size = load32(sbuf[4:8])
@@ -314,7 +313,7 @@ cdef class SecretBox:
         while True:
             try:
                 enc_msg = EncryptedMessage.read_from(r, max_msg_size=max_buf_size)
-            except OSError:
+            except IOError as ex:
                 # we have reached the end of the file without having seen the hash
                 raise DecryptException("final hash not found")
             if enc_msg.msg_id == 0:

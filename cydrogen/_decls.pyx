@@ -31,9 +31,9 @@ cdef keys_equal(const unsigned char[:] key1, const unsigned char[:] key2):
 
 
 cdef hash_init(hydro_hash_state *state, const unsigned char[:] ctx, const unsigned char[:] key):
-    if len(ctx) != hydro_hash_CONTEXTBYTES:
+    if len(ctx) < hydro_hash_CONTEXTBYTES:
         raise ValueError("Context must be 8 bytes long")
-    if len(key) != hydro_hash_KEYBYTES:
+    if len(key) < hydro_hash_KEYBYTES:
         raise ValueError("Key must be 32 bytes long")
     cdef int res = hydro_hash_init(state, <char*>(&ctx[0]), &key[0])
     if res != 0:

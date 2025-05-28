@@ -5,6 +5,7 @@ from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
 
 import io
+import os
 import pathlib
 
 
@@ -82,17 +83,18 @@ cdef class FileOpener:
     def __init__(self, fileobj_or_path, *, mode="rb"):
         if fileobj_or_path is None:
             raise ValueError("fileobj_or_path cannot be None")
+        if mode not in ("rb", "wb", "ab"):
+            raise ValueError("mode must be 'rb', 'wb', or 'ab'")
         self.fileobj = None
         self.path = None
         self.mode = mode
-        if self.mode not in ("rb", "wb"):
-            raise ValueError("mode must be 'rb' or 'wb'")
-        if isinstance(fileobj_or_path, str) or isinstance(fileobj_or_path, pathlib.Path):
+        if isinstance(fileobj_or_path, (str, os.PathLike)):
             self.path = pathlib.Path(fileobj_or_path)
-        elif isinstance(fileobj_or_path, io.IOBase) or isinstance(fileobj_or_path, SafeReader) or isinstance(fileobj_or_path, SafeWriter):
+            return
+        if isinstance(fileobj_or_path, (io.IOBase, SafeReader, SafeWriter)):
             self.fileobj = fileobj_or_path
-        else:
-            raise TypeError("fileobj must be a string, pathlib.Path, or a file-like object")
+            return
+        raise TypeError("fileobj must be path-like or a file-like")
 
     cdef __enter__(self):
         if self.path is not None:
@@ -105,80 +107,70 @@ cdef class FileOpener:
 
 
 cdef class SafeReader:
-    """
-    SafeReader is a wrapper around a file-like object that ensures all requested bytes are read.
-    """
-
     def __init__(self, fileobj):
         if fileobj is None:
             raise ValueError("fileobj cannot be None")
-        self.direct = 0
+        if not hasattr(fileobj, "read"):
+            raise TypeError("fileobj must be a file-like object with a 'read' method")
         self.fileobj = fileobj
-        if isinstance(fileobj, SafeReader) or isinstance(fileobj, io.BufferedReader):
-            self.direct = 1
+        self.direct = isinstance(fileobj, (SafeReader, io.BufferedReader, io.BytesIO, io.BufferedRandom))
+        self.has_readinto = hasattr(fileobj, "readinto")
 
     cpdef readinto(self, unsigned char[:] buf):
-        """
-        Read bytes into the buffer. Raises OSError if not all bytes can't be read.
-        """
-        if buf is None:
-            raise ValueError("buf cannot be None")
-        if self.direct == 1:
+        if len(buf) == 0:
+            return 0
+        if self.direct and self.has_readinto:
             return self.fileobj.readinto(buf)
+        cdef bytes tmp = self.read(len(buf))
+        if len(tmp) == 0:
+            return 0
+        cdef const unsigned char[:] view = tmp
+        buf[0:len(tmp)] = view
+        return len(tmp)
+
+    cpdef read(self, size_t length=io.DEFAULT_BUFFER_SIZE):
+        if length == 0:
+            return b""
+        if self.direct == 1:
+            return self.fileobj.read(length)
+
+        cdef bytearray result = bytearray(length)
         cdef size_t offset = 0
-        cdef size_t remaining = len(buf)
-        cdef size_t n = 0
+        cdef bytes tmp
+        cdef const unsigned char[:] view
 
-        while remaining > 0:
-            n = self.fileobj.readinto(buf[offset:offset + remaining])
-            if n == 0:
-                raise OSError("Failed to read all bytes")
-            offset += n
-            remaining -= n
-        return len(buf)
+        while offset < length:
+            tmp = self.fileobj.read(length - offset)
+            if len(tmp) == 0:
+                return bytes(result[:offset])
+            view = tmp
+            result[offset:offset + len(tmp)] = view
+            offset += len(tmp)
 
-    cpdef read(self, size_t length):
-        """
-        Read a specific number of bytes from the file-like object.
-        Raises OSError if not all bytes can't be read.
-        """
-        cdef bytearray buf = bytearray(length)
-        self.readinto(buf)
-        return bytes(buf)
+        return bytes(result[0:offset])
 
 
 cdef class SafeWriter:
-    """
-    SafeWriter is a wrapper around a file-like object that ensures all requested bytes are written.
-    """
-
     def __init__(self, fileobj):
         if fileobj is None:
             raise ValueError("fileobj cannot be None")
-        self.direct = 0
         self.fileobj = fileobj
-        if isinstance(fileobj, SafeWriter) or isinstance(fileobj, io.BufferedWriter):
-            self.direct = 1
+        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedWriter, io.BytesIO, io.BufferedRandom))
 
     cpdef write(self, const unsigned char[:] buf):
-        """
-        Write bytes to the file-like object. Raises OSError if not all bytes can't be written.
-        """
         if buf is None:
             raise ValueError("buf cannot be None")
         if self.direct == 1:
             return self.fileobj.write(buf)
+        cdef size_t length = len(buf)
         cdef size_t offset = 0
-        cdef size_t remaining = len(buf)
         cdef size_t n = 0
-
-        while remaining > 0:
-            n = self.fileobj.write(buf[offset:offset + remaining])
+        while offset < length:
+            n = self.fileobj.write(buf[offset:length])
             if n == 0:
-                raise OSError("Failed to write all bytes")
+                return offset
             offset += n
-            remaining -= n
-        return len(buf)
+        return length
 
 
 cdef class TeeWriter:
@@ -187,9 +179,8 @@ cdef class TeeWriter:
         self.w2 = SafeWriter(w2)
 
     cpdef write(self, const unsigned char[:] buf):
-        """
-        Write the buffer to both writers.
-        """
-        self.w1.write(buf)
-        self.w2.write(buf)
-        return len(buf)
+        cdef size_t n1 = self.w1.write(buf)
+        cdef size_t n2 = self.w2.write(buf)
+        if n1 != n2:
+            raise IOError("Writers did not write the same number of bytes")
+        return n1
