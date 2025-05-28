@@ -132,8 +132,14 @@ cdef class SignSecretKey:
 
 
 cdef class SignKeyPair:
-    def __init__(self, secret_key):
-        self.secret_key = SignSecretKey(secret_key)
+    def __init__(self, kp):
+        if kp is None:
+            raise ValueError("Key cannot be None")
+        if isinstance(kp, SignKeyPair):
+            kp = bytes(kp)
+        if isinstance(kp, SignSecretKey):
+            kp = bytes(kp)
+        self.secret_key = SignSecretKey(kp)
         self.public_key = self.secret_key.public_key()
 
     def __eq__(self, other):

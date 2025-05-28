@@ -11,7 +11,7 @@ cdef class SecretBoxKey(BaseKey):
 
 
 cdef class EncryptedMessage:
-    cdef readonly const unsigned char[:] message
+    cdef readonly bytes ciphertext
     cdef readonly uint64_t msg_id
     cpdef writeto(self, fileobj)
     cpdef decrypt(self, key, ctx=*, out=*)

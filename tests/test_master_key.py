@@ -58,6 +58,11 @@ def test_master_key_repr():
     assert repr(key) == f"MasterKey({repr(key_str)})"
 
 
+def test_convert_basekey_master_key():
+    key = BaseKey.gen()
+    cydrogen.MasterKey(key)
+
+
 def test_no_convert_masterkey_hashkey():
     key = cydrogen.MasterKey(KEY_BYTES)
     with pytest.raises(TypeError):
@@ -78,12 +83,6 @@ def test_no_convert_hashkey_master_key():
 
 def test_no_convert_secretboxkey_master_key():
     key = cydrogen.SecretBoxKey(KEY_BYTES)
-    with pytest.raises(TypeError):
-        cydrogen.MasterKey(key)
-
-
-def test_no_convert_basekey_master_key():
-    key = BaseKey.gen()
     with pytest.raises(TypeError):
         cydrogen.MasterKey(key)
 

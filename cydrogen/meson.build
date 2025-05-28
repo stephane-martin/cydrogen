@@ -84,16 +84,27 @@ endforeach
 
 python_sources = [
   '__init__.py',
+  '__init__.pyi',
   '_basekey.pxd',
+  '_basekey.pyi',
   '_context.pxd',
+  '_context.pyi',
   '_decls.pxd',
+  '_decls.pyi',
   '_exceptions.pxd',
+  '_exceptions.pyi',
   '_hash.pxd',
+  '_hash.pyi',
   '_masterkey.pxd',
+  '_masterkey.pyi',
   '_secretbox.pxd',
+  '_secretbox.pyi',
   '_sign.pxd',
+  '_sign.pyi',
   '_utils.pxd',
+  '_utils.pyi',
   '_decls.pxd',
+  '_decls.pyi',
 ]
 
 py.install_sources(

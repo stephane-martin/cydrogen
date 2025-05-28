@@ -105,7 +105,7 @@ def test_secretbox_encrypt_decrypt():
         # decrypt the message passing explicitly the right msg_id
         decrypted_msg = box.decrypt(ciphertext, msg_id=3)
         assert decrypted_msg == msg
-        decrypted_msg = box.decrypt(enc_msg.message, msg_id=3)
+        decrypted_msg = box.decrypt(enc_msg.ciphertext, msg_id=3)
         assert decrypted_msg == msg
         # decrypt the message as EncryptedMessage (without passing explicitly the msg_id)
         decrypted_msg = box.decrypt(enc_msg)
