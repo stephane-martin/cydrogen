@@ -89,8 +89,9 @@ cdef class FileOpener:
 cdef class SafeReader:
     cdef object fileobj
     cdef bint direct
+    cdef bint has_readinto
     cpdef readinto(self, unsigned char[:] buf)
-    cpdef read(self, size_t length)
+    cpdef read(self, size_t length=*)
 
 
 cdef class SafeWriter:

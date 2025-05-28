@@ -1,17 +1,18 @@
-from ._context import Context  # type: ignore
-from ._decls import (  # type: ignore
+from ._context import Context
+from ._decls import (
     gen_random_buffer,
     hynit,
     random_u32,
     random_uniform,
     randomize_buffer,
+    shuffle_buffer,
 )
-from ._exceptions import CyException, DecryptException, DeriveException, EncryptException, SignException, VerifyException  # type: ignore
-from ._hash import Hash, HashKey, hash_file  # type: ignore
-from ._masterkey import MasterKey  # type: ignore
-from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey  # type: ignore
-from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file  # type: ignore
-from ._utils import load32, store32  # type: ignore
+from ._exceptions import CyException, DecryptException, DeriveException, EncryptException, SignException, VerifyException
+from ._hash import Hash, HashKey, hash_file
+from ._masterkey import MasterKey
+from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
+from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
+from ._utils import load32, store32
 
 __all__ = [
     "random_u32",
@@ -42,6 +43,7 @@ __all__ = [
     "verify_file",
     "load32",
     "store32",
+    "shuffle_buffer",
 ]
 
 hynit()
