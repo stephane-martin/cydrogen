@@ -50,6 +50,11 @@ def lint(session: nox.Session):
         session.run("actionlint", "-verbose", external=True)
     print("\n= zizmor =")
     session.run("zizmor", "--no-progress", ".")
+    if shutil.which("typos") is None:
+        print("===> typos not found, skipping")
+    else:
+        print("\n= typos =")
+        session.run("typos", external=True)
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
