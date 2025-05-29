@@ -12,12 +12,17 @@ class HashKey(BaseKey):
     def hasher(self, data: bytes | Buffer | None = None, ctx: Context | str | bytes | Buffer | None = None, digest_size: int = ...): ...
 
 class Hash:
+    ctx: Context
+    key: HashKey
+    digest_size: int
+    block_size: int
+
     def __init__(
         self,
         data: bytes | Buffer | None = None,
         *,
         ctx: str | bytes | Context | Buffer | None = None,
-        digest_size: int = ...,
+        digest_size: int = 16,
         key: str | bytes | BaseKey | HashKey | Buffer | None = None,
     ): ...
     def update(self, data: bytes | Buffer) -> None: ...
@@ -29,7 +34,7 @@ class Hash:
 def hash_file(
     fileobj: str | PathLike | BinaryIO,
     ctx: str | bytes | Context | Buffer | None = None,
-    digest_size: int = ...,
+    digest_size: int = 16,
     key: str | bytes | BaseKey | HashKey | Buffer | None = None,
     chunk_size: int = ...,
 ): ...
