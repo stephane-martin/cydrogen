@@ -3,7 +3,7 @@
 from ._decls cimport hydro_hash_CONTEXTBYTES
 
 cdef class Context:
-    cdef char ctx[hydro_hash_CONTEXTBYTES]
+    cdef bytes ctx
     cpdef is_empty(self)
 
 

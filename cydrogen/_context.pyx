@@ -1,7 +1,6 @@
 # cython: language_level=3
 
 from cpython.buffer cimport PyBuffer_FillInfo
-from libc.string cimport memcpy
 
 from ._decls cimport hydro_hash_CONTEXTBYTES
 
@@ -33,15 +32,14 @@ cdef pad_validate_ctx(ctx):
 
 cdef class Context:
     def __init__(self, ctx=None):
-        ctx = pad_validate_ctx(ctx)
-        cdef const unsigned char[:] ctx_view = ctx
-        memcpy(&self.ctx[0], &ctx_view[0], hydro_hash_CONTEXTBYTES)
+        self.ctx = pad_validate_ctx(ctx)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
-        PyBuffer_FillInfo(buffer, self, self.ctx, hydro_hash_CONTEXTBYTES, 1, flags)
+        cdef unsigned char* ptr = self.ctx
+        PyBuffer_FillInfo(buffer, self, ptr, hydro_hash_CONTEXTBYTES, 1, flags)
 
     def __str__(self):
-        return bytes(self).decode("ascii")
+        return self.ctx.decode("ascii")
 
     def __repr__(self):
         return f"Context({repr(str(self))})"
@@ -50,8 +48,8 @@ cdef class Context:
         if other is None:
             return False
         try:
-            return bytes(self) == pad_validate_ctx(other)
-        except ValueError:
+            return self.ctx == pad_validate_ctx(other)
+        except (ValueError, TypeError):
             return False
 
     def __bool__(self):
@@ -62,7 +60,7 @@ cdef class Context:
         return cls()
 
     cpdef is_empty(self):
-        return bytes(self) == empty_ctx
+        return self.ctx == empty_ctx
 
 
 cdef make_context(ctx):
