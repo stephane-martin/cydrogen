@@ -43,7 +43,7 @@ class Context:
         Checks if the context is empty.
 
         Returns:
-            bool: True if the context is empty (8 spaces), False otherwise.
+            True if the context is empty (8 spaces), False otherwise.
         """
         ...
 
@@ -51,6 +51,8 @@ class Context:
     def empty(cls) -> Self:
         """
         Returns an empty context, which is a context of 8 spaces.
-        """
 
+        Returns:
+            An empty context (8 spaces).
+        """
         ...
