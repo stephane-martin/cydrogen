@@ -1,12 +1,67 @@
 # cython: language_level=3
 
+from cpython.buffer cimport PyBuffer_FillInfo
+
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
+from libc.string cimport memcpy
 
 import io
 import os
 import pathlib
+
+
+cdef class SafeMemory:
+    def __cinit__(self, size_t size):
+        if size == 0:
+            return
+        self.ptr = cyd_malloc(size)
+        if self.ptr != NULL:
+            self.size = size
+            cyd_memzero(self.ptr, self.size)
+
+    def __dealloc__(self):
+        if self.ptr != NULL:
+            cyd_memzero(self.ptr, self.size)
+            cyd_free(self.ptr)
+
+    def __init__(self, size_t size):
+        if size == 0:
+            raise ValueError("size must be greater than 0")
+        if self.ptr == NULL:
+            raise MemoryError("Failed to allocate memory")
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        PyBuffer_FillInfo(buffer, self, self.ptr, self.size, 1, flags)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, SafeMemory):
+            return False
+        cdef SafeMemory o = <SafeMemory>other
+        if self.size != o.size:
+            return False
+        if self.ptr == o.ptr:
+            return True
+        return cyd_memcmp(self.ptr, o.ptr, self.size) == 0
+
+    def __bool__(self):
+        return cyd_is_zero(<const unsigned char*>(self.ptr), self.size) == 0
+
+    cpdef set(self, const unsigned char[:] data):
+        if data is None:
+            raise ValueError("Data cannot be None")
+        cdef size_t data_len = len(data)
+        if data_len != self.size:
+            raise ValueError(f"Data must be {self.size} bytes long, got {len(data)} bytes")
+        memcpy(self.ptr, &data[0], self.size)
+        mprotect_readonly(self.ptr)
+
+    cpdef set_zero(self):
+        cyd_memzero(self.ptr, self.size)
+        mprotect_readonly(self.ptr)
 
 
 cdef mprotect_readonly(void *ptr):

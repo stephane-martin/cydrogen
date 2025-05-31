@@ -18,6 +18,9 @@ cdef extern from "cyutils.h" nogil:
     void *cyd_malloc(const size_t size)
     void *cyd_allocarray(size_t count, size_t size)
     void cyd_free(void *ptr)
+    void cyd_memzero(void * const pnt, const size_t length)
+    int cyd_memcmp(const void * const b1_, const void * const b2_, size_t length)
+    int cyd_is_zero(const unsigned char *n, const size_t nlen)
 
     uint64_t cyd_load64_le(const uint8_t src[8])
     void cyd_store64_le(uint8_t dst[8], uint64_t w)
@@ -35,6 +38,14 @@ cdef extern from "cyutils.h" nogil:
     int cyd_have_mman()
     int cyd_is_little_endian()
     int cyd_is_big_endian()
+
+
+cdef class SafeMemory:
+    cdef void *ptr
+    cdef size_t size
+
+    cpdef set(self, const unsigned char[:] data)
+    cpdef set_zero(self)
 
 
 cdef inline uint64_t _load64(const unsigned char[:] src) nogil:
