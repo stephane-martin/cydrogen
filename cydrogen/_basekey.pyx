@@ -10,14 +10,24 @@ import base64
 
 cdef class BaseKey:
     def __init__(self, b=None):
-        self.key = SafeMemory(hydro_hash_KEYBYTES)
         if b is None:
+            # empty key
+            self.key = SafeMemory(hydro_hash_KEYBYTES)
             self.key.set_zero()
+            return
+        cdef SafeMemory mem
+        if isinstance(b, SafeMemory):
+            # no need to allocate a new SafeMemory object
+            mem = <SafeMemory>b
+            if mem.size != hydro_hash_KEYBYTES:
+                raise ValueError("Key must be 32 bytes long")
+            self.key = mem
             return
         if not isinstance(b, bytes):
             raise TypeError("Key must be a bytes object")
         if len(b) != hydro_hash_KEYBYTES:
             raise ValueError("Key must be 32 bytes long")
+        self.key = SafeMemory(hydro_hash_KEYBYTES)
         self.key.set(b)
 
     def __str__(self):

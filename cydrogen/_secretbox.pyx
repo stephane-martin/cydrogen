@@ -30,8 +30,10 @@ cdef class SecretBoxKey(BaseKey):
             raise ValueError("Key argument cannot be None")
 
         # when key argument is already a SecretBoxKey, copy the key
+        cdef SecretBoxKey o
         if isinstance(key, SecretBoxKey):
-            super().__init__(bytes(key))
+            o = <SecretBoxKey>key
+            super().__init__(o.key)
             return
 
         if isinstance(key, (HashKey, MasterKey, SignKeyPair, SignPublicKey, SignSecretKey)):

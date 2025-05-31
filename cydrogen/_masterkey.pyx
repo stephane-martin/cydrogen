@@ -22,6 +22,12 @@ cdef class MasterKey(BaseKey):
             super().__init__()
             return
 
+        cdef MasterKey o
+        if isinstance(key, MasterKey):
+            o = <MasterKey>key
+            super().__init__(o.key)
+            return
+
         if isinstance(key, (SignKeyPair, SignPublicKey, SignSecretKey, HashKey, SecretBoxKey)):
             raise TypeError("can't create a MasterKey from another key type")
 
@@ -29,8 +35,7 @@ cdef class MasterKey(BaseKey):
             key = base64.standard_b64decode(key)
 
         # else, assume it's a bytes-like object
-        key = bytes(key)
-        super().__init__(key)
+        super().__init__(bytes(key))
 
     def __eq__(self, other):
         if not isinstance(other, MasterKey):
