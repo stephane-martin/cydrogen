@@ -95,7 +95,10 @@ cdef class SignSecretKey:
 
     cdef public_key(self):
         cdef bytearray pk = bytearray(hydro_x25519_PUBLICKEYBYTES)
-        memcpy(<uint8_t*>pk, &self.key.ptr[hydro_x25519_SECRETKEYBYTES], hydro_x25519_PUBLICKEYBYTES)
+        cdef uint8_t* pk_ptr = <uint8_t*>pk
+        cdef uint8_t* key_ptr = <uint8_t*>self.key.ptr
+        key_ptr += hydro_x25519_SECRETKEYBYTES
+        memcpy(pk_ptr, key_ptr, hydro_x25519_PUBLICKEYBYTES)
         return SignPublicKey(bytes(pk))
 
     cpdef check_public_key(self, SignPublicKey other):
