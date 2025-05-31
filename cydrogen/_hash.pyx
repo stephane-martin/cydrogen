@@ -21,8 +21,10 @@ cdef class HashKey(BaseKey):
             return
 
         # when key argument is already a HashKey, copy the key
+        cdef HashKey o
         if isinstance(key, HashKey):
-            super().__init__(bytes(key))
+            o = <HashKey>key
+            super().__init__(o.key)
             return
 
         if isinstance(key, (MasterKey, SignKeyPair, SignPublicKey, SignSecretKey, SecretBoxKey)):

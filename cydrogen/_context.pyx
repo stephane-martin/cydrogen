@@ -32,6 +32,11 @@ cdef pad_validate_ctx(ctx):
 
 cdef class Context:
     def __init__(self, ctx=None):
+        cdef Context o
+        if isinstance(ctx, Context):
+            o = <Context>ctx
+            self.ctx = o.ctx
+            return
         self.ctx = pad_validate_ctx(ctx)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
