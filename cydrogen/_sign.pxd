@@ -1,13 +1,14 @@
 # cython: language_level=3
 
 from libc.stdint cimport uint8_t
-from ._decls cimport *
+
 from ._context cimport Context
+from ._decls cimport *
+from ._utils cimport SafeMemory
 
 
 cdef class SignPublicKey:
-    cdef uint8_t* key
-    cdef eq(self, SignPublicKey other)
+    cdef SafeMemory key
     cpdef verifier(self, ctx=*)
 
 
@@ -15,8 +16,7 @@ cdef make_sign_public_key(key)
 
 
 cdef class SignSecretKey:
-    cdef uint8_t* key
-    cdef eq(self, SignSecretKey other)
+    cdef SafeMemory key
     cpdef signer(self, ctx=*)
     cdef public_key(self)
     cpdef check_public_key(self, SignPublicKey other)

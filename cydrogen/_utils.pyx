@@ -23,7 +23,6 @@ cdef class SafeMemory:
 
     def __dealloc__(self):
         if self.ptr != NULL:
-            cyd_memzero(self.ptr, self.size)
             cyd_free(self.ptr)
 
     def __init__(self, size_t size):
