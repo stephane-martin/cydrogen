@@ -6,8 +6,8 @@ class BaseKey:
 
     Users should not instantiate this class directly. Instead, use on the subclasses.
 
-    The memory to store the key is allocated using guarded heap allocations, similar
-    to [what is done in libsodium](https://doc.libsodium.org/memory_management#guarded-heap-allocations).
+    The memory to store the key is allocated using guarded heap allocations, similar to
+    `what is done in libsodium <https://doc.libsodium.org/memory_management#guarded-heap-allocations>`_.
 
     BaseKey implements the buffer protocol, allowing it to be used as a bytes-like object.
     """
@@ -29,7 +29,7 @@ class BaseKey:
         Generate a new BaseKey with random bytes.
 
         Returns:
-            BaseKey: A new instance of BaseKey.
+            A new instance of BaseKey.
         """
         ...
 
@@ -39,7 +39,7 @@ class BaseKey:
         Generate a new BaseKey initialized to zero.
 
         Returns:
-            BaseKey: A new instance of BaseKey initialized to zero.
+            A new instance of BaseKey initialized to zero.
         """
         ...
 
@@ -48,7 +48,7 @@ class BaseKey:
         Checks if the key is the zero key.
 
         Returns:
-            bool: True if the key is zero, False otherwise.
+            True if the key is zero, False otherwise.
         """
         ...
 
