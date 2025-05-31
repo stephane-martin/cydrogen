@@ -7,10 +7,14 @@ from cpython.buffer cimport PyBuffer_FillInfo
 from libc.stdint cimport uint8_t
 from libc.string cimport memcpy
 
+from ._basekey cimport BaseKey
 from ._decls cimport hydro_sign_PUBLICKEYBYTES, hydro_sign_SECRETKEYBYTES
 from ._decls cimport pk_memzero, sk_memzero, keys_equal, sign_keygen, sign_init, sign_update, sign_final_create, sign_final_verify
-from ._context cimport Context
+from ._context cimport make_context
 from ._exceptions cimport SignException, VerifyException
+from ._hash cimport HashKey
+from ._masterkey cimport MasterKey
+from ._secretbox cimport SecretBoxKey
 from ._utils cimport FileOpener, free_key, malloc_key, mprotect_readonly
 
 cdef const int hydro_x25519_PUBLICKEYBYTES = 32
@@ -31,12 +35,13 @@ cdef class SignPublicKey:
         pk_memzero(self.key)
         if key is None:
             raise ValueError("Public key cannot be None")
+        if isinstance(key, SignSecretKey):
+            raise TypeError("Can't use SignSecretKey as public sign key")
+        if isinstance(key, (MasterKey, HashKey, SecretBoxKey, BaseKey)):
+            raise TypeError("Can't use BaseKey, MasterKey, HashKey, or SecretBoxKey as public/secret sign key")
         if isinstance(key, str):
             key = base64.standard_b64decode(key)
-        if isinstance(key, SignPublicKey):
-            key = bytes(key)
-        if not isinstance(key, bytes):
-            raise TypeError("Public key must be a bytes object")
+        key = bytes(key)
         if len(key) != hydro_sign_PUBLICKEYBYTES:
             raise ValueError("Public key must be 32 bytes long")
         cdef const unsigned char* key_ptr = key
@@ -69,6 +74,12 @@ cdef class SignPublicKey:
         return Verifier(self, ctx=ctx)
 
 
+cdef make_sign_public_key(key):
+    if isinstance(key, SignPublicKey):
+        return key
+    return SignPublicKey(key)
+
+
 cdef class SignSecretKey:
     def __cinit__(self, key):
         self.key = malloc_key(hydro_sign_SECRETKEYBYTES)
@@ -83,12 +94,13 @@ cdef class SignSecretKey:
         sk_memzero(self.key)
         if key is None:
             raise ValueError("Secret key cannot be None")
+        if isinstance(key, SignPublicKey):
+            raise TypeError("Can't use SignPublicKey as secret sign key")
+        if isinstance(key, (MasterKey, HashKey, SecretBoxKey, BaseKey)):
+            raise TypeError("Can't use BaseKey, MasterKey, HashKey, or SecretBoxKey as public/secret sign key")
         if isinstance(key, str):
             key = base64.standard_b64decode(key)
-        if isinstance(key, SignSecretKey):
-            key = bytes(key)
-        if not isinstance(key, bytes):
-            raise TypeError("Secret key must be a bytes object")
+        key = bytes(key)
         if len(key) != hydro_sign_SECRETKEYBYTES:
             raise ValueError(f"Secret key must be 64 bytes long (length: {len(key)})")
         cdef const unsigned char* key_ptr = key
@@ -131,15 +143,17 @@ cdef class SignSecretKey:
         return Signer(self, ctx=ctx)
 
 
+cdef make_sign_secret_key(key):
+    if isinstance(key, SignSecretKey):
+        return key
+    return SignSecretKey(key)
+
+
 cdef class SignKeyPair:
     def __init__(self, kp):
         if kp is None:
             raise ValueError("Key cannot be None")
-        if isinstance(kp, SignKeyPair):
-            kp = bytes(kp)
-        if isinstance(kp, SignSecretKey):
-            kp = bytes(kp)
-        self.secret_key = SignSecretKey(kp)
+        self.secret_key = make_sign_secret_key(kp)
         self.public_key = self.secret_key.public_key()
 
     def __eq__(self, other):
@@ -170,14 +184,14 @@ cdef class SignKeyPair:
 
 cdef class BaseSigner:
     def __init__(self, *, ctx=None, data=None):
-        self.ctx = Context(ctx)
+        self.ctx = make_context(ctx)
         self.finalized = 0
         try:
             sign_init(&self.state, self.ctx)
         except ValueError:
             raise
         except Exception as ex:
-            raise SignException("Failed to initialize signer") from ex
+            raise SignException("Failed to initialize signer/verifier") from ex
         if data is not None:
             self.update(data)
 
@@ -214,11 +228,11 @@ cdef class BaseSigner:
 
 
 cdef class Signer(BaseSigner):
-    def __init__(self, SignSecretKey private_key, *, ctx=None, data=None):
+    def __init__(self, private_key, *, ctx=None, data=None):
         if private_key is None:
             raise ValueError("Private key cannot be None")
         super().__init__(ctx=ctx, data=data)
-        self.key = private_key
+        self.key = make_sign_secret_key(private_key)
 
     cpdef sign(self):
         if self.finalized == 1:
@@ -235,11 +249,11 @@ cdef class Signer(BaseSigner):
 
 
 cdef class Verifier(BaseSigner):
-    def __init__(self, SignPublicKey public_key, *, ctx=None, data=None):
+    def __init__(self, public_key, *, ctx=None, data=None):
         if public_key is None:
             raise ValueError("Public key cannot be None")
         super().__init__(ctx=ctx, data=data)
-        self.key = public_key
+        self.key = make_sign_public_key(public_key)
 
     cpdef verify(self, const unsigned char[:] signature):
         if signature is None:
@@ -257,7 +271,7 @@ cdef class Verifier(BaseSigner):
             raise VerifyException("Failed to verify signature") from ex
 
 
-cpdef sign_file(SignSecretKey key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef sign_file(key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
     if key is None:
         raise ValueError("Key cannot be None")
     if fileobj is None:
@@ -267,7 +281,7 @@ cpdef sign_file(SignSecretKey key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFF
     return signer.sign()
 
 
-cpdef verify_file(SignPublicKey key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef verify_file(key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
     if key is None:
         raise ValueError("Key cannot be None")
     if fileobj is None:

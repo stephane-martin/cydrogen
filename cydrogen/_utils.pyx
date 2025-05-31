@@ -154,6 +154,8 @@ cdef class SafeWriter:
     def __init__(self, fileobj):
         if fileobj is None:
             raise ValueError("fileobj cannot be None")
+        if not hasattr(fileobj, "write"):
+            raise TypeError("fileobj must be a file-like object with a 'write' method")
         self.fileobj = fileobj
         self.direct = isinstance(fileobj, (SafeWriter, io.BufferedWriter, io.BytesIO, io.BufferedRandom))
 

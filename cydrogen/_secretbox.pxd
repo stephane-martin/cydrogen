@@ -6,8 +6,14 @@ from ._basekey cimport BaseKey
 from ._context cimport Context
 
 
+cdef bytes _ENC_MSG_HEADER
+
+
 cdef class SecretBoxKey(BaseKey):
     cpdef secretbox(self, ctx=*)
+
+
+cdef make_secretbox_key(key)
 
 
 cdef class EncryptedMessage:
