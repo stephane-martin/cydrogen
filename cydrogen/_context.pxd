@@ -5,3 +5,6 @@ from ._decls cimport hydro_hash_CONTEXTBYTES
 cdef class Context:
     cdef char ctx[hydro_hash_CONTEXTBYTES]
     cpdef is_empty(self)
+
+
+cdef make_context(ctx)

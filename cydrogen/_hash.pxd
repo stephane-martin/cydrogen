@@ -9,6 +9,7 @@ from ._decls cimport *
 cdef class HashKey(BaseKey):
     cpdef hasher(self, data=*, ctx=*, size_t digest_size=*)
 
+cdef make_hashkey(key)
 
 cdef class Hash:
     cdef readonly Context ctx

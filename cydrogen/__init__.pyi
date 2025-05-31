@@ -1,3 +1,14 @@
+"""
+The `cydrogen` package provides Python bindings for the `libhydrogen` library.
+
+It includes functionalities for cryptographic operations such as hashing, symmetric
+encryption, and signing.
+
+Everything present directly in the parent `cydrogen` module is considered the public API.
+Users should not import anything from the `cydrogen._someinternal` submodule, as it is not
+part of the public API and may change without notice.
+"""
+
 from ._context import Context
 from ._decls import (
     gen_random_buffer,
