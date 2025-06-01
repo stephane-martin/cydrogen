@@ -40,7 +40,7 @@ cydrogen_pyx_sources = [
   ['_masterkey', ['_masterkey.pyx']],
   ['_secretbox', ['_secretbox.pyx']],
   ['_sign', ['_sign.pyx']],
-  ['_utils', ['_utils.pyx', 'cyutils.c']],
+  ['_utils', ['_utils.pyx', 'cyutils.c', 'cyd_memcpy_s.c']],
   ['_decls', ['_decls.pyx', 'src/hydrogen.c']],
 ]
 

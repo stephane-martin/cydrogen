@@ -97,11 +97,10 @@ def tidy(session: nox.Session):
         return
     commands_path = ROOT / "compile_commands.json"
     tpl_path = ROOT / "compile_commands.json.tpl"
-    if not commands_path.exists():
-        with open(tpl_path, "rt", encoding="utf-8") as tpl:
-            template = tpl.read()
-            template = template.replace("ROOT", str(ROOT))
-        with open(commands_path, "wt", encoding="utf-8") as out:
-            out.write(template)
+    with open(tpl_path, "rt", encoding="utf-8") as tpl:
+        template = tpl.read()
+        template = template.replace("ROOT", str(ROOT))
+    with open(commands_path, "wt", encoding="utf-8") as out:
+        out.write(template)
     # run: clang-tidy -header-filter='.*' cydrogen/cyutils.c cydrogen/src/hydrogen.c
     session.run("clang-tidy", "-header-filter=.*", "cydrogen/cyutils.c", "cydrogen/src/hydrogen.c", external=True)
