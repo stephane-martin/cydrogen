@@ -322,7 +322,7 @@ def sign_file(
     fileobj: str | PathLike | BinaryIO,
     ctx: str | bytes | Context | Buffer | None = None,
     chunk_size: int = ...,
-):
+) -> bytes:
     """
     Sign a file using the provided secret key.
 

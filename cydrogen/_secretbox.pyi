@@ -101,7 +101,7 @@ class EncryptedMessage:
     ciphertext: bytes
     msg_id: int
 
-    def __init__(self, message: bytes | Buffer, msg_id: int):
+    def __init__(self, ctext: bytes | Buffer, msg_id: int):
         """
         Initialize the encrypted message.
 
@@ -123,7 +123,7 @@ class EncryptedMessage:
         """
         ...
 
-    def writeto(self, fileobj) -> int:
+    def writeto(self, fileobj: str | PathLike | BinaryIO) -> int:
         """
         Write the framed encrypted message to a file-like/path-like object.
 
@@ -140,7 +140,12 @@ class EncryptedMessage:
         """
         ...
 
-    def decrypt(self, key, ctx=None, out=None) -> bytes:
+    def decrypt(
+        self,
+        key: bytes | str | SecretBoxKey | BaseKey | Buffer,
+        ctx: bytes | str | Context | Buffer | None = None,
+        out: Writer | None = None,
+    ) -> bytes:
         """
         Decrypt the message using the secret box key and context.
 
@@ -177,7 +182,7 @@ class EncryptedMessage:
         ...
 
     @classmethod
-    def read_from(cls, fileobj, *, max_msg_size=None) -> Self:
+    def read_from(cls, fileobj: str | PathLike | BinaryIO, *, max_msg_size: int | None = None) -> Self:
         """
         Read an EncryptedMessage from a file-like/path-like object.
 
@@ -290,13 +295,13 @@ class SecretBox:
         """
         ...
 
-    def decrypt_file(self, src: str | PathLike | BinaryIO, out: str | PathLike | BinaryIO) -> int:
+    def decrypt_file(self, src: str | PathLike | BinaryIO, dst: str | PathLike | BinaryIO) -> int:
         """
         Decrypt a file-like object and write the plaintext to another file-like object.
 
         Args:
             src: The source file-like object to read the ciphertext from.
-            out: The destination file-like object to write the plaintext to.
+            dst: The destination file-like object to write the plaintext to.
 
         Returns:
             The total number of bytes written to the destination file.

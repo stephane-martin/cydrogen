@@ -1,6 +1,5 @@
 from collections.abc import Buffer
 
-def hynit() -> None: ...
 def random_u32() -> int:
     """
     Generate a random 32-bit unsigned integer.

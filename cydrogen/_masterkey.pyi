@@ -22,7 +22,7 @@ class MasterKey(BaseKey):
         ...
 
     def derive_key_from_password(
-        self, password: bytes | Buffer, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = ...
+        self, password: bytes | Buffer, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = 10000
     ) -> BaseKey:
         """
         Derive a high entropy key from a password, using the master key.
@@ -44,7 +44,7 @@ class MasterKey(BaseKey):
         ...
 
     def derive_key_from_password_with_length(
-        self, password: bytes | Buffer, length: int = 32, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = ...
+        self, password: bytes | Buffer, length: int = 32, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = 10000
     ) -> bytes:
         """
         Derive a high entropy key from a password using the master key.
@@ -114,7 +114,7 @@ class MasterKey(BaseKey):
         """
         ...
 
-    def hash_password(self, password: bytes | Buffer, opslimit: int = ...) -> bytes:
+    def hash_password(self, password: bytes | Buffer, opslimit: int = 10000) -> bytes:
         """
         Returns a representation of the password suitable for storage.
 
@@ -133,7 +133,7 @@ class MasterKey(BaseKey):
         """
         ...
 
-    def verify_password(self, password: bytes | Buffer, stored: bytes | Buffer, opslimit: int = ...) -> bool:
+    def verify_password(self, password: bytes | Buffer, stored: bytes | Buffer, opslimit: int = 10000) -> bool:
         """
         Verify a password against a stored hash.
 
