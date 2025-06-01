@@ -70,7 +70,7 @@ def test(session: nox.Session):
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def build(session: nox.Session):
     print("\n=== build ===\n")
-    session.run("rm", "-rf", "dist", external=True)
+    shutil.rmtree("dist", ignore_errors=True)
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
     session.run("python", "-m", "build", "--sdist", "--wheel")
     print("\n= twine check =")
@@ -78,7 +78,8 @@ def build(session: nox.Session):
     print("\n= check symbols =")
     if shutil.which("nm") is None:
         print("===> nm not found, skipping")
-    session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
+    else:
+        session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
@@ -102,5 +103,4 @@ def tidy(session: nox.Session):
         template = template.replace("ROOT", str(ROOT))
     with open(commands_path, "wt", encoding="utf-8") as out:
         out.write(template)
-    # run: clang-tidy -header-filter='.*' cydrogen/cyutils.c cydrogen/src/hydrogen.c
     session.run("clang-tidy", "-header-filter=.*", "cydrogen/cyutils.c", "cydrogen/src/hydrogen.c", external=True)

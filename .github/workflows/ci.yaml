@@ -8,6 +8,10 @@ permissions:
   contents: read
   actions: read
 
+env:
+  CC: clang
+  CXX: clang
+
 jobs:
 
   gitleaks:
@@ -103,6 +107,39 @@ jobs:
         with:
           name: cydrogen-${{matrix.python-version}}-build
           path: dist/*.whl
+
+  build-windows:
+    runs-on: windows-latest
+    needs: lint
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.13
+          cache: pip
+          check-latest: true
+      - name: install nox
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install nox
+      - name: build cydrogen
+        run: |
+          nox -s build-3.13
+      - name: upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: cydrogen-windows-build
+          path: dist/*.whl
+
 
   test:
     runs-on: ubuntu-latest
