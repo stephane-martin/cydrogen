@@ -1,14 +1,16 @@
 """
-The ``cydrogen`` package provides Python bindings for the `libhydrogen <https://github.com/jedisct1/libhydrogen>`_ library.
+The `cydrogen` package provides Python bindings for the [libhydrogen](https://github.com/jedisct1/libhydrogen) library.
 
 It includes functionalities for cryptographic operations such as hashing, symmetric
 encryption, and signing.
 
-Everything present directly in the parent ``cydrogen`` module is considered the public API.
-Users should not import anything from ``cydrogen._someinternal`` submodules, as these are
+Everything present directly in the parent `cydrogen` module is considered the public API.
+
+Users should not import anything from `cydrogen._someinternal` submodules, as these are
 internal implementations and may change without notice.
 """
 
+from ._basekey import BaseKey
 from ._context import Context
 from ._decls import (
     gen_random_buffer,
@@ -30,7 +32,7 @@ __all__ = [
     "randomize_buffer",
     "gen_random_buffer",
     "CyException",
-    "BaseException",
+    "BaseKey",
     "EncryptException",
     "DecryptException",
     "DeriveException",

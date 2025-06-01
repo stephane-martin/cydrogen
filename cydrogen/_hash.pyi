@@ -29,14 +29,16 @@ class HashKey(BaseKey):
         """
         ...
 
-    def hasher(self, data: bytes | Buffer | None = None, ctx: Context | str | bytes | Buffer | None = None, digest_size: int = ...):
+    def hasher(
+        self, data: bytes | Buffer | None = None, ctx: Context | str | bytes | Buffer | None = None, digest_size: int = 16
+    ) -> "Hash":
         """
         Returns a hasher object initialized with the key.
 
         Args:
             data: Optional initial data to hash.
             ctx: Optional context for the hash operation.
-            digest_size: Size of the desired digest in bytes (default is 16).
+            digest_size: Size of the desired digest in bytes.
 
         Returns:
             A Hash object initialized with the key, the context and optional data.
@@ -151,7 +153,7 @@ def hash_file(
     digest_size: int = 16,
     key: str | bytes | BaseKey | HashKey | Buffer | None = None,
     chunk_size: int = ...,
-):
+) -> bytes:
     """
     Compute the hash of a binary file-like object.
 

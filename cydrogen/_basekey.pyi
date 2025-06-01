@@ -4,10 +4,10 @@ class BaseKey:
     """
     Base class for keys used in symmetric cryptography (e.g., hashing, encryption).
 
-    Users should not instantiate this class directly. Instead, use on the subclasses.
+    Users should not instantiate this class directly. Instead, use one of the subclasses.
 
     The memory to store the key is allocated using guarded heap allocations, similar to
-    `what is done in libsodium <https://doc.libsodium.org/memory_management#guarded-heap-allocations>`_.
+    [what is done in libsodium](https://doc.libsodium.org/memory_management#guarded-heap-allocations).
 
     BaseKey implements the buffer protocol, allowing it to be used as a bytes-like object.
     """
