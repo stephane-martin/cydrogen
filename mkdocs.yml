@@ -1,0 +1,30 @@
+site_name: "Cydrogen"
+repo_url: https://github.com/stephane-martin/cydrogen/
+repo_name: "GitHub"
+site_description: "Cydrogen is a Python library that wraps libhydrogen, a C cryptography library."
+site_author: "Stéphane Martin"
+docs_dir: "docs"
+site_dir: "site"
+
+theme:
+  name: "material"
+
+nav:
+  - 'index.md'
+
+plugins:
+- search
+- mkdocstrings:
+    handlers:
+      python:
+        paths: [.]
+        inventories:
+          - url: https://docs.python.org/3/objects.inv
+            domains: [py, std]
+          - url: https://typing.readthedocs.io/en/latest/objects.inv
+          - url: https://typing-extensions.readthedocs.io/en/latest/objects.inv
+        options:
+          allow_inspection: false
+          docstring_style: google
+          docstring_section_style: table
+          show_source: false
