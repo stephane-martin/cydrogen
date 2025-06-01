@@ -10,6 +10,7 @@ from libc.string cimport memcpy
 import io
 import os
 import pathlib
+import tempfile
 
 
 cdef class SafeMemory:
@@ -145,7 +146,7 @@ cdef class FileOpener:
         if isinstance(fileobj_or_path, (str, os.PathLike)):
             self.path = pathlib.Path(fileobj_or_path)
             return
-        if isinstance(fileobj_or_path, (io.IOBase, SafeReader, SafeWriter)):
+        if isinstance(fileobj_or_path, (io.IOBase, SafeReader, SafeWriter, tempfile._TemporaryFileWrapper)):
             self.fileobj = fileobj_or_path
             return
         raise TypeError("fileobj must be path-like or a file-like")
