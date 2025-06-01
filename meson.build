@@ -5,7 +5,7 @@ project(
   meson_version: '>= 1.8.0',
   version: run_command(['tools/gitversion.py'], check: true).stdout().strip(),
   default_options: [
-    'buildtype=release',
+    'buildtype=minsize',
   ]
 )
 

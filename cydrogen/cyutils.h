@@ -28,6 +28,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cyd_memcpy_s.h"
+
 inline int cyd_is_little_endian(void) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	return 1;
@@ -55,7 +57,7 @@ inline int cyd_have_mman(void) {
 inline uint64_t cyd_load64_le(const uint8_t src[8]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint64_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 8);
     return w;
 #else
     uint64_t w = (uint64_t) src[0];
@@ -72,7 +74,7 @@ inline uint64_t cyd_load64_le(const uint8_t src[8]) {
 
 inline void cyd_store64_le(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 8, &w, sizeof w);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -88,7 +90,7 @@ inline void cyd_store64_le(uint8_t dst[8], uint64_t w) {
 inline uint32_t cyd_load32_le(const uint8_t src[4]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint32_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 4);
     return w;
 #else
     uint32_t w = (uint32_t) src[0];
@@ -101,7 +103,7 @@ inline uint32_t cyd_load32_le(const uint8_t src[4]) {
 
 inline void cyd_store32_le(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 4, &w, sizeof w);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -113,7 +115,7 @@ inline void cyd_store32_le(uint8_t dst[4], uint32_t w) {
 inline uint16_t cyd_load16_le(const uint8_t src[2]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint16_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 2);
     return w;
 #else
     uint16_t w = (uint16_t) src[0];
@@ -124,7 +126,7 @@ inline uint16_t cyd_load16_le(const uint8_t src[2]) {
 
 inline void cyd_store16_le(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 2, &w, sizeof w);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w;
@@ -135,7 +137,7 @@ inline void cyd_store16_le(uint8_t dst[2], uint16_t w) {
 inline uint64_t cyd_load64_be(const uint8_t src[8]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint64_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 8);
     return w;
 #else
     uint64_t w = (uint64_t) src[7];
@@ -152,7 +154,7 @@ inline uint64_t cyd_load64_be(const uint8_t src[8]) {
 
 inline void cyd_store64_be(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 8, &w, sizeof w);
 #else
     dst[7] = (uint8_t) w; w >>= 8;
     dst[6] = (uint8_t) w; w >>= 8;
@@ -168,7 +170,7 @@ inline void cyd_store64_be(uint8_t dst[8], uint64_t w) {
 inline uint32_t cyd_load32_be(const uint8_t src[4]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint32_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 4);
     return w;
 #else
     uint32_t w = (uint32_t) src[3];
@@ -181,7 +183,7 @@ inline uint32_t cyd_load32_be(const uint8_t src[4]) {
 
 inline void cyd_store32_be(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 4, &w, sizeof w);
 #else
     dst[3] = (uint8_t) w; w >>= 8;
     dst[2] = (uint8_t) w; w >>= 8;
@@ -193,7 +195,7 @@ inline void cyd_store32_be(uint8_t dst[4], uint32_t w) {
 inline uint16_t cyd_load16_be(const uint8_t src[2]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint16_t w;
-    memcpy(&w, src, sizeof w);
+    cyd_memcpy_s(&w, sizeof w, src, 2);
     return w;
 #else
     uint16_t w = (uint16_t) src[1];
@@ -204,7 +206,7 @@ inline uint16_t cyd_load16_be(const uint8_t src[2]) {
 
 inline void cyd_store16_be(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    cyd_memcpy_s(dst, 2, &w, sizeof w);
 #else
     dst[1] = (uint8_t) w;
     w >>= 8;
