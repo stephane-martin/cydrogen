@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+*.o
+*.a
 
 # Distribution / packaging
 .Python
@@ -78,3 +80,4 @@ cython_debug/
 
 /package-lock.json
 /package.json
+/compile_commands.json
