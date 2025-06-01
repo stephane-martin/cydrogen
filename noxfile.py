@@ -1,4 +1,5 @@
 import glob
+import pathlib
 import shutil
 
 import nox
@@ -8,6 +9,7 @@ nox.options.error_on_missing_interpreters = True
 
 PYPROJECT = nox.project.load_toml("pyproject.toml")
 SUPPORTED_PYTHON_VERSIONS = nox.project.python_versions(PYPROJECT)
+ROOT = pathlib.Path(__file__).parent.resolve()
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
@@ -77,3 +79,11 @@ def build(session: nox.Session):
     if shutil.which("nm") is None:
         print("===> nm not found, skipping")
     session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
+
+
+@nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
+def docs(session: nox.Session):
+    print("\n=== generate docs ===\n")
+    mkdocs_conf = ROOT / "mkdocs.yml"
+    session.install(*nox.project.dependency_groups(PYPROJECT, "docs"))
+    session.run("mkdocs", "build", "--clean", "--config-file", str(mkdocs_conf))
