@@ -247,10 +247,10 @@ cdef class SecretBox:
         self.encrypt(hasher.digest(), msg_id=0, out=w)
         return total_bytes_written
 
-    cpdef decrypt_file(self, src, out):
-        if src is None or out is None:
+    cpdef decrypt_file(self, src, dst):
+        if src is None or dst is None:
             raise ValueError("Source and destination file objects cannot be None")
-        with FileOpener(src, mode="rb") as src_obj, FileOpener(out, mode="wb") as out_obj:
+        with FileOpener(src, mode="rb") as src_obj, FileOpener(dst, mode="wb") as out_obj:
             return self._decrypt_file(src_obj, out_obj)
 
     cdef _decrypt_file(self, fileobj, out):
