@@ -8,6 +8,9 @@ project(
 
 cc = meson.get_compiler('c')
 
+add_project_arguments('-DCYTHON_CLINE_IN_TRACEBACK=0', language: 'c')
+add_project_arguments('-DCYTHON_CLINE_IN_TRACEBACK_RUNTIME=0', language: 'c')
+
 if cc.check_header('sys/mman.h')
   add_project_arguments('-DHAVE_SYS_MMAN_H', language: 'c')
   if cc.has_function('mmap', prefix : '#include <sys/mman.h>')
