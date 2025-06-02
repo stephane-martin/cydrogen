@@ -1,7 +1,8 @@
 # cython: language_level=3
 
-from cpython.buffer cimport PyBuffer_FillInfo
+cimport cython
 
+from cpython.buffer cimport PyBuffer_FillInfo
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -84,6 +85,36 @@ cdef key_is_zero(const unsigned char[:] key):
     if lenk == 0:
         return True
     return cyd_is_zero(&key[0], lenk) == 1
+
+
+cdef uint64_t _load64(const unsigned char[:] src) noexcept nogil:
+    with cython.boundscheck(False):
+        return cyd_load64_be(&src[0])
+
+
+cdef void _store64(unsigned char[:] dst, uint64_t src) noexcept nogil:
+    with cython.boundscheck(False):
+        cyd_store64_be(&dst[0], src)
+
+
+cdef uint32_t _load32(const unsigned char[:] src) noexcept nogil:
+    with cython.boundscheck(False):
+        return cyd_load32_be(&src[0])
+
+
+cdef void _store32(unsigned char[:] dst, uint32_t src) noexcept nogil:
+    with cython.boundscheck(False):
+        cyd_store32_be(&dst[0], src)
+
+
+cdef uint16_t _load16(const unsigned char[:] src) noexcept nogil:
+    with cython.boundscheck(False):
+        return cyd_load16_be(&src[0])
+
+
+cdef void _store16(unsigned char[:] dst, uint16_t src) noexcept nogil:
+    with cython.boundscheck(False):
+        cyd_store16_be(&dst[0], src)
 
 
 cpdef load64(const unsigned char[:] src):

@@ -1,6 +1,5 @@
 # cython: language_level=3
 
-cimport cython
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -48,35 +47,12 @@ cdef class SafeMemory:
     cpdef set_zero(self)
 
 
-cdef inline uint64_t _load64(const unsigned char[:] src) nogil:
-    with cython.boundscheck(False):
-        return cyd_load64_be(&src[0])
-
-
-cdef inline void _store64(unsigned char[:] dst, uint64_t src) nogil:
-    with cython.boundscheck(False):
-        cyd_store64_be(&dst[0], src)
-
-
-cdef inline uint32_t _load32(const unsigned char[:] src) nogil:
-    with cython.boundscheck(False):
-        return cyd_load32_be(&src[0])
-
-
-cdef inline void _store32(unsigned char[:] dst, uint32_t src) nogil:
-    with cython.boundscheck(False):
-        cyd_store32_be(&dst[0], src)
-
-
-cdef inline uint16_t _load16(const unsigned char[:] src) nogil:
-    with cython.boundscheck(False):
-        return cyd_load16_be(&src[0])
-
-
-cdef inline void _store16(unsigned char[:] dst, uint16_t src) nogil:
-    with cython.boundscheck(False):
-        cyd_store16_be(&dst[0], src)
-
+cdef uint64_t _load64(const unsigned char[:] src) noexcept nogil
+cdef void _store64(unsigned char[:] dst, uint64_t src) noexcept nogil
+cdef uint32_t _load32(const unsigned char[:] src) noexcept nogil
+cdef void _store32(unsigned char[:] dst, uint32_t src) noexcept nogil
+cdef uint16_t _load16(const unsigned char[:] src) noexcept nogil
+cdef void _store16(unsigned char[:] dst, uint16_t src) noexcept nogil
 
 cpdef load64(const unsigned char[:] src)
 cpdef store64(unsigned char[:] dst, uint64_t src)
