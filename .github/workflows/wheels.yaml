@@ -1,0 +1,41 @@
+name: Build wheels for supported environments
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CIBW_BUILD_VERBOSITY: 1
+  CIBW_ENVIRONMENT: "PIP_PREFER_BINARY=1" 
+  CIBW_BUILD_FRONTEND: "build"
+  CIBW_TEST_COMMAND: "pytest"
+  CIBW_TEST_GROUPS: "test"
+  CIBW_ARCHS_LINUX: "x86_64"
+  CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
+  CIBW_SKIP: "*-musllinux_*"
+
+permissions:
+  contents: read
+
+jobs:
+  build_linux_wheels:
+    name: "Build python ${{ matrix.cibw_python }} x86_64 wheels on ubuntu-22.04"
+    runs-on: "ubuntu-22.04"
+    strategy:
+      fail-fast: false
+      matrix:
+        cibw_python: ["cp312-*", "cp313-*"]
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: ${{ matrix.cibw_python }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-ubuntu-22.04-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
