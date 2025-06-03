@@ -12,6 +12,10 @@ ENC_MSG_HEADER is the magic header for encrypted messages.
 """
 
 @type_check_only
+class Reader(Protocol):
+    def read(self, length: int = ...) -> bytes: ...
+
+@type_check_only
 class Writer(Protocol):
     def write(self, buf: Buffer) -> int: ...
 
@@ -123,12 +127,12 @@ class EncryptedMessage:
         """
         ...
 
-    def writeto(self, fileobj: str | PathLike | BinaryIO) -> int:
+    def writeto(self, out: Writer) -> int:
         """
         Write the framed encrypted message to a file-like/path-like object.
 
         Args:
-            fileobj: A file-like object or a path-like object to write the message to.
+            out: A file-like object to write the message to.
 
         Returns:
             The number of bytes written to the file object.
@@ -182,12 +186,12 @@ class EncryptedMessage:
         ...
 
     @classmethod
-    def read_from(cls, fileobj: str | PathLike | BinaryIO, *, max_msg_size: int | None = None) -> Self:
+    def read_from(cls, reader: Reader, *, max_msg_size: int | None = None) -> Self:
         """
         Read an EncryptedMessage from a file-like/path-like object.
 
         Args:
-            fileobj: A file-like object or a path-like object to read the message from.
+            reader: A file-like object to read the message from.
             max_msg_size: Optional maximum size of the message. If provided, raises ValueError
                           if the message size exceeds this limit.
 
