@@ -8,7 +8,7 @@ from ._masterkey cimport MasterKey
 from ._secretbox cimport SecretBoxKey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._context cimport make_context
-from ._utils cimport FileOpener
+from ._utils cimport FileOpener, SafeMemory
 
 from ._decls cimport hydro_hash_BYTES_MIN, hydro_hash_BYTES_MAX, hash_init, hash_update, hash_final
 
@@ -18,6 +18,10 @@ cdef class HashKey(BaseKey):
         # when key is None, return the empty key
         if key is None:
             super().__init__()
+            return
+
+        if isinstance(key, SafeMemory):
+            super().__init__(key)
             return
 
         # when key argument is already a HashKey, copy the key

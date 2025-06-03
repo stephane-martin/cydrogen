@@ -4,8 +4,6 @@ import base64
 import io
 
 from cpython.buffer cimport PyBuffer_FillInfo
-from libc.stdint cimport uint8_t
-from libc.string cimport memcpy
 
 from ._basekey cimport BaseKey
 from ._decls cimport hydro_sign_PUBLICKEYBYTES, hydro_sign_SECRETKEYBYTES
@@ -23,9 +21,14 @@ cdef const int hydro_x25519_SECRETKEYBYTES = 32
 
 cdef class SignPublicKey:
     def __init__(self, key):
-        self.key = SafeMemory(hydro_sign_PUBLICKEYBYTES)
         if key is None:
             raise ValueError("Public key cannot be None")
+        if isinstance(key, SafeMemory):
+            # no need to allocate a new SafeMemory object
+            if len(key) != hydro_sign_PUBLICKEYBYTES:
+                raise ValueError(f"Key must be {hydro_sign_PUBLICKEYBYTES} bytes long")
+            self.key = key
+            return
         if isinstance(key, SignSecretKey):
             raise TypeError("Can't use SignSecretKey as public sign key")
         if isinstance(key, (MasterKey, HashKey, SecretBoxKey, BaseKey)):
@@ -35,7 +38,7 @@ cdef class SignPublicKey:
         key = bytes(key)
         if len(key) != hydro_sign_PUBLICKEYBYTES:
             raise ValueError("Public key must be 32 bytes long")
-        self.key.set(key)
+        self.key = SafeMemory.from_buffer(key)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.key.ptr, self.key.size, 1, flags)
@@ -52,6 +55,18 @@ cdef class SignPublicKey:
         cdef SignPublicKey o = <SignPublicKey>other
         return self.key == o.key
 
+    cpdef writeto(self, out):
+        if out is None:
+            raise ValueError("Output cannot be None")
+        return self.key.writeto(out)
+
+    @classmethod
+    def read_from(cls, reader):
+        if reader is None:
+            raise ValueError("Reader cannot be None")
+        cdef SafeMemory mem = SafeMemory.read_from(reader, hydro_sign_PUBLICKEYBYTES)
+        return cls(mem)
+
     cpdef verifier(self, ctx=None):
         return Verifier(self, ctx=ctx)
 
@@ -64,9 +79,14 @@ cdef make_sign_public_key(key):
 
 cdef class SignSecretKey:
     def __init__(self, key):
-        self.key = SafeMemory(hydro_sign_SECRETKEYBYTES)
         if key is None:
             raise ValueError("Secret key cannot be None")
+        if isinstance(key, SafeMemory):
+            # no need to allocate a new SafeMemory object
+            if len(key) != hydro_sign_SECRETKEYBYTES:
+                raise ValueError(f"Key must be {hydro_sign_SECRETKEYBYTES} bytes long")
+            self.key = key
+            return
         if isinstance(key, SignPublicKey):
             raise TypeError("Can't use SignPublicKey as secret sign key")
         if isinstance(key, (MasterKey, HashKey, SecretBoxKey, BaseKey)):
@@ -76,7 +96,7 @@ cdef class SignSecretKey:
         key = bytes(key)
         if len(key) != hydro_sign_SECRETKEYBYTES:
             raise ValueError(f"Secret key must be 64 bytes long (length: {len(key)})")
-        self.key.set(key)
+        self.key = SafeMemory.from_buffer(key)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.key.ptr, self.key.size, 1, flags)
@@ -93,13 +113,23 @@ cdef class SignSecretKey:
         cdef SignSecretKey o = <SignSecretKey>other
         return self.key == o.key
 
+    cpdef writeto(self, out):
+        if out is None:
+            raise ValueError("Output cannot be None")
+        return self.key.writeto(out)
+
+    @classmethod
+    def read_from(cls, reader):
+        if reader is None:
+            raise ValueError("Reader cannot be None")
+        cdef SafeMemory mem = SafeMemory.read_from(reader, hydro_sign_SECRETKEYBYTES)
+        return cls(mem)
+
     cdef public_key(self):
-        cdef bytearray pk = bytearray(hydro_x25519_PUBLICKEYBYTES)
-        cdef uint8_t* pk_ptr = <uint8_t*>pk
-        cdef uint8_t* key_ptr = <uint8_t*>self.key.ptr
-        key_ptr += hydro_x25519_SECRETKEYBYTES
-        memcpy(pk_ptr, key_ptr, hydro_x25519_PUBLICKEYBYTES)
-        return SignPublicKey(bytes(pk))
+        cdef const unsigned char[:] skey = self.key
+        public_part = skey[hydro_x25519_SECRETKEYBYTES:hydro_sign_SECRETKEYBYTES + hydro_x25519_PUBLICKEYBYTES]
+        mem = SafeMemory.from_buffer(public_part)
+        return SignPublicKey(mem)
 
     cpdef check_public_key(self, SignPublicKey other):
         if other is None:
@@ -137,6 +167,16 @@ cdef class SignKeyPair:
 
     def __repr__(self):
         return f'SignKeyPair({repr(str(self))})'
+
+    cpdef writeto(self, out):
+        if out is None:
+            raise ValueError("Output cannot be None")
+        return self.secret_key.writeto(out)
+
+    @classmethod
+    def read_from(cls, reader):
+        skey = SignSecretKey.read_from(reader)
+        return cls(skey)
 
     @classmethod
     def gen(cls):

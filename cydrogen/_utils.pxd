@@ -40,11 +40,14 @@ cdef extern from "cyutils.h" nogil:
 
 
 cdef class SafeMemory:
+    cdef bint readonly_protected
     cdef void *ptr
     cdef size_t size
 
-    cpdef set(self, const unsigned char[:] data)
-    cpdef set_zero(self)
+    cdef set(self, const unsigned char[:] data)
+    cdef set_zero(self)
+    cdef mark_readonly(self)
+    cdef writeto(self, out)
 
 
 cdef uint64_t _load64(const unsigned char[:] src) noexcept nogil

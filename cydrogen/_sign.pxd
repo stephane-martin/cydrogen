@@ -9,6 +9,7 @@ from ._utils cimport SafeMemory
 
 cdef class SignPublicKey:
     cdef SafeMemory key
+    cpdef writeto(self, out)
     cpdef verifier(self, ctx=*)
 
 
@@ -17,9 +18,10 @@ cdef make_sign_public_key(key)
 
 cdef class SignSecretKey:
     cdef SafeMemory key
-    cpdef signer(self, ctx=*)
     cdef public_key(self)
+    cpdef writeto(self, out)
     cpdef check_public_key(self, SignPublicKey other)
+    cpdef signer(self, ctx=*)
 
 
 cdef make_sign_secret_key(key)
@@ -28,6 +30,7 @@ cdef make_sign_secret_key(key)
 cdef class SignKeyPair:
     cdef readonly SignSecretKey secret_key
     cdef readonly SignPublicKey public_key
+    cpdef writeto(self, out)
     cpdef signer(self, ctx=*)
     cpdef verifier(self, ctx=*)
 

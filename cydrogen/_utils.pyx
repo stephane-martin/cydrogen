@@ -2,11 +2,10 @@
 
 cimport cython
 
-from cpython.buffer cimport PyBuffer_FillInfo
+from cpython.buffer cimport PyBuffer_FillInfo, PyBUF_WRITABLE
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
-from libc.string cimport memcpy
 
 import io
 import os
@@ -32,9 +31,19 @@ cdef class SafeMemory:
             raise ValueError("size must be greater than 0")
         if self.ptr == NULL:
             raise MemoryError("Failed to allocate memory")
+        self.readonly_protected = 0
+
+    def __len__(self):
+        return self.size
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
-        PyBuffer_FillInfo(buffer, self, self.ptr, self.size, 1, flags)
+        if flags & PyBUF_WRITABLE:
+            # consumer is asking for writable buffer
+            if self.readonly_protected:
+                raise ValueError("Memory is read-only, cannot provide writable buffer")
+            PyBuffer_FillInfo(buffer, self, self.ptr, self.size, 0, flags)
+        else:
+            PyBuffer_FillInfo(buffer, self, self.ptr, self.size, 1, flags)
 
     def __eq__(self, other):
         if other is None:
@@ -51,18 +60,64 @@ cdef class SafeMemory:
     def __bool__(self):
         return cyd_is_zero(<const unsigned char*>(self.ptr), self.size) == 0
 
-    cpdef set(self, const unsigned char[:] data):
+    cdef set(self, const unsigned char[:] data):
+        if self.readonly_protected == 1:
+            raise ValueError("Memory is read-only")
         if data is None:
             raise ValueError("Data cannot be None")
-        cdef size_t data_len = len(data)
-        if data_len != self.size:
+        if len(data) != len(self):
             raise ValueError(f"Data must be {self.size} bytes long, got {len(data)} bytes")
-        memcpy(self.ptr, &data[0], self.size)
-        mprotect_readonly(self.ptr)
+        if len(data) == 0:
+            self.mark_readonly()
+            return
+        cdef unsigned char[:] view = self
+        view[0:len(self)] = data[0:len(self)]
+        del view
+        self.mark_readonly()
 
-    cpdef set_zero(self):
+    cdef set_zero(self):
+        if self.readonly_protected == 1:
+            raise ValueError("Memory is read-only")
         cyd_memzero(self.ptr, self.size)
+        self.mark_readonly()
+
+    cdef mark_readonly(self):
+        if self.readonly_protected:
+            return
         mprotect_readonly(self.ptr)
+        self.readonly_protected = 1
+
+    cdef writeto(self, out):
+        if out is None:
+            raise ValueError("Output cannot be None")
+        cdef SafeWriter w = SafeWriter(out)
+        return w.write(self)
+
+    @classmethod
+    def read_from(cls, reader, size_t size):
+        if reader is None:
+            raise ValueError("reader cannot be None")
+        cdef SafeMemory mem = cls(size)
+        if size == 0:
+            mem.mark_readonly()
+            return mem
+        cdef SafeReader r = SafeReader(reader)
+        cdef size_t n = r.readinto(mem)
+        if n < size:
+            raise ValueError(f"Expected to read {size} bytes, but got {n} bytes")
+        mem.mark_readonly()
+        return mem
+
+    @classmethod
+    def from_buffer(cls, const unsigned char[:] data):
+        if data is None:
+            raise ValueError("data cannot be None")
+        cdef SafeMemory mem = cls(len(data))
+        if len(data) == 0:
+            mem.mark_readonly()
+            return mem
+        mem.set(data)
+        return mem
 
 
 cdef mprotect_readonly(void *ptr):
