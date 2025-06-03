@@ -18,9 +18,32 @@ permissions:
   contents: read
 
 jobs:
-  build_linux_x86_64_wheels:
-    name: "Build linux x86_64 wheels"
-    runs-on: "ubuntu-22.04"
+  build_wheels:
+    strategy:
+      matrix:
+        include:
+          - runner: "ubuntu-22.04"
+            cibw_build: "cp{312,313}-manylinux_x86_64"
+            cibw_archs: "x86_64"
+            os: "linux"
+          - runner: "ubuntu-22.04-arm"
+            cibw_build: "cp{312,313}-manylinux_aarch64"
+            cibw_archs: "aarch64"
+            os: "linux"
+          - runner: "windows-2025"
+            cibw_build: "cp{312,313}-win_amd64"
+            cibw_archs: "AMD64"
+            os: "windows"
+          - runner: "macos-15"
+            cibw_build: "cp{312,313}-macosx_arm64"
+            cibw_archs: "arm64"
+            os: "macos"
+          - runner: "macos-13"
+            cibw_build: "cp{312,313}-macosx_x86_64"
+            cibw_archs: "x86_64"
+            os: "macos"
+    name: "Build wheels for ${{ matrix.os }} ${{ matrix.cibw_archs }}"
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v4
@@ -30,85 +53,9 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.23.3
         env:
-          CIBW_BUILD: "cp{312,313}-manylinux_x86_64"
-          CIBW_ARCHS: "x86_64"
+          CIBW_BUILD: "${{ matrix.cibw_build }}"
+          CIBW_ARCHS: "${{ matrix.cibw_archs }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-x86_64
-          path: ./wheelhouse/*.whl
-
-  build_linux_arm64_wheels:
-    name: "Build linux aarch64 wheels"
-    runs-on: "ubuntu-22.04-arm"
-    steps:
-      - name: checkout cydrogen repo
-        uses: actions/checkout@v4
-        with:
-          show-progress: false
-          persist-credentials: false
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
-        env:
-          CIBW_BUILD: "cp{312,313}-manylinux_aarch64"
-          CIBW_ARCHS: "aarch64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-linux-aarch64
-          path: ./wheelhouse/*.whl
-
-  build_windows_amd64_wheels:
-    name: "Build windows amd64 wheels"
-    runs-on: "windows-2025"
-    steps:
-      - name: checkout cydrogen repo
-        uses: actions/checkout@v4
-        with:
-          show-progress: false
-          persist-credentials: false
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
-        env:
-          CIBW_BUILD: "cp{312,313}-win_amd64"
-          CIBW_ARCHS: "AMD64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-amd64
-          path: ./wheelhouse/*.whl
-
-  build_macos_arm64_wheels:
-    name: "Build macos arm64 wheels"
-    runs-on: "macos-15"
-    steps:
-      - name: checkout cydrogen repo
-        uses: actions/checkout@v4
-        with:
-          show-progress: false
-          persist-credentials: false
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
-        env:
-          CIBW_BUILD: "cp{312,313}-macosx_arm64"
-          CIBW_ARCHS: "arm64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-arm64
-          path: ./wheelhouse/*.whl
-
-  build_macos_x86_64_wheels:
-    name: "Build macos x86_64 wheels"
-    runs-on: "macos-13"
-    steps:
-      - name: checkout cydrogen repo
-        uses: actions/checkout@v4
-        with:
-          show-progress: false
-          persist-credentials: false
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
-        env:
-          CIBW_BUILD: "cp{312,313}-macosx_x86_64"
-          CIBW_ARCHS: "x86_64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-x86_64
+          name: "wheels-${{ matrix.os }}-${{ matrix.cibw_archs }}"
           path: ./wheelhouse/*.whl
