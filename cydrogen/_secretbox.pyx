@@ -96,8 +96,8 @@ cdef class EncryptedMessage:
             return False
         return self.ciphertext == o.ciphertext
 
-    cpdef writeto(self, fileobj):
-        if fileobj is None:
+    cpdef writeto(self, out):
+        if out is None:
             raise ValueError("File object cannot be None")
 
         cdef bytearray header = bytearray(4 + 8 + 8)
@@ -106,14 +106,11 @@ cdef class EncryptedMessage:
         store64(header_view[4:12], len(self.ciphertext))
         store64(header_view[12:20], self.msg_id)
 
-        cdef SafeWriter w
-        cdef size_t n_written = 0
-
-        with FileOpener(fileobj, mode="wb") as f:
-            w = SafeWriter(f)
-            n_written += w.write(header)
-            n_written += w.write(self.ciphertext)
-        if n_written < len(header) + len(self.ciphertext):
+        cdef SafeWriter w = SafeWriter(out)
+        cdef size_t n_written = w.write(header)
+        n_written += w.write(self.ciphertext)
+        cdef size_t expected_size = len(header) + len(self.ciphertext)
+        if n_written < expected_size:
             raise IOError("Failed to write the entire message to the file object")
         return n_written
 
@@ -124,29 +121,25 @@ cdef class EncryptedMessage:
         return cls.read_from(io.BytesIO(framed))
 
     @classmethod
-    def read_from(cls, fileobj, *, max_msg_size=None):
-        if fileobj is None:
+    def read_from(cls, reader, *, max_msg_size=None):
+        if reader is None:
             raise ValueError("File object cannot be None")
-        cdef size_t msg_size = 0
-        cdef uint64_t msg_id = 0
-        cdef bytearray msg
-        cdef bytearray header_buf = bytearray(20)
-        cdef SafeReader r
+        cdef SafeReader r = SafeReader(reader)
 
-        with FileOpener(fileobj, mode="rb") as f:
-            r = SafeReader(f)
-            if (<uint32_t>r.readinto(header_buf)) != 20U:
-                raise IOError("Failed to read next message header")
-            if header_buf[:4] != _ENC_MSG_HEADER:
-                raise ValueError("Invalid message header")
-            msg_size = load64(header_buf[4:12])
-            if max_msg_size is not None and msg_size > max_msg_size:
+        cdef bytearray header_buf = bytearray(20)
+        if r.readinto(header_buf) < 20U:
+            raise IOError("Failed to read next message header")
+        if header_buf[:4] != _ENC_MSG_HEADER:
+            raise ValueError("Invalid message header")
+        cdef size_t msg_size = load64(header_buf[4:12])
+        if max_msg_size is not None:
+            if msg_size > <size_t>max_msg_size:
                 raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
-            msg_id = load64(header_buf[12:20])
-            msg = bytearray(msg_size)
-            if r.readinto(msg) != msg_size:
-                raise IOError("Failed to read the entire message")
-            return cls(msg, msg_id)
+        cdef uint64_t msg_id = load64(header_buf[12:20])
+        cdef bytearray msg = bytearray(msg_size)
+        if r.readinto(msg) != msg_size:
+            raise IOError("Failed to read the entire message")
+        return cls(msg, msg_id)
 
     cpdef decrypt(self, key, ctx=None, out=None):
         if key is None:
@@ -175,6 +168,8 @@ cdef class SecretBox:
             raise EncryptException("Encryption failed") from ex
         cdef EncryptedMessage msg = EncryptedMessage(ciphertext, msg_id)
         if out is not None:
+            # write the encrypted message to the output writer
+            # note that EncryptedMessage.writeto writes the full frame including the header0
             msg.writeto(out)
         return msg.ciphertext
 
