@@ -12,7 +12,7 @@ from ._exceptions cimport DecryptException, EncryptException
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
-from ._utils cimport FileOpener, SafeReader, SafeWriter, TeeWriter
+from ._utils cimport FileOpener, SafeMemory, SafeReader, SafeWriter, TeeWriter
 from ._utils cimport store64, load64, store32, load32
 
 from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
@@ -28,6 +28,10 @@ cdef class SecretBoxKey(BaseKey):
     def __init__(self, key):
         if key is None:
             raise ValueError("Key argument cannot be None")
+
+        if isinstance(key, SafeMemory):
+            super().__init__(key)
+            return
 
         # when key argument is already a SecretBoxKey, copy the key
         cdef SecretBoxKey o

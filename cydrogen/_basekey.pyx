@@ -2,7 +2,7 @@
 
 from cpython.buffer cimport PyBuffer_FillInfo
 
-from ._decls cimport gen_random_buffer, hydro_hash_KEYBYTES
+from ._decls cimport randomize_buffer, hydro_hash_KEYBYTES
 from ._utils cimport SafeMemory
 
 import base64
@@ -15,20 +15,17 @@ cdef class BaseKey:
             self.key = SafeMemory(hydro_hash_KEYBYTES)
             self.key.set_zero()
             return
-        cdef SafeMemory mem
         if isinstance(b, SafeMemory):
             # no need to allocate a new SafeMemory object
-            mem = <SafeMemory>b
-            if mem.size != hydro_hash_KEYBYTES:
+            if len(b) != hydro_hash_KEYBYTES:
                 raise ValueError("Key must be 32 bytes long")
-            self.key = mem
+            self.key = b
             return
         if not isinstance(b, bytes):
             raise TypeError("Key must be a bytes object")
         if len(b) != hydro_hash_KEYBYTES:
             raise ValueError("Key must be 32 bytes long")
-        self.key = SafeMemory(hydro_hash_KEYBYTES)
-        self.key.set(b)
+        self.key = SafeMemory.from_buffer(b)
 
     def __str__(self):
         return base64.standard_b64encode(self).decode("ascii")
@@ -46,7 +43,10 @@ cdef class BaseKey:
 
     @classmethod
     def gen(cls):
-        return cls(gen_random_buffer(hydro_hash_KEYBYTES))
+        cdef SafeMemory mem = SafeMemory(hydro_hash_KEYBYTES)
+        randomize_buffer(mem)
+        mem.mark_readonly()
+        return cls(mem)
 
     @classmethod
     def zero(cls):
@@ -57,3 +57,15 @@ cdef class BaseKey:
 
     def __bool__(self):
         return bool(self.key)
+
+    cpdef writeto(self, out):
+        if out is None:
+            raise ValueError("Output cannot be None")
+        return self.key.writeto(out)
+
+    @classmethod
+    def read_from(cls, reader):
+        if reader is None:
+            raise ValueError("Reader cannot be None")
+        cdef SafeMemory mem = SafeMemory.read_from(reader, hydro_hash_KEYBYTES)
+        return cls(mem)

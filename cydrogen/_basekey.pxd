@@ -8,3 +8,4 @@ cdef class BaseKey:
     cdef SafeMemory key
     cdef eq(self, BaseKey other)
     cpdef is_zero(self)
+    cpdef writeto(self, out)

@@ -2,6 +2,14 @@ from collections.abc import Buffer
 from os import PathLike
 from typing import BinaryIO, Literal, Protocol, type_check_only
 
+@type_check_only
+class Reader(Protocol):
+    def read(self, length: int = ...) -> bytes: ...
+
+@type_check_only
+class Writer(Protocol):
+    def write(self, buf: Buffer) -> int: ...
+
 def store64(dst: Buffer, src: int):
     """
     Store a 64-bit unsigned integer into a byte array.
@@ -101,13 +109,6 @@ def load16(src: Buffer) -> int:
 def have_mman() -> bool: ...
 def little_endian() -> bool: ...
 def big_endian() -> bool: ...
-@type_check_only
-class Reader(Protocol):
-    def read(self, length: int = ...) -> bytes: ...
-
-@type_check_only
-class Writer(Protocol):
-    def write(self, buf: Buffer) -> int: ...
 
 class SafeReader:
     """

@@ -1,8 +1,16 @@
 from collections.abc import Buffer
 from os import PathLike
-from typing import BinaryIO, Self
+from typing import BinaryIO, Protocol, Self, type_check_only
 
 from ._context import Context
+
+@type_check_only
+class Reader(Protocol):
+    def read(self, length: int = ...) -> bytes: ...
+
+@type_check_only
+class Writer(Protocol):
+    def write(self, buf: Buffer) -> int: ...
 
 class SignPublicKey:
     """
@@ -22,6 +30,21 @@ class SignPublicKey:
         """
         ...
 
+    def writeto(self, out: Writer) -> int:
+        """
+        Write the key to a writer.
+
+        Args:
+            out: A writer object that supports the write method.
+
+        Returns:
+            The number of bytes written, which should be 32.
+
+        Raises:
+            TypeError: If the provided writer does not have a 'write' method.
+        """
+        ...
+
     def verifier(self, ctx: str | bytes | Context | Buffer | None = None) -> "Verifier":
         """
         Create a Verifier instance using this public key.
@@ -33,6 +56,23 @@ class SignPublicKey:
 
         Returns:
             An instance of Verifier initialized with this public key.
+        """
+        ...
+
+    @classmethod
+    def read_from(cls, reader: Reader) -> Self:
+        """
+        Create a key from a reader.
+
+        Args:
+            reader: A reader object that supports the read method.
+
+        Returns:
+            A new instance of SignPublicKey read from the provided reader.
+
+        Raises:
+            TypeError: If the provided reader does not have a 'read' method.
+            ValueError: If the read data is not 32 bytes long.
         """
         ...
 
@@ -59,6 +99,21 @@ class SignSecretKey:
         """
         ...
 
+    def writeto(self, out: Writer) -> int:
+        """
+        Write the key to a writer.
+
+        Args:
+            out: A writer object that supports the write method.
+
+        Returns:
+            The number of bytes written, which should be 64.
+
+        Raises:
+            TypeError: If the provided writer does not have a 'write' method.
+        """
+        ...
+
     def check_public_key(self, other: SignPublicKey) -> bool:
         """
         Check if the provided public key matches the one derived from this secret key.
@@ -82,6 +137,23 @@ class SignSecretKey:
 
         Returns:
             An instance of Signer initialized with this secret key.
+        """
+        ...
+
+    @classmethod
+    def read_from(cls, reader: Reader) -> Self:
+        """
+        Create a key from a reader.
+
+        Args:
+            reader: A reader object that supports the read method.
+
+        Returns:
+            A new instance of SignSecretKey read from the provided reader.
+
+        Raises:
+            TypeError: If the provided reader does not have a 'read' method.
+            ValueError: If the read data is not 64 bytes long.
         """
         ...
 

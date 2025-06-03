@@ -4,22 +4,26 @@ import base64
 
 from libc.stdint cimport uint64_t
 
+from ._basekey cimport BaseKey
+from ._context cimport make_context
 from ._decls cimport pwhash_deterministic, kdf_derive_from_key
 from ._decls cimport sign_keygen_deterministic, pwhash_create, pwhash_verify
 from ._decls cimport hydro_pwhash_STOREDBYTES, hydro_kdf_BYTES_MIN, hydro_kdf_BYTES_MAX
-
-from ._context cimport make_context
-from ._basekey cimport BaseKey
+from ._exceptions cimport DeriveException
 from ._hash import HashKey
 from ._secretbox import SecretBoxKey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
-from ._exceptions cimport DeriveException
+from ._utils cimport SafeMemory
 
 
 cdef class MasterKey(BaseKey):
     def __init__(self, key=None):
         if key is None:
             super().__init__()
+            return
+
+        if isinstance(key, SafeMemory):
+            super().__init__(key)
             return
 
         cdef MasterKey o
