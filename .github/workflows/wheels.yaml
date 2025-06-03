@@ -74,3 +74,22 @@ jobs:
         with:
           name: wheels-windows-amd64
           path: ./wheelhouse/*.whl
+
+  build_macos_wheels:
+    name: "Build macos wheels"
+    runs-on: "macos-15"
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp{312,313}-macosx_universal2"
+          CIBW_ARCHS: "arm64 universal2"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos
+          path: ./wheelhouse/*.whl
