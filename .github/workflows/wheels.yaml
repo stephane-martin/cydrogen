@@ -53,5 +53,5 @@ jobs:
           CIBW_ARCHS_LINUX: "aarch64"
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-x86_64
+          name: wheels-linux-aarch64
           path: ./wheelhouse/*.whl
