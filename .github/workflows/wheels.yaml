@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  build_linux_x64_wheels:
+  build_linux_x86_64_wheels:
     name: "Build linux x86_64 wheels"
     runs-on: "ubuntu-22.04"
     steps:
@@ -31,7 +31,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.23.3
         env:
           CIBW_BUILD: "cp{312,313}-manylinux_x86_64"
-          CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_ARCHS: "x86_64"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
@@ -50,8 +50,27 @@ jobs:
         uses: pypa/cibuildwheel@v2.23.3
         env:
           CIBW_BUILD: "cp{312,313}-manylinux_aarch64"
-          CIBW_ARCHS_LINUX: "aarch64"
+          CIBW_ARCHS: "aarch64"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-aarch64
+          path: ./wheelhouse/*.whl
+
+  build_windows_amd64_wheels:
+    name: "Build windows amd64 wheels"
+    runs-on: "windows-2025"
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp{312,313}-win_amd64"
+          CIBW_ARCHS: "AMD64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-amd64
           path: ./wheelhouse/*.whl
