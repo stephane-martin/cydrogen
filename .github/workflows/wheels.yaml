@@ -10,8 +10,8 @@ env:
   CIBW_BUILD_FRONTEND: "build"
   CIBW_TEST_COMMAND: "pytest {project}"
   CIBW_TEST_GROUPS: "test"
-  CIBW_ARCHS_LINUX: "x86_64"
   CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
+  CIBW_MANYLINUX_AARCH64_IMAGE: "manylinux_2_28"
   CIBW_SKIP: "*-musllinux_*"
 
 permissions:
@@ -31,6 +31,26 @@ jobs:
         uses: pypa/cibuildwheel@v2.23.3
         env:
           CIBW_BUILD: "cp{312,313}-manylinux_x86_64"
+          CIBW_ARCHS_LINUX: "x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: ./wheelhouse/*.whl
+
+  build_linux_arm64_wheels:
+    name: "Build linux aarch64 wheels"
+    runs-on: "ubuntu-22.04-arm"
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp{312,313}-manylinux_aarch64"
+          CIBW_ARCHS_LINUX: "aarch64"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
