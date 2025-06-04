@@ -4,6 +4,7 @@ repo_name: "GitHub"
 site_description: "Cydrogen is a Python library that wraps libhydrogen, a C cryptography library."
 site_author: "Stéphane Martin"
 docs_dir: "docs"
+site_url: !ENV READTHEDOCS_CANONICAL_URL
 site_dir: "site"
 
 theme:
@@ -11,6 +12,9 @@ theme:
 
 nav:
   - 'index.md'
+
+extra_javascript:
+  - javascript/readthedocs.js
 
 plugins:
 - search
