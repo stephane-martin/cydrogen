@@ -15,7 +15,7 @@ env:
 jobs:
 
   gitleaks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +27,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -70,7 +70,7 @@ jobs:
           nox -s lint
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [lint, gitleaks]
     defaults:
       run:
@@ -109,7 +109,7 @@ jobs:
           path: dist/*.whl
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
     needs: [lint, gitleaks]
     defaults:
       run:
@@ -141,7 +141,7 @@ jobs:
           path: dist/*.whl
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     defaults:
       run:
@@ -178,7 +178,7 @@ jobs:
           pytest
 
   test-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
     needs: build-windows
     defaults:
       run:
