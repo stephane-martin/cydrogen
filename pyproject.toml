@@ -5,7 +5,7 @@ requires = ["meson-python >= 0.18.0", "cython >= 3.1.0"]
 
 [project]
 name = "cydrogen"
-version = "0.0.3"
+version = "0.0.4"
 description = "cython bindings for the libhydrogen library"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -44,7 +44,7 @@ develop = [
   "pre-commit",
   "build>=0.11.0",
   "pytest>=8.3.5",
-  ""pip-audit",
+  "pip-audit",
   "twine",
   "zizmor",
   "pyflakes",
