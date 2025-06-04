@@ -118,6 +118,9 @@ cdef extern from "hydrogen.h" nogil:
     int hydro_sign_final_create(hydro_sign_state *state, uint8_t csig[hydro_sign_BYTES], const uint8_t sk[hydro_sign_SECRETKEYBYTES])
     int hydro_sign_final_verify(hydro_sign_state *state, const uint8_t csig[hydro_sign_BYTES], const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
 
+    int hydro_pad(unsigned char *buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen)
+    int hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize)
+
 
 cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES])
 cdef basekey_memzero(uint8_t* key)
@@ -176,6 +179,10 @@ cdef sign_init(hydro_sign_state *state, const unsigned char[:] ctx)
 cdef sign_update(hydro_sign_state *state, const unsigned char[:] data)
 cdef sign_final_create(hydro_sign_state *state, const unsigned char[:] sk, unsigned char[:] signature)
 cdef sign_final_verify(hydro_sign_state *state, const unsigned char[:] pk, const unsigned char[:] signature)
+
+cdef _pad(unsigned char[:] buf, size_t unpadded_buflen, size_t blocksize)
+cpdef pad(const unsigned char[:] buf, size_t blocksize=*)
+cpdef unpad(const unsigned char[:] buf, size_t blocksize=*)
 
 cpdef random_u32()
 cpdef random_uniform(uint32_t upper_bound)

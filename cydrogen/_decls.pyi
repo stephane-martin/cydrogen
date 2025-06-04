@@ -52,3 +52,35 @@ def shuffle_buffer(buf: Buffer) -> None:
         buf: A buffer to shuffle. The buffer must be writable.
     """
     ...
+
+def pad(buf: Buffer, blocksize: int = 8192) -> bytes:
+    """
+    Pad a buffer to a multiple of the specified block size.
+
+    Args:
+        buf: A buffer to pad.
+        blocksize: The block size to pad to (default is 8192).
+
+    Returns:
+        A bytes object containing the padded buffer.
+
+    Raises:
+        ValueError: If blocksize is invalid
+    """
+    ...
+
+def unpad(buf: Buffer, blocksize: int = 8192) -> bytes:
+    """
+    Unpad a buffer that was padded to a multiple of the specified block size.
+
+    Args:
+        buf: A padded buffer to unpad.
+        blocksize: The block size that was used for padding (default is 8192).
+
+    Returns:
+        A bytes object containing the unpadded buffer.
+
+    Raises:
+        ValueError: If the buffer is not padded correctly or if blocksize is invalid.
+    """
+    ...
