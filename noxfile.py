@@ -69,10 +69,30 @@ def test(session: nox.Session):
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def build(session: nox.Session):
+    _build(session)
+
+
+@nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
+def build_sdist(session: nox.Session):
+    _build(session, with_wheel=False)
+
+
+@nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
+def build_wheel(session: nox.Session):
+    _build(session, with_sdist=False)
+
+
+def _build(session: nox.Session, *, with_sdist=True, with_wheel=True):
     print("\n=== build ===\n")
+    if not with_sdist and not with_wheel:
+        print("===> nothing to build")
+        return
     shutil.rmtree("dist", ignore_errors=True)
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
-    session.run("python", "-m", "build", "--sdist", "--wheel")
+    if with_sdist:
+        _build_sdist(session)
+    if with_wheel:
+        _build_wheel(session)
     print("\n= twine check =")
     session.run("twine", "check", "dist/*")
     print("\n= check symbols =")
@@ -80,6 +100,16 @@ def build(session: nox.Session):
         print("===> nm not found, skipping")
     else:
         session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
+
+
+def _build_sdist(session: nox.Session):
+    print("===> building sdist")
+    session.run("python", "-m", "build", "--sdist")
+
+
+def _build_wheel(session: nox.Session):
+    print("===> building wheel")
+    session.run("python", "-m", "build", "--wheel")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
