@@ -254,6 +254,39 @@ cdef sign_final_verify(hydro_sign_state *state, const unsigned char[:] pk, const
         raise RuntimeError("Failed to finalize sign state for verification")
 
 
+cdef _pad(unsigned char[:] buf, size_t unpadded_buflen, size_t blocksize):
+    cdef int padded_length = hydro_pad(&buf[0], unpadded_buflen, blocksize, len(buf))
+    if padded_length == -1:
+        raise ValueError("Buffer is too small for padding")
+    return padded_length
+
+
+cpdef pad(const unsigned char[:] buf, size_t blocksize=8192):
+    if buf is None:
+        raise ValueError("Buffer cannot be None")
+    if blocksize < 1:
+        raise ValueError("Block size must be at least 1 byte")
+    cdef size_t unpadded_length = len(buf)
+    cdef size_t padded_length = unpadded_length + (blocksize - (unpadded_length % blocksize))
+    cdef bytearray new_buf = bytearray(padded_length)
+    cdef unsigned char[:] new_buf_view = new_buf
+    new_buf_view[0:unpadded_length] = buf[0:unpadded_length]
+    del new_buf_view
+    cdef int length = _pad(new_buf, unpadded_length, blocksize)
+    return bytes(new_buf[0:length])
+
+
+cpdef unpad(const unsigned char[:] buf, size_t blocksize=8192):
+    if buf is None:
+        raise ValueError("Buffer cannot be None")
+    if blocksize < 1:
+        raise ValueError("Block size must be at least 1 byte")
+    cdef int unpadded_length = hydro_unpad(&buf[0], len(buf), blocksize)
+    if unpadded_length == -1:
+        raise ValueError("Buffer is not padded correctly")
+    return bytes(buf[0:unpadded_length])
+
+
 def hynit():
     if hydro_init() != 0:
         raise RuntimeError("Failed to initialize libhydrogen")
