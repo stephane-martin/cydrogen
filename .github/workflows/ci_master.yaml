@@ -1,10 +1,9 @@
-name: CI
+name: CI master
 
 on:
   pull_request:
     branches:
-      - develop
-  workflow_dispatch:
+      - master
 
 permissions:
   contents: read
@@ -13,3 +12,6 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/_ci.yaml
+  build_wheels:
+    needs: ci
+    uses: ./.github/workflows/wheels.yaml
