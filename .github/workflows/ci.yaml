@@ -88,7 +88,7 @@ jobs:
       - name: set up python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{matrix.python-version}}
+          python-version: "${{matrix.python-version}}"
           cache: pip
           check-latest: true
       - name: install nox
@@ -101,11 +101,11 @@ jobs:
           sudo apt-get install -y build-essential binutils
       - name: build cydrogen
         run: |
-          nox -s build-${{matrix.python-version}}
+          nox -s "build-${{matrix.python-version}}"
       - name: upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: cydrogen-${{matrix.python-version}}-build
+          name: "cydrogen-${{matrix.python-version}}-build"
           path: dist/*.whl
 
   build-windows:
@@ -159,7 +159,7 @@ jobs:
       - name: set up python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{matrix.python-version}}
+          python-version: "${{matrix.python-version}}"
           cache: pip
           check-latest: true
       - name: install nox and pytest
@@ -168,7 +168,7 @@ jobs:
       - name: download wheel from artifacts
         uses: actions/download-artifact@v4
         with:
-          name: cydrogen-${{matrix.python-version}}-build
+          name: "cydrogen-${{matrix.python-version}}-build"
           path: dist
       - name: install cydrogen
         run: |
