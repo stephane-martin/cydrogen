@@ -1,10 +1,12 @@
 from ._context import Context
 from ._decls import (
     gen_random_buffer,
+    pad,
     random_u32,
     random_uniform,
     randomize_buffer,
     shuffle_buffer,
+    unpad,
 )
 from ._exceptions import CyException, DecryptException, DeriveException, EncryptException, SignException, VerifyException
 from ._hash import Hash, HashKey, hash_file
@@ -47,6 +49,8 @@ __all__ = [
     "load16",
     "store16",
     "shuffle_buffer",
+    "pad",
+    "unpad",
 ]
 
 
