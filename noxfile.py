@@ -15,25 +15,34 @@ ROOT = pathlib.Path(__file__).parent.resolve()
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def develop(session: nox.Session):
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
+    session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
+    session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
+    session.install(*nox.project.dependency_groups(PYPROJECT, "docs"))
+    session.install(*nox.project.dependency_groups(PYPROJECT, "lint"))
     session.run("pre-commit", "install")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def lint(session: nox.Session):
     print()
-    session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
+    session.install(*nox.project.dependency_groups(PYPROJECT, "lint"))
     print("\n=== linters ===\n")
+
     print("= check unicode= ")
     session.run("python", "tools/check_unicode.py")
+
     print("\n= cython-lint= ")
     session.run("cython-lint", "cydrogen")
+
     print("\n= ruff =")
     session.run("ruff", "check")
     print("\n= ruff format =")
     session.run("ruff", "format", "--check")
+
     print("\n= mypi =")
     session.run("mypy", "--pretty", "--no-color-output", "cydrogen")
     session.run("mypy", "--pretty", "--no-color-output", "tests")
+
     print("\n= shellcheck =")
     if shutil.which("shellcheck") is None:
         print("===> shellcheck not found, skipping")
@@ -45,13 +54,16 @@ def lint(session: nox.Session):
             for bash_file in bash_files:
                 print(f"- checking {bash_file}")
                 session.run("shellcheck", bash_file, external=True)
+
     print("\n= actionlint =")
     if shutil.which("actionlint") is None:
         print("===> actionlint not found, skipping")
     else:
         session.run("actionlint", "-verbose", external=True)
+
     print("\n= zizmor =")
     session.run("zizmor", "--no-progress", ".")
+
     if shutil.which("typos") is None:
         print("===> typos not found, skipping")
     else:
