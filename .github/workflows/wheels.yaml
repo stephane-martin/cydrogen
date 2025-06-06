@@ -51,7 +51,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
+        uses: pypa/cibuildwheel@faf86a6ed7efa889faf6996aa23820831055001a # v2.23.3
         env:
           CIBW_BUILD: "${{ matrix.cibw_build }}"
           CIBW_ARCHS: "${{ matrix.cibw_archs }}"

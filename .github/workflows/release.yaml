@@ -36,17 +36,18 @@ jobs:
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
       attestations: write # for GitHub attestations
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
           show-progress: false
-      - uses: actions/setup-python@v5
-        name: Install Python
+      - name: Install Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           check-latest: true
           # Important! No caching for wheel build to avoid cache poisoning
-      - name: install nox
+      - name: Install nox
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -54,11 +55,25 @@ jobs:
       - name: build sdist
         run: |
           nox -s "build_sdist-3.13"
-      - name: gather wheels
+      - name: Gather wheels   # wheels were built in the build_wheels job and uploaded as artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: ./dist
-      - name: publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+        with:
+          packages_dir: ./dist
+      - name: Create Github release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          body_path: "${{ github.workspace }}/last_release_changes.md"
+          repository: stephane-martin/cydrogen
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          # target_commitish: we don't need it as we are using an existing tag
+          files: |
+            ./dist/*.tar.gz
+            ./dist/*.whl
