@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Use cython --shared to make binaries smaller.
 
+### Security
+
+- Generate attestations of sdist and wheels for Github.
+
 ## v0.0.5 - 2025-06-05
 
 ### Added

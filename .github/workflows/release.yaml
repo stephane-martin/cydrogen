@@ -61,7 +61,11 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: ./dist
-      - name: Publish to PyPI
+      - name: Generate attestations for Github
+        uses: actions/attest-build-provenance@v2.3.0
+        with:
+          subject-path: 'dist/*'
+      - name: Publish to PyPI # this also generates attestations for PyPI
         uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
         with:
           packages_dir: ./dist

@@ -2,6 +2,9 @@
     "unreleased": {
         "added": [
             "Use cython --shared to make binaries smaller."
+        ],
+        "security": [
+            "Generate attestations of sdist and wheels for Github."
         ]
     },
     "v0.0.5": {
