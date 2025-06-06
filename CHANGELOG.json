@@ -1,5 +1,6 @@
 {
-    "unreleased": {
+    "v0.0.6": {
+        "date": "2025-06-06",
         "added": [
             "Use cython --shared to make binaries smaller."
         ],
