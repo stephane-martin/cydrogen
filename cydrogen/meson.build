@@ -68,6 +68,22 @@ else
   py.install_sources(['version.py'], subdir : 'cydrogen')
 endif
 
+cython_shared_src = custom_target(
+  install: false,
+  output: '_cyutility.c',
+  command: [
+    cython, '--generate-shared=' + meson.current_build_dir()/'_cyutility.c'
+  ],
+)
+
+cython_shared_module = py.extension_module('_cyutility',
+  cython_shared_src,
+  subdir: 'cydrogen',
+  cython_args: cython_args,
+  install: true,
+)
+
+cython_args += ['--shared=cydrogen._cyutility']
 
 foreach gen: cydrogen_pyx_sources
   py.extension_module(gen[0],
