@@ -316,13 +316,20 @@ def release() -> None:
     except subprocess.CalledProcessError:
         pass
     # check if there are any untracked file with `git ls-files -o --exclude-standard`
-    untracked_files = subprocess.run(
-        ["git", "ls-files", "-o", "--exclude-standard"], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    untracked_files = (
+        subprocess.run(["git", "ls-files", "-o", "--exclude-standard"], check=True, capture_output=True, text=True)
+        .stdout.strip()
+        .splitlines()
+    )
     if untracked_files:
         print("There are untracked files in the repository.")
-        print(untracked_files)
-        sys.exit(1)
+        for f in untracked_files:
+            print(f"- {f}")
+        # ask user to confirm
+        confirm = input("Do you want to continue? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("Aborting release.")
+            sys.exit(1)
     # list all modified files with `git diff --name-only`
     modified = subprocess.run(["git", "diff", "--name-only"], check=True, capture_output=True, text=True).stdout.strip().splitlines()
     if modified:
@@ -333,6 +340,7 @@ def release() -> None:
         if confirm != "y":
             print("Aborting release.")
             sys.exit(1)
+    if modified or untracked_files:
         subprocess.run(["git", "add", "--verbose", "."], check=True)
         subprocess.run(["git", "commit", "-m", f"chore: bump version to {last_release.version}"], check=True)
     # apply the tag
