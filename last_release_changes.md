@@ -1,6 +1,10 @@
-=======
 # Changes
 
 ## Added
 
-- Expose `pad` and `unpad` functions ([#32](https://github.com/stephane-martin/cydrogen/issues/32)).
+- Use cython --shared to make binaries smaller.
+
+## Security
+
+- Generate attestations of sdist and wheels for Github.
+
