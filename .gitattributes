@@ -1,0 +1,23 @@
+# Exclude some files from the sdist built by meson-python.
+# This is useful so that the sdist tar.gz won't contain unnecessary files that would be recognized by a SBOM generation tool.
+
+# Github workflows are not needed to build the package.
+.github/					export-ignore
+.gitignore					export-ignore
+
+# Configuration files for development tools
+.pre-commit-config.yaml 	export-ignore
+.readthedocs.yaml			export-ignore
+.typos.toml					export-ignore
+.vale.ini					export-ignore
+compile_commands.json.tpl	export-ignore
+develop.fish				export-ignore
+mkdocs.yml					export-ignore
+zizmor.yml					export-ignore
+styles/						export-ignore
+
+# only used by Github Code Scanning
+Makefile					export-ignore
+
+# markdown sources to built the readthedocs documentation
+docs/						export-ignore
