@@ -57,6 +57,10 @@ endif
 
 py = import('python').find_installation(pure: false)
 py_dep = py.dependency()
+
+cy = meson.get_compiler('cython')
+cython = find_program(cy.cmd_array()[0])
+
 fs = import('fs')
 
 # Hide symbols when building on Linux with GCC. For Python extension modules,
