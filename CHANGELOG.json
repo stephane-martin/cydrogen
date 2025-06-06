@@ -1,6 +1,12 @@
 {
     "unreleased": {
         "added": [
+            "Use cython --shared to make binaries smaller."
+        ]
+    },
+    "v0.0.5": {
+        "date": "2025-06-05",
+        "added": [
             "Expose `pad` and `unpad` functions ([#32](https://github.com/stephane-martin/cydrogen/issues/32))."
         ]
     },

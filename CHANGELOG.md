@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Use cython --shared to make binaries smaller.
+
+## v0.0.5 - 2025-06-05
+
+### Added
+
 - Expose `pad` and `unpad` functions ([#32](https://github.com/stephane-martin/cydrogen/issues/32)).
 
 ## v0.0.4 - 2025-06-04
