@@ -139,7 +139,7 @@ def tidy(session: nox.Session):
         print("===> clang-tidy not found, skipping")
         return
     commands_path = ROOT / "compile_commands.json"
-    tpl_path = ROOT / "compile_commands.json.tpl"
+    tpl_path = ROOT / "compile_commands.tpl.json"
     with open(tpl_path, "rt", encoding="utf-8") as tpl:
         template = tpl.read()
         template = template.replace("ROOT", str(ROOT))
