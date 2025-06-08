@@ -1,16 +1,9 @@
 from collections.abc import Buffer
 from os import PathLike
-from typing import BinaryIO, Protocol, Self, type_check_only
+from typing import BinaryIO, Self
 
 from ._context import Context
-
-@type_check_only
-class Reader(Protocol):
-    def read(self, length: int = ...) -> bytes: ...
-
-@type_check_only
-class Writer(Protocol):
-    def write(self, buf: Buffer) -> int: ...
+from ._protocols import Reader, Writer
 
 class SignPublicKey:
     """
@@ -254,13 +247,16 @@ class BaseSigner:
         """
         ...
 
-    def update_from(self, fileobj: str | PathLike | BinaryIO, chunk_size=...):
+    def update_from(self, fileobj: str | PathLike | BinaryIO, chunk_size: int = ...) -> Self:
         """
         Update the signer or verifier with data read from a file-like/path-like object.
 
         Args:
             fileobj: A file-like or path-like object to read data from.
             chunk_size: The size of chunks to read from the file object.
+
+        Returns:
+            The updated signer or verifier instance.
 
         Raises:
             ValueError: If the file object is None.
@@ -269,12 +265,15 @@ class BaseSigner:
         """
         ...
 
-    def update(self, data: bytes | Buffer):
+    def update(self, data: bytes | Buffer) -> Self:
         """
         Update the signer or verifier with new data.
 
         Args:
             data: The data to update the signer or verifier with.
+
+        Returns:
+            The updated signer or verifier instance.
 
         Raises:
             SignException: If the update fails.

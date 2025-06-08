@@ -8,16 +8,63 @@ site_url: !ENV READTHEDOCS_CANONICAL_URL
 site_dir: "site"
 
 theme:
+  language: en
   name: "material"
+  custom_dir: docs/overrides
+  font:
+    text: "Funnel Sans"
+    code: "Fira Code"
+  features:
+    - navigation.tracking
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    # - toc.integrate
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default 
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
 
 nav:
-  - 'index.md'
+  - Home: index.md
+  - API:
+    - api/index.md
+    - Context: api/context.md
+    - SecretBox: api/secretbox.md
+    - Hash: api/hash.md
+    - Sign: api/sign.md
+    - Key Derivation: api/masterkey.md
+    - Random: api/random.md
+    - Exceptions: api/exceptions.md
+    - Base Keys: api/basekey.md
+    - Typing: api/typing.md 
+  - Changelog: CHANGELOG.md
 
 extra_javascript:
   - javascript/readthedocs.js
 
 plugins:
 - search
+- privacy
 - mkdocstrings:
     handlers:
       python:
@@ -32,3 +79,24 @@ plugins:
           docstring_style: google
           docstring_section_style: table
           show_source: false
+          show_root_full_path: false
+          docstring_section_style: list
+          #merge_init_into_class: true
+          #docstring_options:
+          #  ignore_init_summary: true
+
+markdown_extensions:
+  - tables
+  - abbr
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences

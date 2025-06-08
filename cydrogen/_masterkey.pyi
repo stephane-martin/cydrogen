@@ -152,5 +152,21 @@ class MasterKey(BaseKey):
         """
         ...
 
+    def gen_random_buffer(self, size: int) -> bytes:
+        """
+        Generates a buffer of `size` bytes, indistinguishable from random bytes without knowing the master key.
+
+        For a given seed, this function will always output the same sequence.
+
+        This function is mainly useful for writing tests.
+
+        Args:
+            size: The size of the buffer to generate.
+
+        Returns:
+            A bytes object of the specified size containing pseudo-random data.
+        """
+        ...
+
     def __eq__(self, other: object) -> bool: ...
     def __repr__(self) -> str: ...

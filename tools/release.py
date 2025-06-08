@@ -18,6 +18,7 @@ ROOT = THIS_DIR.parent.resolve()
 CHANGELOG_JSON_FNAME = ROOT / "CHANGELOG.json"
 CHANGELOG_TPL_FNAME = ROOT / "CHANGELOG.tpl.md"
 CHANGELOG_MD_FNAME = ROOT / "CHANGELOG.md"
+CHANGELOG_MKDOCS_FNAME = ROOT / "docs" / "CHANGELOG.md"
 PYPROJECT_TOML_FNAME = ROOT / "pyproject.toml"
 LAST_RELEASE_CHANGES_FNAME = ROOT / "last_release_changes.md"
 
@@ -207,8 +208,11 @@ class Changelog:
 
         with CHANGELOG_JSON_FNAME.open("w", encoding="utf-8") as f:
             f.write(self.to_json())
+        md = self.to_markdown()
         with CHANGELOG_MD_FNAME.open("w", encoding="utf-8") as f:
-            f.write(self.to_markdown())
+            f.write(md)
+        with CHANGELOG_MKDOCS_FNAME.open("w", encoding="utf-8") as f:
+            f.write(md)
 
     def save_last_release_changes(self) -> None:
         """

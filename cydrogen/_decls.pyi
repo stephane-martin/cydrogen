@@ -5,7 +5,7 @@ def random_u32() -> int:
     Generate a random 32-bit unsigned integer.
 
     Returns:
-        A random 32-bit unsigned integer.
+        A random 32-bit unsigned integer between 0 and 0xffffffff (included).
     """
     ...
 

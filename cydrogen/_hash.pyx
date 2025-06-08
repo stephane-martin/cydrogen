@@ -1,7 +1,6 @@
 # cython: language_level=3
 
 import base64
-import io
 
 from ._basekey cimport BaseKey
 from ._masterkey cimport MasterKey
@@ -88,8 +87,9 @@ cdef class Hash:
         if n == 0:
             return
         hash_update(&self.state, data)
+        return self
 
-    cpdef update_from(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cpdef update_from(self, fileobj, chunk_size=8182):
         if fileobj is None:
             raise ValueError("File object cannot be None")
         cdef bytearray buf = bytearray(chunk_size)
@@ -101,6 +101,8 @@ cdef class Hash:
                 if n == 0:
                     return
                 self.update(buf[:n])
+
+        return self
 
     cpdef write(self, const unsigned char[:] data):
         if data is None:
@@ -121,7 +123,7 @@ cdef class Hash:
         return self.digest().hex()
 
 
-cpdef hash_file(fileobj, ctx=None, size_t digest_size=16, key=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef hash_file(fileobj, ctx=None, size_t digest_size=16, key=None, chunk_size=8192):
     if fileobj is None:
         raise ValueError("File object cannot be None")
     cdef Hash hasher = Hash(ctx=ctx, digest_size=digest_size, key=key)
