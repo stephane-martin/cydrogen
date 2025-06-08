@@ -1,7 +1,6 @@
 # cython: language_level=3
 
 import base64
-import io
 
 from cpython.buffer cimport PyBuffer_FillInfo
 
@@ -213,6 +212,7 @@ cdef class BaseSigner:
             raise
         except Exception as ex:
             raise SignException("Failed to update signer") from ex
+        return self
 
     cpdef write(self, const unsigned char[:] data):
         if data is None:
@@ -220,7 +220,7 @@ cdef class BaseSigner:
         self.update(data)
         return len(data)
 
-    cpdef update_from(self, fileobj, chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cpdef update_from(self, fileobj, chunk_size=8192):
         if fileobj is None:
             raise ValueError("File object cannot be None")
         cdef bytearray buf = bytearray(chunk_size)
@@ -232,6 +232,7 @@ cdef class BaseSigner:
                 if n == 0:
                     return
                 self.update(buf[:n])
+        return self
 
 
 cdef class Signer(BaseSigner):
@@ -278,7 +279,7 @@ cdef class Verifier(BaseSigner):
             raise VerifyException("Failed to verify signature") from ex
 
 
-cpdef sign_file(key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef sign_file(key, fileobj, ctx=None, chunk_size=8192):
     if key is None:
         raise ValueError("Key cannot be None")
     if fileobj is None:
@@ -288,7 +289,7 @@ cpdef sign_file(key, fileobj, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
     return signer.sign()
 
 
-cpdef verify_file(key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=io.DEFAULT_BUFFER_SIZE):
+cpdef verify_file(key, fileobj, const unsigned char[:] signature, ctx=None, chunk_size=8192):
     if key is None:
         raise ValueError("Key cannot be None")
     if fileobj is None:

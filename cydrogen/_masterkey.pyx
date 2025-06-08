@@ -6,7 +6,7 @@ from libc.stdint cimport uint64_t
 
 from ._basekey cimport BaseKey
 from ._context cimport make_context
-from ._decls cimport pwhash_deterministic, kdf_derive_from_key
+from ._decls cimport pwhash_deterministic, kdf_derive_from_key, random_buf_deterministic
 from ._decls cimport sign_keygen_deterministic, pwhash_create, pwhash_verify
 from ._decls cimport hydro_pwhash_STOREDBYTES, hydro_kdf_BYTES_MIN, hydro_kdf_BYTES_MAX
 from ._exceptions cimport DeriveException
@@ -119,6 +119,13 @@ cdef class MasterKey(BaseKey):
         if len(stored) != hydro_pwhash_STOREDBYTES:
             raise ValueError("Stored hash must be 128 bytes long")
         return pwhash_verify(stored, password, self, opslimit)
+
+    cpdef bytes gen_random_buffer(self, size_t size):
+        if size == 0:
+            return bytes()
+        buf = bytearray(size)
+        random_buf_deterministic(buf, self)
+        return bytes(buf)
 
 
 cdef make_masterkey(key):

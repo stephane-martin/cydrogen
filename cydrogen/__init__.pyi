@@ -26,38 +26,44 @@ from ._hash import Hash, HashKey, hash_file
 from ._masterkey import MasterKey
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
-from ._utils import load32, store32
 
 __all__ = [
+    # random
     "random_u32",
     "random_uniform",
     "randomize_buffer",
     "gen_random_buffer",
-    "CyException",
+    "shuffle_buffer",
+    # base key
     "BaseKey",
+    # exceptions
+    "CyException",
     "EncryptException",
     "DecryptException",
     "DeriveException",
     "SignException",
     "VerifyException",
-    "HashKey",
-    "SecretBoxKey",
-    "MasterKey",
+    # context
     "Context",
+    # hashing
     "Hash",
+    "HashKey",
+    "hash_file",
+    # cryptobox
+    "SecretBoxKey",
     "SecretBox",
+    "EncryptedMessage",
+    # master key / derivation
+    "MasterKey",
+    # signing
     "SignPublicKey",
     "SignSecretKey",
     "SignKeyPair",
     "Signer",
     "Verifier",
-    "EncryptedMessage",
-    "hash_file",
     "sign_file",
     "verify_file",
-    "load32",
-    "store32",
-    "shuffle_buffer",
+    # padding
     "pad",
     "unpad",
 ]

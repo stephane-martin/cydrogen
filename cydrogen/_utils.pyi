@@ -1,14 +1,8 @@
 from collections.abc import Buffer
 from os import PathLike
-from typing import BinaryIO, Literal, Protocol, type_check_only
+from typing import BinaryIO, Literal
 
-@type_check_only
-class Reader(Protocol):
-    def read(self, length: int = ...) -> bytes: ...
-
-@type_check_only
-class Writer(Protocol):
-    def write(self, buf: Buffer) -> int: ...
+from ._protocols import Reader, Writer
 
 def store64(dst: Buffer, src: int):
     """
@@ -142,12 +136,12 @@ class SafeReader:
         """
         ...
 
-    def read(self, length: int = ...) -> bytes:
+    def read(self, length: int = 8192) -> bytes:
         """
         Read bytes from the file-like object.
 
         Args:
-            length: The number of bytes to read. Defaults to io.DEFAULT_BUFFER_SIZE.
+            length: The number of bytes to read.
 
         Returns:
             A bytes object containing the read bytes. If EOF is reached before reading the requested number of bytes, it returns the bytes read so far.

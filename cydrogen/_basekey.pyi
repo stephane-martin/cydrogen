@@ -1,13 +1,6 @@
-from collections.abc import Buffer
-from typing import Protocol, Self, type_check_only
+from typing import Self
 
-@type_check_only
-class Reader(Protocol):
-    def read(self, length: int = ...) -> bytes: ...
-
-@type_check_only
-class Writer(Protocol):
-    def write(self, buf: Buffer) -> int: ...
+from ._protocols import Reader, Writer
 
 class BaseKey:
     """
@@ -24,6 +17,9 @@ class BaseKey:
     def __init__(self, b: bytes | None = None):
         """
         Initialize the BaseKey with an optional bytes object.
+
+        Args:
+            b: A bytes object representing the key. If None, a zero key will be created.
 
         Raises:
             MemoryError: If memory allocation for the key fails.
@@ -93,6 +89,21 @@ class BaseKey:
         """
         ...
 
-    def __str__(self) -> str: ...
-    def __bool__(self) -> bool: ...
+    def __str__(self) -> str:
+        """
+        Returns a base64-encoded representation of the key.
+
+        Returns:
+            A string representing the key in base64 encoding.
+        """
+        ...
+    def __bool__(self) -> bool:
+        """
+        Returns True if the key is not zero, False otherwise.
+
+        Returns:
+            True if the key is not zero, False otherwise.
+        """
+        ...
+
     def __buffer__(self, flags: int, /) -> memoryview: ...

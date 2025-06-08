@@ -14,6 +14,7 @@ cdef class MasterKey(BaseKey):
     cpdef derive_sign_keypair(self)
     cpdef hash_password(self, const unsigned char[:] password, uint64_t opslimit=*)
     cpdef verify_password(self, const unsigned char[:] password, const unsigned char[:] stored, uint64_t opslimit=*)
+    cpdef bytes gen_random_buffer(self, size_t size)
 
 
 cdef make_masterkey(key)

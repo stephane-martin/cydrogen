@@ -299,6 +299,13 @@ cpdef random_u32():
 cpdef random_uniform(uint32_t upper_bound):
     return hydro_random_uniform(upper_bound)
 
+cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed):
+    if len(seed) < hydro_random_SEEDBYTES:
+        raise ValueError(f"Seed must be {hydro_random_SEEDBYTES} bytes long")
+    if len(buf) == 0:
+        return
+    hydro_random_buf_deterministic(<void*>&buf[0], len(buf), <const uint8_t*>(&seed[0]))
+
 
 cpdef randomize_buffer(unsigned char[:] buf):
     if buf is None:

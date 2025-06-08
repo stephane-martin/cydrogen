@@ -33,9 +33,11 @@ cdef extern from "hydrogen.h" nogil:
 cdef extern from "hydrogen.h" nogil:
     int hydro_init()
     void hydro_memzero(void *pnt, size_t len)
+
     uint32_t hydro_random_u32()
     uint32_t hydro_random_uniform(uint32_t upper_bound)
     void hydro_random_buf(void *buf, size_t len)
+    void hydro_random_buf_deterministic(void *buf, size_t len, const uint8_t seed[hydro_random_SEEDBYTES])
     bint hydro_equal(const void *b1_, const void *b2_, size_t len)
 
     struct hydro_hash_state:
@@ -189,3 +191,4 @@ cpdef random_uniform(uint32_t upper_bound)
 cpdef randomize_buffer(unsigned char[:] buf)
 cpdef gen_random_buffer(size_t size)
 cpdef shuffle_buffer(unsigned char[:] buf)
+cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed)
