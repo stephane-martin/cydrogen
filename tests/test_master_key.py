@@ -210,6 +210,15 @@ def test_derive_sign_keypair():
     assert bytes(key2) == bytes(key3)
 
 
+def test_derive_kx_keypair():
+    key = cydrogen.MasterKey(KEY_BYTES)
+    key2 = key.derive_kx_keypair()
+    assert isinstance(key2, cydrogen.KxPair)
+    key3 = key.derive_kx_keypair()
+    assert isinstance(key3, cydrogen.KxPair)
+    assert key2 == key3
+
+
 def test_derive_sign_keypair_from_zero_masterkey():
     with pytest.raises(ValueError):
         cydrogen.MasterKey().derive_sign_keypair()

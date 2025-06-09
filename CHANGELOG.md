@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MasterKey.gen_random_buffer to generate pseudo-random data.
 - pad and unpad functions.
+- key exchange using the N variant.
 
 ## v0.0.6 - 2025-06-06
 

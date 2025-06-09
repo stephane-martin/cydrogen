@@ -22,3 +22,7 @@ cdef class SignException(CyException):
 
 cdef class VerifyException(CyException):
     pass
+
+
+cdef class KeyExchangeException(CyException):
+    pass
