@@ -12,6 +12,7 @@ cdef class MasterKey(BaseKey):
     cpdef derive_subkey(self, uint64_t subkey_id, ctx=*)
     cpdef derive_subkey_with_length(self, uint64_t subkey_id, size_t length=*, ctx=*)
     cpdef derive_sign_keypair(self)
+    cpdef derive_kx_keypair(self)
     cpdef hash_password(self, const unsigned char[:] password, uint64_t opslimit=*)
     cpdef verify_password(self, const unsigned char[:] password, const unsigned char[:] stored, uint64_t opslimit=*)
     cpdef bytes gen_random_buffer(self, size_t size)

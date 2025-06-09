@@ -2,7 +2,8 @@
     "unreleased": {
         "added": [
             "MasterKey.gen_random_buffer to generate pseudo-random data.",
-            "pad and unpad functions."
+            "pad and unpad functions.",
+            "key exchange using the N variant."
         ]
     },
     "v0.0.6": {

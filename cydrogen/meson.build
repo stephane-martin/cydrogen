@@ -30,6 +30,7 @@ _cython_tree_cydrogen = [
   fs.copyfile('_secretbox.pxd'),
   fs.copyfile('_sign.pxd'),
   fs.copyfile('_utils.pxd'),
+  fs.copyfile('_kx_n.pxd'),
 ]
 
 cydrogen_pyx_sources = [
@@ -40,6 +41,7 @@ cydrogen_pyx_sources = [
   ['_masterkey', ['_masterkey.pyx']],
   ['_secretbox', ['_secretbox.pyx']],
   ['_sign', ['_sign.pyx']],
+  ['_kx_n', ['_kx_n.pyx']],
   ['_utils', ['_utils.pyx', 'cyutils.c', 'cyd_memcpy_s.c']],
   ['_decls', ['_decls.pyx', 'src/hydrogen.c']],
 ]
@@ -117,6 +119,8 @@ python_sources = [
   '_secretbox.pyi',
   '_sign.pxd',
   '_sign.pyi',
+  '_kx_n.pxd',
+  '_kx_n.pyi',
   '_utils.pxd',
   '_utils.pyi',
   '_decls.pxd',

@@ -2,6 +2,7 @@ from collections.abc import Buffer
 
 from ._basekey import BaseKey
 from ._context import Context
+from ._kx_n import KxPair
 from ._sign import SignKeyPair
 
 class MasterKey(BaseKey):
@@ -109,8 +110,21 @@ class MasterKey(BaseKey):
         """
         Derive a sign keypair from the master key.
 
+        Useful for tests.
+
         Returns:
             A SignKeyPair derived from the master key.
+        """
+        ...
+
+    def derive_kx_pair(self) -> KxPair:
+        """
+        Derive a key exchange pair from the master key.
+
+        Useful for tests.
+
+        Returns:
+            A KxPair derived from the master key.
         """
         ...
 

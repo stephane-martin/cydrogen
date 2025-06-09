@@ -45,3 +45,10 @@ class VerifyException(CyException):
     """
 
     ...
+
+class KeyExchangeException(CyException):
+    """
+    Exception raised for errors during key exchange operations.
+    """
+
+    ...

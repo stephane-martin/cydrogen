@@ -34,3 +34,9 @@
       heading: "class VerifyException"
       show_root_heading: true
       inherited_members: true
+
+## ::: cydrogen.KeyExchangeException
+    options:
+      heading: "class KeyExchangeException"
+      show_root_heading: true
+      inherited_members: true
