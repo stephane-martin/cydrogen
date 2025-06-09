@@ -292,12 +292,13 @@ def hynit():
         raise RuntimeError("Failed to initialize libhydrogen")
 
 
-cpdef random_u32():
+cpdef uint32_t random_u32() noexcept nogil:
     return hydro_random_u32()
 
 
-cpdef random_uniform(uint32_t upper_bound):
+cpdef uint32_t random_uniform(uint32_t upper_bound) noexcept nogil:
     return hydro_random_uniform(upper_bound)
+
 
 cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed):
     if len(seed) < hydro_random_SEEDBYTES:
@@ -326,9 +327,6 @@ cpdef shuffle_buffer(unsigned char[:] buf):
         raise ValueError("Buffer cannot be None")
     cdef uint32_t n = len(buf)
     if n == 0 or n == 1:
-        return
-    if n == 2:
-        buf[0], buf[1] = buf[1], buf[0]
         return
     cdef uint32_t i, j
     for i in range(n - 1, 0, -1):

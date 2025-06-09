@@ -14,4 +14,4 @@ See:
 - [Hashes](hash.md) for hashing data.
 - [Signatures](sign.md) for signing and verifying data.
 - [Key Derivation](masterkey.md) for deriving keys from other keys, from passwords, etc.
-- [Randomness](random.md) for generating random data.
+- [Randomness](random.md) for generating random data and other utilities.

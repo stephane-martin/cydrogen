@@ -19,3 +19,11 @@
 ## ::: cydrogen.shuffle_buffer
     options:
       show_root_heading: true
+
+## ::: cydrogen.pad
+    options:
+      show_root_heading: true
+
+## ::: cydrogen.unpad
+    options:
+      show_root_heading: true
