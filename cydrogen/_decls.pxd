@@ -175,6 +175,7 @@ cdef pwhash_verify(
         const unsigned char[:] master_key,
         uint64_t opslimit_max)
 
+cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed)
 cdef sign_keygen_deterministic(const unsigned char[:] master_key)
 cdef sign_keygen()
 cdef sign_init(hydro_sign_state *state, const unsigned char[:] ctx)
@@ -186,9 +187,8 @@ cdef _pad(unsigned char[:] buf, size_t unpadded_buflen, size_t blocksize)
 cpdef pad(const unsigned char[:] buf, size_t blocksize=*)
 cpdef unpad(const unsigned char[:] buf, size_t blocksize=*)
 
-cpdef random_u32()
-cpdef random_uniform(uint32_t upper_bound)
+cpdef uint32_t random_u32() noexcept nogil
+cpdef uint32_t random_uniform(uint32_t upper_bound) noexcept nogil
 cpdef randomize_buffer(unsigned char[:] buf)
 cpdef gen_random_buffer(size_t size)
 cpdef shuffle_buffer(unsigned char[:] buf)
-cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed)
