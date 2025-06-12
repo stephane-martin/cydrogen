@@ -92,12 +92,15 @@ class Hash:
             TypedError: If the key is of an unsupported type.
         """
         ...
-    def update(self, data: bytes | Buffer) -> None:
+    def update(self, data: bytes | Buffer) -> Self:
         """
         Update the hash with new data.
 
         Args:
             data: Data to hash, as a bytes-like object.
+
+        Returns:
+            The Hash object itself, allowing for method chaining.
 
         Raises:
             RuntimeError: If the hash has already been finalized.
@@ -117,13 +120,16 @@ class Hash:
             RuntimeError: If the hash has already been finalized.
         """
         ...
-    def update_from(self, fileobj: str | PathLike | BinaryIO, chunk_size: int = ...):
+    def update_from(self, fileobj: str | PathLike | BinaryIO, chunk_size: int = 8192) -> Self:
         """
         Read data from a file-like/path-like object and update the hash.
 
         Args:
             fileobj: A file-like object or path-like object to read data from.
-            chunk_size: Size of the chunks to read from the file (default is io.DEFAULT_BUFFER_SIZE).
+            chunk_size: Size of the chunks to read from the file.
+
+        Returns:
+            The Hash object itself, allowing for method chaining.
 
         Raises:
             ValueError: If fileobj_or_path is None.
@@ -152,7 +158,7 @@ def hash_file(
     ctx: str | bytes | Context | Buffer | None = None,
     digest_size: int = 16,
     key: str | bytes | BaseKey | HashKey | Buffer | None = None,
-    chunk_size: int = ...,
+    chunk_size: int = 8192,
 ) -> bytes:
     """
     Compute the hash of a binary file-like object.
@@ -162,7 +168,7 @@ def hash_file(
         ctx: Optional context for the hash operation.
         digest_size: Size of the desired digest in bytes (default is 16).
         key: Optional HashKey to use for hashing.
-        chunk_size: Size of the chunks to read from the file (default is io.DEFAULT_BUFFER_SIZE).
+        chunk_size: Size of the chunks to read from the file.
 
     Returns:
         The computed hash digest as bytes.

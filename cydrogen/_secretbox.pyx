@@ -205,13 +205,13 @@ cdef class SecretBox:
             w.write(plaintext)
         return bytes(plaintext)
 
-    cpdef encrypt_file(self, src, dst, size_t chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cpdef encrypt_file(self, src, dst, size_t chunk_size=8192):
         if src is None or dst is None:
             raise ValueError("Source and destination file objects cannot be None")
         with FileOpener(src, mode="rb") as src_obj, FileOpener(dst, mode="wb") as dst_obj:
             return self._encrypt_file(src_obj, dst_obj, chunk_size=chunk_size)
 
-    cdef _encrypt_file(self, fileobj, out, size_t chunk_size=io.DEFAULT_BUFFER_SIZE):
+    cdef _encrypt_file(self, fileobj, out, size_t chunk_size=8192):
         if fileobj is None or out is None:
             raise ValueError("Source and destination file objects cannot be None")
         if chunk_size <= hydro_secretbox_HEADERBYTES:

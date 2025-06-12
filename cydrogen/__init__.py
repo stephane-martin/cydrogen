@@ -8,8 +8,17 @@ from ._decls import (
     shuffle_buffer,
     unpad,
 )
-from ._exceptions import CyException, DecryptException, DeriveException, EncryptException, SignException, VerifyException
+from ._exceptions import (
+    CyException,
+    DecryptException,
+    DeriveException,
+    EncryptException,
+    KeyExchangeException,
+    SignException,
+    VerifyException,
+)
 from ._hash import Hash, HashKey, hash_file
+from ._kx_n import KxPair, KxPublicKey, KxSecretKey, Psk, SessionPair, kx_n_gen_session_and_packet, kx_n_gen_session_from_packet
 from ._masterkey import MasterKey
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
@@ -27,6 +36,7 @@ __all__ = [
     "DeriveException",
     "SignException",
     "VerifyException",
+    "KeyExchangeException",
     "HashKey",
     "SecretBoxKey",
     "MasterKey",
@@ -39,6 +49,13 @@ __all__ = [
     "Signer",
     "Verifier",
     "EncryptedMessage",
+    "KxPair",
+    "KxPublicKey",
+    "KxSecretKey",
+    "Psk",
+    "SessionPair",
+    "kx_n_gen_session_and_packet",
+    "kx_n_gen_session_from_packet",
     "hash_file",
     "sign_file",
     "verify_file",

@@ -27,8 +27,6 @@ cdef class SafeMemory:
             cyd_free(self.ptr)
 
     def __init__(self, size_t size):
-        if size == 0:
-            raise ValueError("size must be greater than 0")
         if self.ptr == NULL:
             raise MemoryError("Failed to allocate memory")
         self.readonly_protected = 0
@@ -75,19 +73,14 @@ cdef class SafeMemory:
         del view
         self.mark_readonly()
 
-    cdef set_zero(self):
-        if self.readonly_protected == 1:
-            raise ValueError("Memory is read-only")
-        cyd_memzero(self.ptr, self.size)
-        self.mark_readonly()
-
     cdef mark_readonly(self):
         if self.readonly_protected:
             return
-        mprotect_readonly(self.ptr)
+        if cyd_mprotect_readonly(self.ptr) != 0:
+            raise OSError("Failed to change memory protection to read-only")
         self.readonly_protected = 1
 
-    cdef writeto(self, out):
+    cpdef writeto(self, out):
         if out is None:
             raise ValueError("Output cannot be None")
         cdef SafeWriter w = SafeWriter(out)
@@ -113,33 +106,8 @@ cdef class SafeMemory:
         if data is None:
             raise ValueError("data cannot be None")
         cdef SafeMemory mem = cls(len(data))
-        if len(data) == 0:
-            mem.mark_readonly()
-            return mem
         mem.set(data)
         return mem
-
-
-cdef mprotect_readonly(void *ptr):
-    if cyd_mprotect_readonly(ptr) != 0:
-        raise OSError("Failed to change memory protection to read-only")
-
-
-cdef uint8_t* malloc_key(size_t size) noexcept nogil:
-    return <uint8_t*>cyd_malloc(size)
-
-
-cdef void free_key(uint8_t* ptr) noexcept nogil:
-    cyd_free(ptr)
-
-
-cdef key_is_zero(const unsigned char[:] key):
-    if key is None:
-        raise ValueError("key cannot be None")
-    cdef size_t lenk = len(key)
-    if lenk == 0:
-        return True
-    return cyd_is_zero(&key[0], lenk) == 1
 
 
 cdef uint64_t _load64(const unsigned char[:] src) noexcept nogil:
@@ -254,22 +222,41 @@ cdef class SafeReader:
         if not hasattr(fileobj, "read"):
             raise TypeError("fileobj must be a file-like object with a 'read' method")
         self.fileobj = fileobj
-        self.direct = isinstance(fileobj, (SafeReader, io.BufferedReader, io.BytesIO, io.BufferedRandom))
+        # when the underlying file object is already a SafeReader, we don't need to wrap it again.
+        # when the underlying file object is buffered, we can use it directly too.
+        self.direct = isinstance(fileobj, (SafeReader, io.BufferedReader, io.BytesIO, io.BufferedRandom, tempfile._TemporaryFileWrapper))
         self.has_readinto = hasattr(fileobj, "readinto")
 
     cpdef readinto(self, unsigned char[:] buf):
         if len(buf) == 0:
+            # nothing to read
             return 0
         if self.direct and self.has_readinto:
+            # the underlying file object supports readinto directly
+            # it also reads the exact number of bytes requested
             return self.fileobj.readinto(buf)
+
+        # when the file object only supports readinto, but is not direct,
+        # we need to read in chunks
+        cdef size_t offset = 0
+        cdef size_t n = 0
+        if self.has_readinto:
+            while offset < len(buf):
+                n = self.fileobj.readinto(buf[offset:])
+                if n == 0:
+                    return offset
+                offset += n
+            return offset
+
+        # when the file object does not support readinto, defer to read()
         cdef bytes tmp = self.read(len(buf))
         if len(tmp) == 0:
             return 0
         cdef const unsigned char[:] view = tmp
-        buf[0:len(tmp)] = view
+        buf[0:len(tmp)] = view[0:len(tmp)]
         return len(tmp)
 
-    cpdef read(self, size_t length=io.DEFAULT_BUFFER_SIZE):
+    cpdef read(self, size_t length=8192):
         if length == 0:
             return b""
         if self.direct == 1:
@@ -285,9 +272,9 @@ cdef class SafeReader:
             if len(tmp) == 0:
                 return bytes(result[:offset])
             view = tmp
-            result[offset:offset + len(tmp)] = view
+            result[offset:offset + len(tmp)] = view[0:len(tmp)]
             offset += len(tmp)
-
+        # TODO: find a way to avoid this copy
         return bytes(result[0:offset])
 
 
@@ -298,7 +285,9 @@ cdef class SafeWriter:
         if not hasattr(fileobj, "write"):
             raise TypeError("fileobj must be a file-like object with a 'write' method")
         self.fileobj = fileobj
-        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedWriter, io.BytesIO, io.BufferedRandom))
+        # when the underlying file object is already a SafeWriter, we don't need to wrap it again.
+        # when the underlying file object is buffered, we can use it directly too.
+        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedWriter, io.BytesIO, io.BufferedRandom, tempfile._TemporaryFileWrapper))
 
     cpdef write(self, const unsigned char[:] buf):
         if buf is None:
@@ -318,12 +307,13 @@ cdef class SafeWriter:
 
 cdef class TeeWriter:
     def __init__(self, w1, w2):
+        # wrap the writers in SafeWriter to ensure they both write the same number of bytes
         self.w1 = SafeWriter(w1)
         self.w2 = SafeWriter(w2)
 
     cpdef write(self, const unsigned char[:] buf):
         cdef size_t n1 = self.w1.write(buf)
-        cdef size_t n2 = self.w2.write(buf)
+        cdef size_t n2 = self.w2.write(buf[0:n1])
         if n1 != n2:
             raise IOError("Writers did not write the same number of bytes")
         return n1

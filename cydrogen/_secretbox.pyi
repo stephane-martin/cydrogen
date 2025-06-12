@@ -1,23 +1,16 @@
 from collections.abc import Buffer
 from os import PathLike
-from typing import BinaryIO, Protocol, Self, type_check_only
+from typing import BinaryIO, Self
 
 from ._basekey import BaseKey
 from ._context import Context
 from ._masterkey import MasterKey
+from ._protocols import Reader, Writer
 
 ENC_MSG_HEADER: bytes
 """
 ENC_MSG_HEADER is the magic header for encrypted messages.
 """
-
-@type_check_only
-class Reader(Protocol):
-    def read(self, length: int = ...) -> bytes: ...
-
-@type_check_only
-class Writer(Protocol):
-    def write(self, buf: Buffer) -> int: ...
 
 class SecretBoxKey(BaseKey):
     """
@@ -279,14 +272,14 @@ class SecretBox:
         """
         ...
 
-    def encrypt_file(self, src: str | PathLike | BinaryIO, dst: str | PathLike | BinaryIO, chunk_size: int = ...) -> int:
+    def encrypt_file(self, src: str | PathLike | BinaryIO, dst: str | PathLike | BinaryIO, chunk_size: int = 8192) -> int:
         """
         Encrypt a file-like/path-like object and write the ciphertext to another file-like object.
 
         Args:
             src: The source file-like/path-like object to read the plaintext from.
             dst: The destination file-like/path-like object to write the ciphertext to.
-            chunk_size: Optional size of the chunks to read from the source file. Default is io.DEFAULT_BUFFER_SIZE.
+            chunk_size: Optional size of the chunks to read from the source file.
 
         Returns:
             The total number of bytes written to the destination file.

@@ -45,9 +45,8 @@ cdef class SafeMemory:
     cdef size_t size
 
     cdef set(self, const unsigned char[:] data)
-    cdef set_zero(self)
     cdef mark_readonly(self)
-    cdef writeto(self, out)
+    cpdef writeto(self, out)
 
 
 cdef uint64_t _load64(const unsigned char[:] src) noexcept nogil
@@ -64,10 +63,6 @@ cpdef store32(unsigned char[:] dst, uint32_t src)
 cpdef load16(const unsigned char[:] src)
 cpdef store16(unsigned char[:] dst, uint16_t src)
 
-cdef mprotect_readonly(void *ptr)
-cdef uint8_t* malloc_key(size_t size) noexcept nogil
-cdef void free_key(uint8_t* ptr) noexcept nogil
-cdef key_is_zero(const unsigned char[:] key)
 
 cdef class FileOpener:
     cdef object fileobj

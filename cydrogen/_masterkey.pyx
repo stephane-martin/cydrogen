@@ -6,13 +6,14 @@ from libc.stdint cimport uint64_t
 
 from ._basekey cimport BaseKey
 from ._context cimport make_context
-from ._decls cimport pwhash_deterministic, kdf_derive_from_key
-from ._decls cimport sign_keygen_deterministic, pwhash_create, pwhash_verify
+from ._decls cimport pwhash_deterministic, kdf_derive_from_key, random_buf_deterministic
+from ._decls cimport sign_keygen_deterministic, pwhash_create, pwhash_verify, kx_keygen_deterministic
 from ._decls cimport hydro_pwhash_STOREDBYTES, hydro_kdf_BYTES_MIN, hydro_kdf_BYTES_MAX
 from ._exceptions cimport DeriveException
-from ._hash import HashKey
-from ._secretbox import SecretBoxKey
-from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
+from ._hash cimport HashKey
+from ._kx_n cimport KxPair
+from ._secretbox cimport SecretBoxKey
+from ._sign cimport SignPublicKey, SignSecretKey, SignKeyPair
 from ._utils cimport SafeMemory
 
 
@@ -95,6 +96,11 @@ cdef class MasterKey(BaseKey):
             raise ValueError("A zero key cannot be used to derive a sign keypair")
         return SignKeyPair(sign_keygen_deterministic(self))
 
+    cpdef derive_kx_keypair(self):
+        if self.is_zero():
+            raise ValueError("A zero key cannot be used to derive a key exchange keypair")
+        return KxPair(kx_keygen_deterministic(self))
+
     cpdef hash_password(self, const unsigned char[:] password, uint64_t opslimit=10000):
         if password is None:
             raise ValueError("Password cannot be None")
@@ -119,6 +125,13 @@ cdef class MasterKey(BaseKey):
         if len(stored) != hydro_pwhash_STOREDBYTES:
             raise ValueError("Stored hash must be 128 bytes long")
         return pwhash_verify(stored, password, self, opslimit)
+
+    cpdef bytes gen_random_buffer(self, size_t size):
+        if size == 0:
+            return bytes()
+        buf = bytearray(size)
+        random_buf_deterministic(buf, self)
+        return bytes(buf)
 
 
 cdef make_masterkey(key):

@@ -28,14 +28,22 @@ cdef extern from "hydrogen.h" nogil:
     const int hydro_sign_PUBLICKEYBYTES
     const int hydro_sign_SECRETKEYBYTES
     const int hydro_sign_SEEDBYTES
+    const int hydro_kx_SESSIONKEYBYTES
+    const int hydro_kx_PUBLICKEYBYTES
+    const int hydro_kx_SECRETKEYBYTES
+    const int hydro_kx_PSKBYTES
+    const int hydro_kx_N_PACKET1BYTES
+    const int hydro_kx_SEEDBYTES
 
 
 cdef extern from "hydrogen.h" nogil:
     int hydro_init()
     void hydro_memzero(void *pnt, size_t len)
+
     uint32_t hydro_random_u32()
     uint32_t hydro_random_uniform(uint32_t upper_bound)
     void hydro_random_buf(void *buf, size_t len)
+    void hydro_random_buf_deterministic(void *buf, size_t len, const uint8_t seed[hydro_random_SEEDBYTES])
     bint hydro_equal(const void *b1_, const void *b2_, size_t len)
 
     struct hydro_hash_state:
@@ -121,6 +129,32 @@ cdef extern from "hydrogen.h" nogil:
     int hydro_pad(unsigned char *buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen)
     int hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize)
 
+    struct hydro_kx_keypair:
+        uint8_t pk[hydro_kx_PUBLICKEYBYTES]
+        uint8_t sk[hydro_kx_SECRETKEYBYTES]
+
+    struct hydro_kx_session_keypair:
+        uint8_t rx[hydro_kx_SESSIONKEYBYTES]
+        uint8_t tx[hydro_kx_SESSIONKEYBYTES]
+
+    struct hydro_kx_state:
+        pass
+
+    void hydro_kx_keygen(hydro_kx_keypair *static_kp)
+    void hydro_kx_keygen_deterministic(hydro_kx_keypair *static_kp, const uint8_t seed[hydro_kx_SEEDBYTES])
+
+    int hydro_kx_n_1(
+        hydro_kx_session_keypair *kp,
+        uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES],
+        const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES])
+
+    int hydro_kx_n_2(
+        hydro_kx_session_keypair *kp,
+        const uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES],
+        const hydro_kx_keypair *static_kp)
+
 
 cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES])
 cdef basekey_memzero(uint8_t* key)
@@ -147,7 +181,6 @@ cdef secretbox_decrypt(
         const unsigned char[:] key,
         unsigned char[:] plaintext)
 
-
 cdef pwhash_deterministic(
         const unsigned char[:] password,
         const unsigned char[:] ctx,
@@ -173,6 +206,7 @@ cdef pwhash_verify(
         const unsigned char[:] master_key,
         uint64_t opslimit_max)
 
+cdef random_buf_deterministic(unsigned char[:] buf, const unsigned char[:] seed)
 cdef sign_keygen_deterministic(const unsigned char[:] master_key)
 cdef sign_keygen()
 cdef sign_init(hydro_sign_state *state, const unsigned char[:] ctx)
@@ -180,12 +214,18 @@ cdef sign_update(hydro_sign_state *state, const unsigned char[:] data)
 cdef sign_final_create(hydro_sign_state *state, const unsigned char[:] sk, unsigned char[:] signature)
 cdef sign_final_verify(hydro_sign_state *state, const unsigned char[:] pk, const unsigned char[:] signature)
 
+cdef kx_keygen()
+cdef kx_keygen_deterministic(const unsigned char[:] master_key)
+
 cdef _pad(unsigned char[:] buf, size_t unpadded_buflen, size_t blocksize)
 cpdef pad(const unsigned char[:] buf, size_t blocksize=*)
 cpdef unpad(const unsigned char[:] buf, size_t blocksize=*)
 
-cpdef random_u32()
-cpdef random_uniform(uint32_t upper_bound)
+cpdef uint32_t random_u32() noexcept nogil
+cpdef uint32_t random_uniform(uint32_t upper_bound) noexcept nogil
 cpdef randomize_buffer(unsigned char[:] buf)
 cpdef gen_random_buffer(size_t size)
 cpdef shuffle_buffer(unsigned char[:] buf)
+
+cdef kx_n_1(const unsigned char[:] peer_public_key, const unsigned char[:] psk)
+cdef kx_n_2(const unsigned char[:] packet1, const unsigned char[:] psk, const unsigned char[:] static_kp)

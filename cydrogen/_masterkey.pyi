@@ -2,6 +2,7 @@ from collections.abc import Buffer
 
 from ._basekey import BaseKey
 from ._context import Context
+from ._kx_n import KxPair
 from ._sign import SignKeyPair
 
 class MasterKey(BaseKey):
@@ -109,8 +110,21 @@ class MasterKey(BaseKey):
         """
         Derive a sign keypair from the master key.
 
+        Useful for tests.
+
         Returns:
             A SignKeyPair derived from the master key.
+        """
+        ...
+
+    def derive_kx_pair(self) -> KxPair:
+        """
+        Derive a key exchange pair from the master key.
+
+        Useful for tests.
+
+        Returns:
+            A KxPair derived from the master key.
         """
         ...
 
@@ -149,6 +163,22 @@ class MasterKey(BaseKey):
 
         Raises:
             ValueError: If the password or stored hash is None, empty, or if the stored hash is not 128 bytes long.
+        """
+        ...
+
+    def gen_random_buffer(self, size: int) -> bytes:
+        """
+        Generates a buffer of `size` bytes, indistinguishable from random bytes without knowing the master key.
+
+        For a given seed, this function will always output the same sequence.
+
+        This function is mainly useful for writing tests.
+
+        Args:
+            size: The size of the buffer to generate.
+
+        Returns:
+            A bytes object of the specified size containing pseudo-random data.
         """
         ...
 

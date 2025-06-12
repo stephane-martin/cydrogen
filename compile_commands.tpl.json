@@ -122,5 +122,202 @@
     "directory": "ROOT/cydrogen",
     "file": "cyd_memcpy_s.c",
     "output": "cyd_memcpy_s.o"
-  }
+  },
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c hydrogen.h",
+  "file": "hydrogen.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/common.h",
+  "file": "impl/common.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/hydrogen_p.h",
+  "file": "impl/hydrogen_p.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random.h",
+  "file": "impl/random.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/avr.h",
+  "file": "impl/random/avr.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/esp32.h",
+  "file": "impl/random/esp32.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/particle.h",
+  "file": "impl/random/particle.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/zephyr.h",
+  "file": "impl/random/zephyr.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/nrf52832.h",
+  "file": "impl/random/nrf52832.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/windows.h",
+  "file": "impl/random/windows.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/wasi.h",
+  "file": "impl/random/wasi.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/linux_kernel.h",
+  "file": "impl/random/linux_kernel.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/unix.h",
+  "file": "impl/random/unix.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/mbed.h",
+  "file": "impl/random/mbed.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/riot.h",
+  "file": "impl/random/riot.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/stm32.h",
+  "file": "impl/random/stm32.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/rtthread.h",
+  "file": "impl/random/rtthread.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/ch32.h",
+  "file": "impl/random/ch32.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/chibios.h",
+  "file": "impl/random/chibios.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/random/cheriot.h",
+  "file": "impl/random/cheriot.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/core.h",
+  "file": "impl/core.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/gimli-core.h",
+  "file": "impl/gimli-core.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/gimli-core/sse2.h",
+  "file": "impl/gimli-core/sse2.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/gimli-core/portable.h",
+  "file": "impl/gimli-core/portable.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/hash.h",
+  "file": "impl/hash.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/kdf.h",
+  "file": "impl/kdf.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/secretbox.h",
+  "file": "impl/secretbox.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/x25519.h",
+  "file": "impl/x25519.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/kx.h",
+  "file": "impl/kx.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/pwhash.h",
+  "file": "impl/pwhash.h"
+},
+
+{
+    "directory": "ROOT/cydrogen/src",
+  "command": "/usr/bin/gcc -Os -mtune=native -fno-exceptions -Wall -Wextra -Wmissing-prototypes -Wdiv-by-zero -Wbad-function-cast -Wcast-align -Wcast-qual -Wfloat-equal -Wmissing-declarations -Wnested-externs -Wno-unknown-pragmas -Wpointer-arith -Wredundant-decls -Wstrict-prototypes -Wswitch-enum -Wno-type-limits -I. -c impl/sign.h",
+  "file": "impl/sign.h"
+},
+
+{
+  "directory": "ROOT/cydrogen",
+  "command": "/usr/bin/gcc -DHAVE_STDIO_H=1 -DHAVE_STDLIB_H=1 -DHAVE_STRING_H=1 -DHAVE_INTTYPES_H=1 -DHAVE_STDINT_H=1 -DHAVE_STRINGS_H=1 -DHAVE_SYS_STAT_H=1 -DHAVE_SYS_TYPES_H=1 -DHAVE_UNISTD_H=1 -DHAVE_WCHAR_H=1 -DHAVE_C_VARARRAYS=1 -DHAVE_DLFCN_H=1 -DHAVE_SYS_MMAN_H=1 -DHAVE_SYS_PARAM_H=1 -DHAVE_SYS_RANDOM_H=1 -DHAVE_SYS_AUXV_H=1 -DNATIVE_LITTLE_ENDIAN=1 -DHAVE_WEAK_SYMBOLS=1 -DHAVE_ALLOCA_H=1 -DHAVE_ALLOCA=1 -DHAVE_MMAP=1 -DHAVE_MLOCK=1 -DHAVE_MADVISE=1 -DHAVE_MPROTECT=1 -DHAVE_RAISE=1 -DHAVE_POSIX_MEMALIGN=1 -DHAVE_EXPLICIT_BZERO=1 -I. -Os -fno-strict-aliasing -fno-strict-overflow -fstack-protector -Wno-deprecated-declarations -Wno-unknown-pragmas -c cyutils.h",
+  "file": "cyutils.h"
+},
+
+{
+  "directory": "ROOT/cydrogen",
+  "command": "/usr/bin/gcc -DHAVE_STDIO_H=1 -DHAVE_STDLIB_H=1 -DHAVE_STRING_H=1 -DHAVE_INTTYPES_H=1 -DHAVE_STDINT_H=1 -DHAVE_STRINGS_H=1 -DHAVE_SYS_STAT_H=1 -DHAVE_SYS_TYPES_H=1 -DHAVE_UNISTD_H=1 -DHAVE_WCHAR_H=1 -DHAVE_C_VARARRAYS=1 -DHAVE_DLFCN_H=1 -DHAVE_SYS_MMAN_H=1 -DHAVE_SYS_PARAM_H=1 -DHAVE_SYS_RANDOM_H=1 -DHAVE_SYS_AUXV_H=1 -DNATIVE_LITTLE_ENDIAN=1 -DHAVE_WEAK_SYMBOLS=1 -DHAVE_ALLOCA_H=1 -DHAVE_ALLOCA=1 -DHAVE_MMAP=1 -DHAVE_MLOCK=1 -DHAVE_MADVISE=1 -DHAVE_MPROTECT=1 -DHAVE_RAISE=1 -DHAVE_POSIX_MEMALIGN=1 -DHAVE_EXPLICIT_BZERO=1 -I. -Os -fno-strict-aliasing -fno-strict-overflow -fstack-protector -Wno-deprecated-declarations -Wno-unknown-pragmas -c cyd_memcpy_s.h",
+  "file": "cyd_memcpy_s.h"
+}
 ]

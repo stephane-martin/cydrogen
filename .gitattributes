@@ -10,7 +10,9 @@
 .readthedocs.yaml			export-ignore
 .typos.toml					export-ignore
 .vale.ini					export-ignore
+.gitleaks.toml				export-ignore
 compile_commands.json.tpl	export-ignore
+compile_commands.tpl.json	export-ignore
 develop.fish				export-ignore
 mkdocs.yml					export-ignore
 zizmor.yml					export-ignore
@@ -18,6 +20,11 @@ styles/						export-ignore
 
 # only used by Github Code Scanning
 Makefile					export-ignore
+**/Makefile.fake			export-ignore
 
 # markdown sources to built the readthedocs documentation
 docs/						export-ignore
+CHANGELOG.json				export-ignore
+CHANGELOG.tpl.md			export-ignore
+last_release_changes.md		export-ignore
+

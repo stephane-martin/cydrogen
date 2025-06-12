@@ -3,7 +3,7 @@
 from libc.stdint cimport uint8_t
 
 from ._context cimport Context
-from ._decls cimport *
+from ._decls cimport hydro_sign_state
 from ._utils cimport SafeMemory
 
 

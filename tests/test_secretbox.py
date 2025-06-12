@@ -5,7 +5,7 @@ from itertools import product
 import pytest
 
 import cydrogen
-from cydrogen._basekey import BaseKey  # type: ignore[import]
+from cydrogen._basekey import BaseKey
 
 KEY_BYTES = b"\xeaCU\x91\xdb?\xc2\xefZ\xb9HO\x84\xc5\xf3\xbf\x07\xecunR\xab\xa4\xa7`\r=\xe5\xf0e\xfb%"
 KEY_BYTES_2 = b")\xf5G\x95\xa9e\xeb\xb3\xfcU1?[\x9f\xd1\x8b6\xe4\x8a\xac\xf1 \xf5\xd3\xf8\x98c\xae\xce\xdcoA"

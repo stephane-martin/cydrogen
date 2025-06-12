@@ -15,15 +15,21 @@ jobs:
 
   gitleaks:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           show-progress: false
           persist-credentials: false
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7   # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: "${{ github.workspace }}/.gitleaks.toml"
+          GITLEAKS_VERSION: "8.27.2"
 
   lint:
     runs-on: ubuntu-22.04
