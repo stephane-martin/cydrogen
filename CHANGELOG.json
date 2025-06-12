@@ -1,13 +1,15 @@
 {
+    "unreleased": {
+        "fixed": [
+            "permissions for ci_master."
+        ]
+    },
     "v0.0.7": {
         "date": "2025-06-12",
         "added": [
             "MasterKey.gen_random_buffer to generate pseudo-random data.",
             "pad and unpad functions.",
             "key exchange using the N variant."
-        ],
-        "fixed": [
-            "permissions for ci_master."
         ]
     },
     "v0.0.6": {

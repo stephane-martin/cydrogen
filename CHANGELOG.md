@@ -5,6 +5,12 @@ All notable changes to `cydrogen` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- permissions for ci_master.
+
 ## v0.0.7 - 2025-06-12
 
 ### Added
@@ -12,10 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MasterKey.gen_random_buffer to generate pseudo-random data.
 - pad and unpad functions.
 - key exchange using the N variant.
-
-### Fixed
-
-- permissions for ci_master.
 
 ## v0.0.6 - 2025-06-06
 
