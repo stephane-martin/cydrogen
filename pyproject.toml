@@ -5,7 +5,7 @@ requires = ["meson-python >= 0.18.0", "cython >= 3.1.0"]
 
 [project]
 name = "cydrogen"
-version = "0.0.10-dev"
+version = "0.0.11-dev"
 description = "Cython bindings for the libhydrogen library"
 readme = "README.md"
 requires-python = ">=3.12"
