@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - pad and unpad functions.
 - key exchange using the N variant.
 
+### Fixed
+
+- permissions for ci_master.
+
 ## v0.0.6 - 2025-06-06
 
 ### Security
