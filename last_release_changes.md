@@ -2,5 +2,5 @@
 
 ## Fixed
 
-- permissions for release workflow.
+- zizmor defects.
 

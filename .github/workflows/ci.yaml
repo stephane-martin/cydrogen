@@ -6,11 +6,12 @@ on:
       - develop
   workflow_dispatch:
 
-permissions:
-  contents: read
-  actions: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   ci:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
     uses: ./.github/workflows/_ci.yaml
