@@ -1,6 +1,12 @@
 {
     "unreleased": {
         "fixed": [
+            "zizmor defects."
+        ]
+    },
+    "v0.0.9": {
+        "date": "2025-06-12",
+        "fixed": [
             "permissions for release workflow."
         ]
     },

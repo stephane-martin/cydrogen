@@ -9,14 +9,18 @@ on:
       - master
       - release/**
 
-permissions:
-  contents: read
-  actions: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   ci:
     uses: ./.github/workflows/_ci.yaml
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
   build_wheels:
     needs: ci
     uses: ./.github/workflows/wheels.yaml
+    permissions:
+      contents: read
+      actions: read

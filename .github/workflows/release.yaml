@@ -10,19 +10,23 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  actions: read
-  pull-requests: write
+permissions: {}
 
 jobs:
 
   ci:
     uses: ./.github/workflows/_ci.yaml
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
 
   build_wheels:
     needs: ci
     uses: ./.github/workflows/wheels.yaml
+    permissions:
+      contents: read
+      actions: read
 
   publish:
     if: github.repository == 'stephane-martin/cydrogen' && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
@@ -33,6 +37,7 @@ jobs:
       run:
         shell: bash
     permissions:
+      actions: read
       contents: write # for softprops/action-gh-release to create GitHub release
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
       attestations: write # for GitHub attestations

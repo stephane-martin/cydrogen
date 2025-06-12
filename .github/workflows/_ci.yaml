@@ -105,8 +105,10 @@ jobs:
         run: |
           sudo apt-get install -y build-essential binutils
       - name: build cydrogen
+        env:
+          PYTHON_VERSION: "${{matrix.python-version}}"
         run: |
-          nox -s "build-${{matrix.python-version}}"
+          nox -s "build-${PYTHON_VERSION}"
       - name: upload wheels
         uses: actions/upload-artifact@v4
         with:
