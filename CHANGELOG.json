@@ -1,6 +1,12 @@
 {
     "unreleased": {
         "fixed": [
+            "permissions for release workflow."
+        ]
+    },
+    "v0.0.8": {
+        "date": "2025-06-12",
+        "fixed": [
             "permissions for ci_master."
         ]
     },

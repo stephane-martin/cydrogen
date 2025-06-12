@@ -156,7 +156,7 @@ class Changelog:
                 release = Release(date=release_date, version=version, changes=release_changes)
                 releases.append(release)
 
-        releases.sort(key=lambda r: r.date, reverse=True)
+        releases.sort(key=lambda r: r.version, reverse=True)
 
         return cls(
             unreleased_changes=unreleased_changes,
@@ -204,7 +204,7 @@ class Changelog:
         return md.getvalue()
 
     def save(self) -> None:
-        self.releases.sort(key=lambda r: r.date, reverse=True)
+        self.releases.sort(key=lambda r: r.version, reverse=True)
 
         with CHANGELOG_JSON_FNAME.open("w", encoding="utf-8") as f:
             f.write(self.to_json())

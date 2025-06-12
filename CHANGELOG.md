@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- permissions for release workflow.
+
+## v0.0.8 - 2025-06-12
+
+### Fixed
+
 - permissions for ci_master.
 
 ## v0.0.7 - 2025-06-12
