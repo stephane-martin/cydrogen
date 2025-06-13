@@ -18,7 +18,7 @@ from ._exceptions import (
     VerifyException,
 )
 from ._hash import Hash, HashKey, hash_file
-from ._kx_n import KxPair, KxPublicKey, KxSecretKey, Psk, SessionPair, kx_n_gen_session_and_packet, kx_n_gen_session_from_packet
+from ._kx_n import KxKkClientState, KxPair, KxPublicKey, KxSecretKey, Psk, SessionPair, client_init_kx_n, server_finish_kx_n
 from ._masterkey import MasterKey
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
@@ -54,8 +54,6 @@ __all__ = [
     "KxSecretKey",
     "Psk",
     "SessionPair",
-    "kx_n_gen_session_and_packet",
-    "kx_n_gen_session_from_packet",
     "hash_file",
     "sign_file",
     "verify_file",
@@ -68,6 +66,9 @@ __all__ = [
     "shuffle_buffer",
     "pad",
     "unpad",
+    "client_init_kx_n",
+    "server_finish_kx_n",
+    "KxKkClientState",
 ]
 
 

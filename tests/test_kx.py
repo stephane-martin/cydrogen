@@ -32,7 +32,7 @@ def test_create_zero_key():
 
 def test_kx_n():
     pair = cydrogen.KxPair(PAIR_BYTES)
-    session, pkt = cydrogen.kx_n_gen_session_and_packet(pair.public_key())
-    session_peer = cydrogen.kx_n_gen_session_from_packet(pair, pkt)
+    session, pkt = cydrogen.client_init_kx_n(pair.public_key())
+    session_peer = cydrogen.server_finish_kx_n(pair, pkt)
     assert session.rx == session_peer.tx
     assert session.tx == session_peer.rx

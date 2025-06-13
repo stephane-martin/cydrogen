@@ -1,4 +1,9 @@
 {
+    "unreleased": {
+        "added": [
+            "key exchange using the KK variant."
+        ]
+    },
     "v0.0.10": {
         "date": "2025-06-12",
         "fixed": [
