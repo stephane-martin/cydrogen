@@ -1,5 +1,4 @@
 from collections.abc import Buffer
-from dataclasses import dataclass
 from typing import Self
 
 from ._basekey import BaseKey
@@ -12,7 +11,8 @@ class Psk(BaseKey):
     Pre-shared keys are used optionally by the key exchange algorithms.
     """
 
-@dataclass
+    def __eq__(self, other: object) -> bool: ...
+
 class SessionPair:
     """
     The SessionPair class represents a pair of symmetric keys to be used to secure a session with a peer.
@@ -24,6 +24,18 @@ class SessionPair:
 
     rx: SecretBoxKey
     tx: SecretBoxKey
+
+    def __init__(self, rx: SecretBoxKey, tx: SecretBoxKey):
+        """
+        Initializes a SessionPair instance.
+
+        Args:
+            rx: The symmetric key used to decrypt messages received from the peer.
+            tx: The symmetric key used to encrypt messages sent to the peer.
+        """
+
+    def __eq__(self, other: object) -> bool: ...
+    def __repr__(self) -> str: ...
 
 class KxPublicKey:
     """
@@ -52,6 +64,7 @@ class KxPublicKey:
         """
         ...
 
+    def __eq__(self, other: object) -> bool: ...
     def __repr__(self) -> str: ...
     def __buffer__(self, flags: int, /) -> memoryview: ...
 
@@ -82,8 +95,38 @@ class KxSecretKey:
         """
         ...
 
+    def __eq__(self, other: object) -> bool: ...
     def __repr__(self) -> str: ...
     def __buffer__(self, flags: int, /) -> memoryview: ...
+
+class KxKkClientState:
+    """
+    KxKkClientState represents the state of a key exchange variant KK from the client side.
+
+    `session_pair` is initially `None` and will be set after `client_finish_kx_kk` is called.
+
+    Attributes:
+        packet1: The packet to send to the server as part of the key exchange.
+        session_pair: The session pair containing the symmetric keys for the session.
+    """
+
+    packet1: bytes
+    session_pair: SessionPair
+
+    def client_finish_kx_kk(self, packet2: bytes) -> SessionPair:
+        """
+        Finalizes the key exchange variant KK from the client side.
+
+        Args:
+            packet2: The packet received from the server.
+
+        Returns:
+            A SessionPair with the symmetric keys for the session.
+
+        Raises:
+            KeyExchangeException: If the operation fails. In particular, this exception is raised if the packet is invalid or if the key exchange fails.
+        """
+        ...
 
 class KxPair:
     """
@@ -130,6 +173,43 @@ class KxPair:
         """
         ...
 
+    def server_finish_kx_n(self, packet1: bytes, psk: Psk | None = None) -> SessionPair:
+        """
+        See [cydrogen.server_finish_kx_n][]
+        """
+
+    def client_init_kx_kk(self, server_public_key: KxPublicKey) -> KxKkClientState:
+        """
+        Initiate a key exchange variant KK from the client side.
+
+        Args:
+            server_public_key: The public key of the server to exchange keys with.
+
+        Returns:
+            A state object containing the first packet to send to the server.
+
+        Raises:
+            KeyExchangeException: If the operation fails.
+        """
+        pass
+
+    def server_process_kx_kk(self, client_public_key: KxPublicKey, packet1: bytes) -> tuple[SessionPair, bytes]:
+        """
+        Process a key exchange variant KK from the server side.
+
+        Args:
+            client_public_key: The public key of the client to exchange keys with.
+            packet1: The packet received from the client.
+
+        Returns:
+            A tuple containing a SessionPair with the symmetric keys for the session.
+            A bytes object representing the packet to send back to the client.
+
+        Raises:
+            KeyExchangeException: If the operation fails. In particular, this exception is raised if the packet is invalid or if the key exchange fails.
+        """
+        ...
+
     @classmethod
     def gen(cls) -> Self:
         """
@@ -140,33 +220,50 @@ class KxPair:
         """
         ...
 
+    @classmethod
+    def from_keys(cls, public_key: KxPublicKey | str | bytes | Buffer, secret_key: KxSecretKey | str | bytes | Buffer) -> Self:
+        """
+        Creates a KxPair instance from a public key and a secret key.
+
+        Args:
+            public_key: The public key to use.
+            secret_key: The secret key to use.
+
+        Returns:
+            A KxPair instance initialized with the provided keys.
+
+        Raises:
+            ValueError: If the provided keys are invalid.
+        """
+        ...
+
     def __repr__(self) -> str: ...
     def __buffer__(self, flags: int, /) -> memoryview: ...
 
-def kx_n_gen_session_and_packet(peer: KxPublicKey, psk: Psk | None = None) -> tuple[SessionPair, bytes]:
+def client_init_kx_n(server_public_key: KxPublicKey, psk: Psk | None = None) -> tuple[SessionPair, bytes]:
     """
-    Generate session keys and a packet with an ephemeral public key to send to the server
+    Initiate a key exchange variant N (anonymous client) from the client side.
 
     Args:
-        peer: The public key of the peer to exchange keys with.
+        server_public_key: The public key of the server to exchange keys with.
         psk: An optional pre-shared key to use in the key exchange.
 
     Returns:
-        A tuple containing a SessionPair with the symmetric keys for the session and a bytes object
-        representing the packet to send to the server.
+        A tuple containing a SessionPair with the symmetric keys for the session.
+        A bytes object representing the packet to send to the server.
 
     Raises:
         KeyExchangeException: If the operation fails.
     """
     ...
 
-def kx_n_gen_session_from_packet(static_kp: KxPair, packet1: bytes, psk: Psk | None = None) -> SessionPair:
+def server_finish_kx_n(server_kp: KxPair, packet1: bytes, psk: Psk | None = None) -> SessionPair:
     """
-    Generate session keys from a received packet and the static key pair.
+    Finalize a key exchange variant N (anonymous client) from the server side.
 
     Args:
-        static_kp: The static key pair used for the key exchange.
-        packet1: The received packet containing the ephemeral public key and other data.
+        server_kp: The server key pair.
+        packet1: The packet received from the client.
         psk: An optional pre-shared key to use in the key exchange.
 
     Returns:

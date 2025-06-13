@@ -21,6 +21,21 @@ def test_create_kx_pair_from_bytes():
     assert bytes(pair.secret_key()) == PRIVATE_BYTES
 
 
+def test_keys_equality():
+    pk1 = cydrogen.KxPublicKey(PUBLIC_BYTES)
+    sk1 = cydrogen.KxSecretKey(PRIVATE_BYTES)
+    kp = cydrogen.KxPair(PAIR_BYTES)
+    assert pk1 == kp.public_key()
+    assert sk1 == kp.secret_key()
+
+    kp2 = cydrogen.KxPair.gen()
+    assert pk1 != kp2.public_key()
+    assert sk1 != kp2.secret_key()
+
+    kp3 = cydrogen.KxPair.from_keys(pk1, sk1)
+    assert kp3 == kp
+
+
 def test_create_zero_key():
     with pytest.raises(TypeError):
         cydrogen.KxPair()
@@ -32,7 +47,17 @@ def test_create_zero_key():
 
 def test_kx_n():
     pair = cydrogen.KxPair(PAIR_BYTES)
-    session, pkt = cydrogen.kx_n_gen_session_and_packet(pair.public_key())
-    session_peer = cydrogen.kx_n_gen_session_from_packet(pair, pkt)
+    session, pkt = cydrogen.client_init_kx_n(pair.public_key())
+    session_peer = cydrogen.server_finish_kx_n(pair, pkt)
     assert session.rx == session_peer.tx
     assert session.tx == session_peer.rx
+
+
+def test_kx_kk() -> None:
+    client_pair: cydrogen.KxPair = cydrogen.KxPair.gen()
+    server_pair: cydrogen.KxPair = cydrogen.KxPair.gen()
+    s = client_pair.client_init_kx_kk(server_pair.public_key())
+    server_session_pair, packet2 = server_pair.server_process_kx_kk(client_pair.public_key(), s.packet1)
+    client_session_pair = s.client_finish_kx_kk(packet2)
+    assert client_session_pair.rx == server_session_pair.tx
+    assert client_session_pair.tx == server_session_pair.rx
