@@ -1,4 +1,5 @@
 from collections.abc import Buffer
+from typing import Self
 
 from ._basekey import BaseKey
 from ._context import Context
@@ -9,7 +10,7 @@ class MasterKey(BaseKey):
     """
     A MasterKey can be used to derive subkeys, derive a key from a password, or hash passwords for storage.
     """
-    def __init__(self, key: str | bytes | MasterKey | BaseKey | Buffer | None = None):
+    def __init__(self, key: str | bytes | Self | Buffer | None = None):
         """
         Initialize a MasterKey.
 

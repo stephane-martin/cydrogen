@@ -13,7 +13,7 @@ class HashKey(BaseKey):
     If you don't need to prevent dictionary attacks, you can use the empty key for hashing.
     """
 
-    def __init__(self, key: str | bytes | BaseKey | Self | Buffer | None = None):
+    def __init__(self, key: str | bytes | Self | Buffer | None = None):
         """
         Initialize the HashKey with an optional key. If the key is None, an empty key is created.
 
@@ -75,7 +75,7 @@ class Hash:
         *,
         ctx: str | bytes | Context | Buffer | None = None,
         digest_size: int = 16,
-        key: str | bytes | BaseKey | HashKey | Buffer | None = None,
+        key: str | bytes | HashKey | Buffer | None = None,
     ):
         """
         Initialize the hasher.
@@ -157,7 +157,7 @@ def hash_file(
     fileobj: str | PathLike | BinaryIO,
     ctx: str | bytes | Context | Buffer | None = None,
     digest_size: int = 16,
-    key: str | bytes | BaseKey | HashKey | Buffer | None = None,
+    key: str | bytes | HashKey | Buffer | None = None,
     chunk_size: int = 8192,
 ) -> bytes:
     """

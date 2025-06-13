@@ -224,7 +224,7 @@ cdef class SafeReader:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeReader, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = isinstance(fileobj, (SafeReader, io.BufferedReader, io.BytesIO, io.BufferedRandom, tempfile._TemporaryFileWrapper))
+        self.direct = isinstance(fileobj, (SafeReader, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
         self.has_readinto = hasattr(fileobj, "readinto")
 
     cpdef readinto(self, unsigned char[:] buf):
@@ -287,7 +287,7 @@ cdef class SafeWriter:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeWriter, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedWriter, io.BytesIO, io.BufferedRandom, tempfile._TemporaryFileWrapper))
+        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
 
     cpdef write(self, const unsigned char[:] buf):
         if buf is None:

@@ -19,7 +19,7 @@ class SecretBoxKey(BaseKey):
     The secretbox API is used for authenticated encryption of messages.
     """
 
-    def __init__(self, key: bytes | str | Self | BaseKey | Buffer):
+    def __init__(self, key: bytes | str | Self | Buffer):
         """
         Initialize the SecretBoxKey with a key.
 
@@ -139,7 +139,7 @@ class EncryptedMessage:
 
     def decrypt(
         self,
-        key: bytes | str | SecretBoxKey | BaseKey | Buffer,
+        key: bytes | str | SecretBoxKey | Buffer,
         ctx: bytes | str | Context | Buffer | None = None,
         out: Writer | None = None,
     ) -> bytes:
@@ -167,7 +167,7 @@ class EncryptedMessage:
         Create an EncryptedMessage from a framed bytes object.
 
         Args:
-            framed: A bytes-like object containing the framed message.
+            framed: A bytes-like object containing the framed ciphertext.
 
         Returns:
             An instance of EncryptedMessage.
@@ -184,7 +184,7 @@ class EncryptedMessage:
         Read an EncryptedMessage from a file-like/path-like object.
 
         Args:
-            reader: A file-like object to read the message from.
+            reader: A file-like object to read the framed ciphertext from.
             max_msg_size: Optional maximum size of the message. If provided, raises ValueError
                           if the message size exceeds this limit.
 
@@ -214,7 +214,7 @@ class SecretBox:
     key: SecretBoxKey
     ctx: Context
 
-    def __init__(self, key: bytes | str | SecretBoxKey | BaseKey | Buffer, *, ctx: bytes | str | Context | Buffer | None = None):
+    def __init__(self, key: bytes | str | SecretBoxKey | Buffer, *, ctx: bytes | str | Context | Buffer | None = None):
         """
         Initialize the secret box with a key and context.
 
@@ -237,10 +237,10 @@ class SecretBox:
         Args:
             plaintext: The plaintext to encrypt.
             msg_id: Optional message ID to associate with the encrypted message. Default is 0.
-            out: Optional file-like object to write the encrypted ciphertext to.
+            out: Optional file-like object to write the framed encrypted ciphertext to.
 
         Returns:
-            The encrypted message as bytes.
+            The encrypted message as bytes (not framed).
 
         Raises:
             ValueError: If the plaintext is None, if the ciphertext is too short.
