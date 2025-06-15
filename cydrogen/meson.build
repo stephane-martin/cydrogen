@@ -21,6 +21,7 @@ cython_c_args = cc.get_supported_arguments(
 
 _cython_tree_cydrogen = [
   fs.copyfile('__init__.py'),
+  fs.copyfile('networking.py'),
   fs.copyfile('_basekey.pxd'),
   fs.copyfile('_context.pxd'),
   fs.copyfile('_decls.pxd'),
@@ -125,6 +126,8 @@ python_sources = [
   '_utils.pyi',
   '_decls.pxd',
   '_decls.pyi',
+  'networking.py',
+  'py.typed',
 ]
 
 py.install_sources(

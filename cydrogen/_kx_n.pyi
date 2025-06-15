@@ -4,6 +4,26 @@ from typing import Self
 from ._basekey import BaseKey
 from ._secretbox import SecretBoxKey
 
+KX_N_PACKET1BYTES: int
+"""
+The number of bytes of the packet sent to the server in key exchange variant N.
+"""
+
+KX_KK_PACKET1BYTES: int
+"""
+The number of bytes of the first packet sent to the server in key exchange variant KK.
+"""
+
+KX_KK_PACKET2BYTES: int
+"""
+The number of bytes of the second packet sent to the client in key exchange variant KK.
+"""
+
+KX_PAIR_SIZE: int
+"""
+The size of a key exchange pair (KxPair) in bytes.
+"""
+
 class Psk(BaseKey):
     """
     The Psk class represents a pre-shared key (PSK).

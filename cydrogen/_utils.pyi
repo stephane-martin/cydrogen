@@ -2,7 +2,36 @@ from collections.abc import Buffer
 from os import PathLike
 from typing import BinaryIO, Literal
 
-from ._protocols import Reader, Writer
+from ._protocols import AsyncReader, Reader, Writer
+
+class Counter:
+    """
+    A thread-safe counter that can be used to generate unique identifiers.
+    """
+    def __init__(self):
+        """
+        Initialize a Counter instance.
+
+        The counter starts at 1 and is thread-safe.
+        """
+        ...
+
+    def value(self) -> int:
+        """
+        Return the current value of the counter.
+
+        This method is thread-safe and increments the counter.
+
+        Returns:
+            The current value of the counter, which is incremented by 1 each time this method is called.
+        """
+        ...
+
+    def __call__(self):
+        """
+        Just calls `value()` method.
+        """
+        ...
 
 def store64(dst: Buffer, src: int):
     """
@@ -148,6 +177,38 @@ class SafeReader:
         """
         ...
 
+class AsyncSafeReader:
+    """
+    AsyncSafeReader wraps an asynchronous reader to ensure that it reads exactly the requested number of bytes.
+    """
+    def __init__(self, reader: AsyncReader):
+        """
+        Initialize the AsyncSafeReader.
+
+        Args:
+            reader: An asynchronous reader that supports reading bytes.
+
+        Raises:
+            ValueError: If reader is None.
+            TypeError: If the passed reader is invalid.
+        """
+        ...
+
+    async def readexactly(self, length: int) -> bytes:
+        """
+        Asynchronously read exactly `length` bytes from the reader.
+
+        Args:
+            length: The number of bytes to read.
+
+        Returns:
+            A bytes object containing exactly `length` bytes read from the reader.
+
+        Raises:
+            EOFError: If the end of the stream is reached before reading the requested number of bytes.
+        """
+        ...
+
 class SafeWriter:
     """
     A safe writer for file-like objects.
@@ -208,7 +269,7 @@ class TeeWriter:
             The number of bytes written to both writers.
 
         Raises:
-            IOError: If the two writers do not write the same number of bytes.
+            OSError: If the two writers do not write the same number of bytes.
         """
         ...
 

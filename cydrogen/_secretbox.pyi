@@ -5,7 +5,7 @@ from typing import BinaryIO, Self
 from ._basekey import BaseKey
 from ._context import Context
 from ._masterkey import MasterKey
-from ._protocols import Reader, Writer
+from ._protocols import AsyncReader, AsyncWriter, Reader, Writer
 
 ENC_MSG_HEADER: bytes
 """
@@ -133,7 +133,20 @@ class EncryptedMessage:
         Raises:
             ValueError: If the file object is None.
             TypeError: If the file object is not a file-like/path-like object.
-            IOError: If the write operation fails.
+            OSError: If the write operation fails.
+        """
+        ...
+
+    async def awriteto(self, out: AsyncWriter) -> None:
+        """
+        Asynchronously write the framed encrypted message to an async writer.
+
+        Args:
+            out: An async writer to write the message to.
+
+        Raises:
+            ValueError: If the async writer is None.
+            TypeError: If the async writer is not an async writer.
         """
         ...
 
@@ -174,7 +187,7 @@ class EncryptedMessage:
 
         Raises:
             ValueError: If the framed message is None or if parsing fails.
-            IOError: If reading the message header or message fails.
+            OSError: If reading the message header or message fails.
         """
         ...
 
@@ -193,8 +206,27 @@ class EncryptedMessage:
 
         Raises:
             ValueError: If the file object is None or if parsing fails.
-            IOError: If reading the message header or message fails.
+            OSError: If reading the message header or message fails.
             TypeError: If the file object is not a file-like/path-like object.
+        """
+        ...
+
+    @classmethod
+    async def aread_from(cls, reader: AsyncReader, *, max_msg_size: int | None = None):
+        """
+        Read an EncryptedMessage asynchronously from an async reader.
+
+        Args:
+            reader: An async reader to read the framed ciphertext from.
+            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
+                          if the message size exceeds this limit.
+        Returns:
+            An instance of EncryptedMessage.
+
+        Raises:
+            ValueError: If the reader is None or if parsing fails.
+            OSError: If reading the message header or message fails.
+            TypeError: If the reader is not an async reader.
         """
         ...
 
@@ -243,9 +275,21 @@ class SecretBox:
             The encrypted message as bytes (not framed).
 
         Raises:
-            ValueError: If the plaintext is None, if the ciphertext is too short.
+            ValueError: If the plaintext is None.
             TypeError: if the out object does not support writing.
             EncryptException: If encryption fails.
+        """
+        ...
+
+    async def aencrypt(self, plaintext: bytes | Buffer, msg_id: int, out: AsyncWriter) -> None:
+        """
+        Encrypt the plaintext using the secretbox and message ID. Then write the framed ciphertext
+        to the provided async writer and drain it.
+
+        Args:
+            plaintext: The plaintext to encrypt.
+            msg_id: The message ID to associate with the encrypted message.
+            out: An async writer to write the framed encrypted ciphertext to.
         """
         ...
 
@@ -272,6 +316,18 @@ class SecretBox:
         """
         ...
 
+    async def adecrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int, out: AsyncWriter) -> None:
+        """
+        Decrypt the ciphertext using the secretbox and the message ID. Then write the plaintext
+        to the provided async writer and drain it.
+
+        Args:
+            ciphertext: The ciphertext to decrypt. Can be an EncryptedMessage or a bytes-like object.
+            msg_id: The message ID to verify against the ciphertext.
+            out: An async writer to write the decrypted plaintext to.
+        """
+        ...
+
     def encrypt_file(self, src: str | PathLike | BinaryIO, dst: str | PathLike | BinaryIO, chunk_size: int = 8192) -> int:
         """
         Encrypt a file-like/path-like object and write the ciphertext to another file-like object.
@@ -287,7 +343,7 @@ class SecretBox:
         Raises:
             ValueError: If the source or destination file objects are None.
             TypeError: If the source or destination file objects are not file-like/path-like objects.
-            IOError: If reading from the source file or writing to the destination file fails.
+            OSError: If reading from the source file or writing to the destination file fails.
             EncryptException: If encryption fails.
         """
         ...
@@ -306,7 +362,7 @@ class SecretBox:
         Raises:
             ValueError: If the source or destination file objects are None.
             TypeError: If the source or destination file objects are not file-like/path-like objects.
-            IOError: If reading from the source file or writing to the destination file fails.
+            OSError: If reading from the source file or writing to the destination file fails.
             DecryptException: If decryption fails.
         """
         ...

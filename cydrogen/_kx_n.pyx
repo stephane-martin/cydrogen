@@ -15,7 +15,10 @@ from ._secretbox cimport SecretBoxKey
 import base64
 
 
-KP_SIZE = sizeof(hydro_kx_keypair)
+KX_PAIR_SIZE = sizeof(hydro_kx_keypair)
+KX_N_PACKET1BYTES = hydro_kx_N_PACKET1BYTES
+KX_KK_PACKET1BYTES = hydro_kx_KK_PACKET1BYTES
+KX_KK_PACKET2BYTES = hydro_kx_KK_PACKET2BYTES
 
 
 cdef class Psk(BaseKey):
@@ -78,8 +81,8 @@ cdef class KxPublicKey:
         if kp is None:
             raise ValueError("pk cannot be None")
         if isinstance(kp, SafeMemory):
-            if len(kp) != KP_SIZE:
-                raise ValueError(f"safemem must be {KP_SIZE} bytes long")
+            if len(kp) != KX_PAIR_SIZE:
+                raise ValueError(f"safemem must be {KX_PAIR_SIZE} bytes long")
             self.kp = kp
             return
         cdef KxPublicKey other
@@ -94,7 +97,7 @@ cdef class KxPublicKey:
             raise ValueError(f"{hydro_kx_PUBLICKEYBYTES} bytes required for public key")
         # KxPublicKey holds memory for a full keypair to allow for easy initialization from a keypair
         # but in fact we will only store the public key part.
-        cdef SafeMemory mem = SafeMemory(KP_SIZE)
+        cdef SafeMemory mem = SafeMemory(KX_PAIR_SIZE)
         # treat the memory as a hydro_kx_keypair
         cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         # find the public key pointer in the keypair
@@ -133,8 +136,8 @@ cdef class KxSecretKey:
         if kp is None:
             raise ValueError("kp cannot be None")
         if isinstance(kp, SafeMemory):
-            if len(kp) != KP_SIZE:
-                raise ValueError(f"safemem must be {KP_SIZE} bytes long")
+            if len(kp) != KX_PAIR_SIZE:
+                raise ValueError(f"safemem must be {KX_PAIR_SIZE} bytes long")
             self.kp = kp
             return
         cdef KxSecretKey other
@@ -147,7 +150,7 @@ cdef class KxSecretKey:
         kp = bytes(kp)
         if len(kp) != hydro_kx_SECRETKEYBYTES:
             raise ValueError(f"{hydro_kx_SECRETKEYBYTES} bytes required for secret key")
-        cdef SafeMemory mem = SafeMemory(KP_SIZE)
+        cdef SafeMemory mem = SafeMemory(KX_PAIR_SIZE)
         cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         cdef uint8_t* dst = <uint8_t*>(kp_ptr.sk)
         cdef uint8_t* src = kp
@@ -184,8 +187,8 @@ cdef class KxPair:
             raise ValueError("kp cannot be None")
         if isinstance(kp, SafeMemory):
             # no need to allocate a new SafeMemory object
-            if len(kp) != KP_SIZE:
-                raise ValueError(f"safemem must be {KP_SIZE} bytes long")
+            if len(kp) != KX_PAIR_SIZE:
+                raise ValueError(f"safemem must be {KX_PAIR_SIZE} bytes long")
             self.kp = kp
             return
         cdef KxPair other
@@ -196,8 +199,8 @@ cdef class KxPair:
         if isinstance(kp, str):
             kp = base64.standard_b64decode(kp)
         kp = bytes(kp)
-        if len(kp) != KP_SIZE:
-            raise ValueError(f"{KP_SIZE} bytes required for keypair")
+        if len(kp) != KX_PAIR_SIZE:
+            raise ValueError(f"{KX_PAIR_SIZE} bytes required for keypair")
         self.kp = SafeMemory.from_buffer(kp)
 
     cdef hydro_kx_keypair* ptr(self):
@@ -272,7 +275,7 @@ cdef class KxPair:
         cdef KxPublicKey pk = KxPublicKey(public_key)
         cdef KxSecretKey sk = KxSecretKey(secret_key)
 
-        cdef SafeMemory mem = SafeMemory(KP_SIZE)
+        cdef SafeMemory mem = SafeMemory(KX_PAIR_SIZE)
         cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         memcpy(<uint8_t*>(kp_ptr.sk), sk.ptr(), hydro_kx_SECRETKEYBYTES)
         memcpy(<uint8_t*>(kp_ptr.pk), pk.ptr(), hydro_kx_PUBLICKEYBYTES)
