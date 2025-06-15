@@ -18,17 +18,31 @@ from ._exceptions import (
     VerifyException,
 )
 from ._hash import Hash, HashKey, hash_file
-from ._kx_n import KxKkClientState, KxPair, KxPublicKey, KxSecretKey, Psk, SessionPair, client_init_kx_n, server_finish_kx_n
+from ._kx_n import (
+    KX_KK_PACKET1BYTES,
+    KX_KK_PACKET2BYTES,
+    KX_N_PACKET1BYTES,
+    KX_PAIR_SIZE,
+    KxKkClientState,
+    KxPair,
+    KxPublicKey,
+    KxSecretKey,
+    Psk,
+    SessionPair,
+    client_init_kx_n,
+    server_finish_kx_n,
+)
 from ._masterkey import MasterKey
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
-from ._utils import load16, load32, load64, store16, store32, store64
+from ._utils import Counter, load16, load32, load64, store16, store32, store64
 
 __all__ = [
     "random_u32",
     "random_uniform",
     "randomize_buffer",
     "gen_random_buffer",
+    "Counter",
     "CyException",
     "BaseException",
     "EncryptException",
@@ -69,6 +83,10 @@ __all__ = [
     "client_init_kx_n",
     "server_finish_kx_n",
     "KxKkClientState",
+    "KX_N_PACKET1BYTES",
+    "KX_KK_PACKET1BYTES",
+    "KX_KK_PACKET2BYTES",
+    "KX_PAIR_SIZE",
 ]
 
 

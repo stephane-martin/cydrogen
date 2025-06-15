@@ -7,10 +7,28 @@ from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
 
+import asyncio
 import io
 import os
 import pathlib
 import tempfile
+import threading
+
+
+cdef class Counter:
+    def __init__(self):
+        self.count = 1
+        self.lock = threading.Lock()
+
+    cpdef uint64_t value(self) noexcept:
+        cdef uint64_t val = 0
+        with self.lock:
+            val = self.count
+            self.count += 2
+            return val
+
+    def __call__(self):
+        return self.value()
 
 
 cdef class SafeMemory:
@@ -83,8 +101,7 @@ cdef class SafeMemory:
     cpdef writeto(self, out):
         if out is None:
             raise ValueError("Output cannot be None")
-        cdef SafeWriter w = SafeWriter(out)
-        return w.write(self)
+        return make_safe_writer(out).write(self)
 
     @classmethod
     def read_from(cls, reader, size_t size):
@@ -94,8 +111,7 @@ cdef class SafeMemory:
         if size == 0:
             mem.mark_readonly()
             return mem
-        cdef SafeReader r = SafeReader(reader)
-        cdef size_t n = r.readinto(mem)
+        cdef size_t n = make_safe_reader(reader).readinto(mem)
         if n < size:
             raise ValueError(f"Expected to read {size} bytes, but got {n} bytes")
         mem.mark_readonly()
@@ -147,7 +163,7 @@ cpdef load64(const unsigned char[:] src):
 
 
 cpdef store64(unsigned char[:] dst, uint64_t src):
-    if len(dst) < 4:
+    if len(dst) < 8:
         raise ValueError(f"dst must be 8 bytes long, got {len(dst)} bytes")
     _store64(dst, src)
 
@@ -224,7 +240,7 @@ cdef class SafeReader:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeReader, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = isinstance(fileobj, (SafeReader, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
+        self.direct = reader_is_buffered(fileobj)
         self.has_readinto = hasattr(fileobj, "readinto")
 
     cpdef readinto(self, unsigned char[:] buf):
@@ -278,6 +294,39 @@ cdef class SafeReader:
         return bytes(result[0:offset])
 
 
+cdef class AsyncSafeReader:
+    def __init__(self, reader):
+        if reader is None:
+            raise ValueError("reader cannot be None")
+        if not hasattr(reader, "read"):
+            raise TypeError("reader must be a file-like object with a 'read' method")
+        if not asyncio.iscoroutinefunction(reader.read):
+            raise TypeError("reader must be an async file-like object with an 'read' method")
+        self.has_readexactly = hasattr(reader, "readexactly") and asyncio.iscoroutinefunction(reader.readexactly)
+        self.reader = reader
+
+    async def readexactly(self, size_t length):
+        # Read exactly n bytes.
+        # Raise EOFError if EOF is reached before n can be read
+        # returns the bytes read
+        if length == 0:
+            return b""
+        if self.has_readexactly:
+            return await self.reader.readexactly(length)
+        cdef bytearray result = bytearray(length)
+        cdef size_t offset = 0
+        cdef bytes tmp
+        cdef const unsigned char[:] view
+        while offset < length:
+            tmp = await self.reader.read(length - offset)
+            if len(tmp) == 0:
+                raise EOFError("EOF reached before reading the requested number of bytes")
+            view = tmp
+            result[offset:offset + len(tmp)] = view[0:len(tmp)]
+            offset += len(tmp)
+        return bytes(result)
+
+
 cdef class SafeWriter:
     def __init__(self, fileobj):
         if fileobj is None:
@@ -287,7 +336,7 @@ cdef class SafeWriter:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeWriter, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = isinstance(fileobj, (SafeWriter, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
+        self.direct = writer_is_buffered(fileobj)
 
     cpdef write(self, const unsigned char[:] buf):
         if buf is None:
@@ -305,15 +354,40 @@ cdef class SafeWriter:
         return length
 
 
+cdef reader_is_buffered(fileobj):
+    return isinstance(fileobj, (SafeReader, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
+
+
+cdef writer_is_buffered(fileobj):
+    return isinstance(fileobj, (SafeWriter, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
+
+
+cdef make_safe_reader(fileobj):
+    if reader_is_buffered(fileobj):
+        return fileobj
+    return SafeReader(fileobj)
+
+cdef make_async_safe_reader(reader):
+    if isinstance(reader, (AsyncSafeReader, asyncio.StreamReader)):
+        return reader
+    return AsyncSafeReader(reader)
+
+
+cdef make_safe_writer(fileobj):
+    if writer_is_buffered(fileobj):
+        return fileobj
+    return SafeWriter(fileobj)
+
+
 cdef class TeeWriter:
     def __init__(self, w1, w2):
         # wrap the writers in SafeWriter to ensure they both write the same number of bytes
-        self.w1 = SafeWriter(w1)
-        self.w2 = SafeWriter(w2)
+        self.w1 = make_safe_writer(w1)
+        self.w2 = make_safe_writer(w2)
 
     cpdef write(self, const unsigned char[:] buf):
         cdef size_t n1 = self.w1.write(buf)
         cdef size_t n2 = self.w2.write(buf[0:n1])
         if n1 != n2:
-            raise IOError("Writers did not write the same number of bytes")
+            raise OSError("Writers did not write the same number of bytes")
         return n1

@@ -19,6 +19,7 @@ cdef make_secretbox_key(key)
 cdef class EncryptedMessage:
     cdef readonly bytes ciphertext
     cdef readonly uint64_t msg_id
+    cdef header(self)
     cpdef writeto(self, fileobj)
     cpdef decrypt(self, key, ctx=*, out=*)
 

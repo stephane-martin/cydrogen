@@ -12,7 +12,7 @@ from ._exceptions cimport DecryptException, EncryptException
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
-from ._utils cimport FileOpener, SafeMemory, SafeReader, SafeWriter, TeeWriter
+from ._utils cimport FileOpener, SafeMemory, TeeWriter, make_safe_reader, make_safe_writer, make_async_safe_reader
 from ._utils cimport store64, load64, store32, load32
 
 from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
@@ -85,10 +85,16 @@ cdef class EncryptedMessage:
         self.ciphertext = bytes(ctext)
         self.msg_id = msg_id
 
+    cdef header(self):
+        cdef bytearray header = bytearray(4 + 8 + 8)
+        header[0:4] = _ENC_MSG_HEADER
+        cdef unsigned char[:] header_view = header
+        store64(header_view[4:12], len(self.ciphertext))
+        store64(header_view[12:20], self.msg_id)
+        return header
+
     def __bytes__(self):
-        w = io.BytesIO()
-        self.writeto(w)
-        return w.getvalue()
+        return bytes(self.header()) + self.ciphertext
 
     def __eq__(self, other):
         if other is None:
@@ -104,19 +110,18 @@ cdef class EncryptedMessage:
         if out is None:
             raise ValueError("File object cannot be None")
 
-        cdef bytearray header = bytearray(4 + 8 + 8)
-        header[0:4] = _ENC_MSG_HEADER
-        cdef unsigned char[:] header_view = header
-        store64(header_view[4:12], len(self.ciphertext))
-        store64(header_view[12:20], self.msg_id)
-
-        cdef SafeWriter w = SafeWriter(out)
-        cdef size_t n_written = w.write(header)
-        n_written += w.write(self.ciphertext)
-        cdef size_t expected_size = len(header) + len(self.ciphertext)
-        if n_written < expected_size:
-            raise IOError("Failed to write the entire message to the file object")
+        w = make_safe_writer(out)
+        n_written = w.write(self.header()) + w.write(self.ciphertext)
+        if n_written < (20 + len(self.ciphertext)):
+            raise OSError("Failed to write the entire message to the file object")
         return n_written
+
+    async def awriteto(self, out):
+        if out is None:
+            raise ValueError("File object cannot be None")
+        out.write(self.header())
+        out.write(self.ciphertext)
+        await out.drain()
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed):
@@ -128,11 +133,11 @@ cdef class EncryptedMessage:
     def read_from(cls, reader, *, max_msg_size=None):
         if reader is None:
             raise ValueError("File object cannot be None")
-        cdef SafeReader r = SafeReader(reader)
+        r = make_safe_reader(reader)
 
         cdef bytearray header_buf = bytearray(20)
         if r.readinto(header_buf) < 20U:
-            raise IOError("Failed to read next message header")
+            raise OSError("Failed to read next message header")
         if header_buf[:4] != _ENC_MSG_HEADER:
             raise ValueError("Invalid message header")
         cdef size_t msg_size = load64(header_buf[4:12])
@@ -142,7 +147,29 @@ cdef class EncryptedMessage:
         cdef uint64_t msg_id = load64(header_buf[12:20])
         cdef bytearray msg = bytearray(msg_size)
         if r.readinto(msg) != msg_size:
-            raise IOError("Failed to read the entire message")
+            raise OSError("Failed to read the entire message")
+        return cls(msg, msg_id)
+
+    @classmethod
+    async def aread_from(cls, reader, *, max_msg_size=None):
+        if reader is None:
+            raise ValueError("File object cannot be None")
+        r = make_async_safe_reader(reader)
+        try:
+            header_buf = await r.readexactly(20)
+        except EOFError as ex:
+            raise OSError("Failed to read next message header") from ex
+        if header_buf[:4] != _ENC_MSG_HEADER:
+            raise ValueError("Invalid message header")
+        cdef size_t msg_size = load64(header_buf[4:12])
+        if max_msg_size is not None:
+            if msg_size > <size_t>max_msg_size:
+                raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
+        cdef uint64_t msg_id = load64(header_buf[12:20])
+        try:
+            msg = await r.readexactly(msg_size)
+        except EOFError as ex:
+            raise OSError("Failed to read the entire message") from ex
         return cls(msg, msg_id)
 
     cpdef decrypt(self, key, ctx=None, out=None):
@@ -158,11 +185,17 @@ cdef class SecretBox:
         self.key = make_secretbox_key(key)
         self.ctx = make_context(ctx)
 
+    async def aencrypt(self, const unsigned char[:] plaintext, uint64_t msg_id, out):
+        if out is None:
+            raise ValueError("Output stream writer cannot be None")
+        ciphertext = self.encrypt(plaintext, msg_id=msg_id)
+        await EncryptedMessage(ciphertext, msg_id).awriteto(out)
+
     cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, out=None):
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
         if out is not None:
-            SafeWriter(out)  # ensure out is a file-like object
+            make_safe_writer(out)  # ensure out is a file-like object
         cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
         try:
             secretbox_encrypt(plaintext, msg_id, self.ctx, self.key, ciphertext)
@@ -177,12 +210,16 @@ cdef class SecretBox:
             msg.writeto(out)
         return msg.ciphertext
 
+    async def adecrypt(self, ciphertext, uint64_t msg_id, out):
+        if out is None:
+            raise ValueError("Output stream writer cannot be None")
+        plaintext = self.decrypt(ciphertext, msg_id=msg_id)
+        out.write(plaintext)
+        await out.drain()
+
     cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None):
         if ciphertext is None:
             raise ValueError("Ciphertext cannot be None")
-        cdef SafeWriter w
-        if out is not None:
-            w = SafeWriter(out)
 
         if isinstance(ciphertext, EncryptedMessage):
             _id = ciphertext.msg_id
@@ -202,7 +239,7 @@ cdef class SecretBox:
         except Exception as ex:
             raise DecryptException("Decryption failed") from ex
         if out is not None:
-            w.write(plaintext)
+            make_safe_writer(out).write(plaintext)
         return bytes(plaintext)
 
     cpdef encrypt_file(self, src, dst, size_t chunk_size=8192):
@@ -216,8 +253,7 @@ cdef class SecretBox:
             raise ValueError("Source and destination file objects cannot be None")
         if chunk_size <= hydro_secretbox_HEADERBYTES:
             raise ValueError("Chunk size must be greater than the header size")
-        SafeReader(fileobj)  # ensure fileobj is a reader
-        cdef SafeWriter w = SafeWriter(out)
+        w = make_safe_writer(out)
         cdef Hash hasher = Hash(ctx=self.ctx, key=bytes(self.key))
         cdef uint64_t total_bytes_written = 0
         cdef bytearray buf = bytearray(chunk_size - hydro_secretbox_HEADERBYTES)     # the buffer used to read a chunk of the file
@@ -265,11 +301,11 @@ cdef class SecretBox:
         cdef bytes transmitted_hash
         cdef bytes computed_hash
 
-        cdef SafeReader r = SafeReader(fileobj)
-        cdef SafeWriter w = SafeWriter(out)
+        r = make_safe_reader(fileobj)
+        w = make_safe_writer(out)
 
         if (<uint32_t>r.readinto(sbuf)) != 8U:
-            raise IOError("Failed to read max buffer size")
+            raise OSError("Failed to read max buffer size")
         if sbuf[:4] != _ENC_MSG_HEADER:
             raise ValueError("Invalid message header")
         max_buf_size = load32(sbuf[4:8])
@@ -278,7 +314,7 @@ cdef class SecretBox:
         while True:
             try:
                 enc_msg = EncryptedMessage.read_from(r, max_msg_size=max_buf_size)
-            except IOError as ex:
+            except OSError as ex:
                 # we have reached the end of the file without having seen the hash
                 raise DecryptException("final hash not found")
             if enc_msg.msg_id == 0:

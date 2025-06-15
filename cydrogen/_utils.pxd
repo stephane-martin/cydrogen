@@ -39,6 +39,13 @@ cdef extern from "cyutils.h" nogil:
     int cyd_is_big_endian()
 
 
+cdef class Counter:
+    cdef uint64_t count
+    cdef object lock
+
+    cpdef uint64_t value(self) noexcept
+
+
 cdef class SafeMemory:
     cdef bint readonly_protected
     cdef void *ptr
@@ -78,6 +85,10 @@ cdef class SafeReader:
     cpdef readinto(self, unsigned char[:] buf)
     cpdef read(self, size_t length=*)
 
+cdef class AsyncSafeReader:
+    cdef object reader
+    cdef bint has_readexactly
+
 
 cdef class SafeWriter:
     cdef object fileobj
@@ -86,6 +97,11 @@ cdef class SafeWriter:
 
 
 cdef class TeeWriter:
-    cdef SafeWriter w1
-    cdef SafeWriter w2
+    cdef object w1
+    cdef object w2
     cpdef write(self, const unsigned char[:] buf)
+
+
+cdef make_safe_reader(fileobj)
+cdef make_async_safe_reader(reader)
+cdef make_safe_writer(fileobj)

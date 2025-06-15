@@ -157,6 +157,7 @@ def test_encrypt_decrypt_file():
     key = cydrogen.SecretBoxKey(KEY_BYTES)
     box = cydrogen.SecretBox(key)
 
+    tempfile.NamedTemporaryFile
     with tempfile.TemporaryFile() as fobj_plain, tempfile.TemporaryFile() as fobj_enc, tempfile.TemporaryFile() as fobj_dec:
         # write our plain text file
         fobj_plain.write(buf)
