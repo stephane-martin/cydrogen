@@ -58,6 +58,7 @@ def test_kx_kk() -> None:
     server_pair: cydrogen.KxPair = cydrogen.KxPair.gen()
     s = client_pair.client_init_kx_kk(server_pair.public_key())
     server_session_pair, packet2 = server_pair.server_process_kx_kk(client_pair.public_key(), s.packet1)
-    client_session_pair = s.client_finish_kx_kk(packet2)
-    assert client_session_pair.rx == server_session_pair.tx
-    assert client_session_pair.tx == server_session_pair.rx
+    s.client_finish_kx_kk(packet2)
+    assert s.session_pair is not None
+    assert s.session_pair.rx == server_session_pair.tx
+    assert s.session_pair.tx == server_session_pair.rx

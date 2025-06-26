@@ -36,6 +36,9 @@ cdef extern from "hydrogen.h" nogil:
     const int hydro_kx_SEEDBYTES
     const int hydro_kx_KK_PACKET1BYTES
     const int hydro_kx_KK_PACKET2BYTES
+    const int hydro_kx_XX_PACKET1BYTES
+    const int hydro_kx_XX_PACKET2BYTES
+    const int hydro_kx_XX_PACKET3BYTES
 
 
 cdef extern from "hydrogen.h" nogil:
@@ -176,6 +179,34 @@ cdef extern from "hydrogen.h" nogil:
         const uint8_t packet2[hydro_kx_KK_PACKET2BYTES],
         const hydro_kx_keypair *static_kp)
 
+    int hydro_kx_xx_1(
+        hydro_kx_state *state,
+        uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES])
+
+    int hydro_kx_xx_2(
+        hydro_kx_state *state,
+        uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+        const uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES],
+        const hydro_kx_keypair *static_kp)
+
+    int hydro_kx_xx_3(
+        hydro_kx_state *state,
+        hydro_kx_session_keypair *kp,
+        uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
+        uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+        const uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES],
+        const hydro_kx_keypair *static_kp)
+
+    int hydro_kx_xx_4(
+        hydro_kx_state *state,
+        hydro_kx_session_keypair *kp,
+        uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+        const uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
+        const uint8_t psk[hydro_kx_PSKBYTES])
+
 
 cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES])
 cdef basekey_memzero(uint8_t* key)
@@ -250,6 +281,12 @@ cpdef shuffle_buffer(unsigned char[:] buf)
 
 cdef kx_n_1(const unsigned char[:] peer_public_key, const unsigned char[:] psk)
 cdef kx_n_2(const unsigned char[:] packet1, const unsigned char[:] psk, const unsigned char[:] static_kp)
+
 cdef kx_kk_1(hydro_kx_state* state, const unsigned char[:] peer_public_key, const unsigned char[:] client_kp)
 cdef kx_kk_2(const unsigned char[:] packet1, const unsigned char[:] client_public_key, const unsigned char[:] server_kp)
 cdef kx_kk_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsigned char[:] client_kp)
+
+cdef kx_xx_1(hydro_kx_state* state, const unsigned char[:] psk)
+cdef kx_xx_2(hydro_kx_state* state, const unsigned char[:] packet1, const unsigned char[:] psk, const unsigned char[:] static_kp)
+cdef kx_xx_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsigned char[:] psk, const unsigned char[:] static_kp)
+cdef kx_xx_4(hydro_kx_state* state, const unsigned char[:] packet3, const unsigned char[:] psk)

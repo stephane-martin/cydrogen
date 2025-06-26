@@ -7,12 +7,15 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Buffer, Coroutine, Iterator
-from typing import BinaryIO, Self, TypeVar
+from typing import Awaitable, BinaryIO, Callable, Self, TypeVar
 
 from cydrogen import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
     KX_N_PACKET1BYTES,
+    KX_XX_PACKET1BYTES,
+    KX_XX_PACKET2BYTES,
+    KX_XX_PACKET3BYTES,
     Counter,
     DecryptException,
     EncryptedMessage,
@@ -40,9 +43,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
     """
     KX_N_TCPHandler provides a handler to build a TCP server.
 
-    The TCP server owns a key pair for key exchange variant N. The client
-    authenticates the server using the server's public key, and generates
-    session keys to secure the communication channel.
+    Subclasses must implement the handle_message() method to define how to process incoming messages.
     """
 
     def __init__(self, request, client_address, server: "KX_N_TCPServer") -> None:
@@ -128,7 +129,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
     def handle_message(self, msg: bytes, msg_id: int) -> bool:
         raise NotImplementedError()
 
-    def write(self, msg: Buffer, msg_id: int = 1):
+    def write(self, msg: Buffer, *, msg_id: int = 1):
         with self._write_lock:
             self.tbox.encrypt(msg, msg_id=msg_id, out=self.wfile)
             self.wfile.flush()
@@ -136,10 +137,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
 
 class KX_N_TCPServer(socketserver.ThreadingTCPServer):
     """
-    EncryptedTCPServer provides a TCP server that uses the EncryptedTCPHandler.
-
-    The server is initialized with a key pair for key exchange variant N and an optional
-    pre-shared key (PSK) for additional security.
+    KX_N_TCPServer provides a threading TCP server with key exchange variant N.
     """
 
     def __init__(self, addr: tuple[str, int], server_keys: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None):
@@ -279,7 +277,7 @@ class AsyncHandler(ABC):
         self._pending_msg_tasks: PendingProcessingTasks = PendingProcessingTasks()  # to keep track of pending tasks
         self._stop_event = asyncio.Event()  # to signal when the handler should stop processing messages
 
-    async def write(self, msg: Buffer, msg_id: int = 1) -> None:
+    async def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
         # write should be called by handle_message() to reply to the client
         # we interrupt the write operation if stop_event is set
         await do_before_event(
@@ -297,7 +295,7 @@ class AsyncHandler(ABC):
                     # stop the loop, whatever the reason
                     return
                 # if the message is a cancel message, we handle it separately
-                if self.if_cancel_message(msg, msg_id):
+                if self._if_cancel_message(msg, msg_id):
                     continue  # it was a cancel message, do not handle it further and let the loop continue
                 # process the message in the background
                 self._process_msg_background(msg, msg_id)  # no await!
@@ -336,18 +334,13 @@ class AsyncHandler(ABC):
             return wrong
         try:
             msg = self.rbox.decrypt(emsg)  # warning, maybe TODO: this is a CPU bound operation, should we use a thread pool executor?
+            return msg, emsg.msg_id, True
         except DecryptException as e:
             self._stop_event.set()
             logger.error(f"Decryption failed, closing connection: {e}")
             return wrong
-        await asyncio.sleep(0)  # yield control to the event loop to give a chance to set stop_event
-        if self._stop_event.is_set():
-            logger.info("Stopping client handling read loop")
-            return wrong
 
-        return msg, emsg.msg_id, True
-
-    def if_cancel_message(self, msg: bytes, msg_id: int) -> bool:
+    def _if_cancel_message(self, msg: bytes, msg_id: int) -> bool:
         if msg_id != CANCEL_MESSAGE_ID:
             return False
         msg_id_to_cancel = load64(msg)
@@ -503,6 +496,37 @@ class KX_KK_AsyncTCPServer(BaseAsyncTCPServer):
         return session_pair
 
 
+class KX_XX_AsyncTCPServer(BaseAsyncTCPServer):
+    def __init__(self, addr: tuple[str, int], handler_class: type[AsyncHandler], server_pair: KxPair, *, psk: Psk | None = None):
+        super().__init__(addr, handler_class)
+        self.server_pair: KxPair = server_pair
+        self.psk: Psk | None = psk
+
+    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
+        # read packet1 from the client, expected length is KX_XX_PACKET1BYTES
+        packet1 = await reader.readexactly(KX_XX_PACKET1BYTES)
+        st = self.server_pair.server_process_kx_xx(packet1, self.psk)
+        # send packet2 to the client
+        writer.write(st.packet2)
+        await writer.drain()
+        # read packet3 from the client, expected length is KX_XX_PACKET3BYTES
+        packet3 = await reader.readexactly(KX_XX_PACKET3BYTES)
+        # calculate the session keys
+        st.server_finish_kx_xx(packet3)
+        assert st.session_pair is not None
+        assert st.client_public_key is not None
+        try:
+            await self.validate_client_public_key(st.client_public_key)
+        except Exception as ex:
+            raise KeyExchangeException("Client public key validation failed") from ex
+        # send OK message to the client
+        await SecretBox(st.session_pair.tx).aencrypt(OK_MESSAGE, 0, out=writer)
+        return st.session_pair
+
+    async def validate_client_public_key(self, client_public_key: KxPublicKey) -> None:
+        logger.info(f"discovered client public key: {client_public_key}")
+
+
 class KX_N_TCPClient:
     """
     EncryptedTCPClient provides a client to connect to a TCP server using key exchange variant N.
@@ -510,7 +534,7 @@ class KX_N_TCPClient:
     The client uses the server's public key to authenticate the server and generate session keys.
     """
 
-    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, psk: Psk | None = None):
+    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, *, psk: Psk | None = None):
         self.server_address: tuple[str, int] = server_address
         self.server_public_key: KxPublicKey = server_public_key
         self.psk: Psk | None = psk
@@ -527,7 +551,7 @@ class KX_N_TCPClient:
         self.read_lock = threading.Lock()
         self.write_lock = threading.Lock()
 
-    def connect(self, retry: int = -1) -> None:
+    def connect(self, *, retry: int = -1) -> None:
         if self.connected:
             raise RuntimeError("Client is already connected")
         if not self.closed:
@@ -569,7 +593,7 @@ class KX_N_TCPClient:
         if ack != OK_MESSAGE:
             raise KeyExchangeException("Server did not respond with 'OK' after sending packet1")
 
-    def write(self, msg: Buffer, msg_id: int = 1):
+    def write(self, msg: Buffer, *, msg_id: int = 1):
         if not self.connected or self.wfile is None or self.closed or self.session_pair is None:
             raise RuntimeError("Client is not connected. Call connect() before writing.")
         if not msg:
@@ -804,20 +828,20 @@ class BaseAsyncTCPClient(ABC):
 
 
 class KX_N_AsyncTCPClient(BaseAsyncTCPClient):
-    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, psk: Psk | None = None):
+    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, *, psk: Psk | None = None):
         super().__init__(server_address)
         self.server_public_key: KxPublicKey = server_public_key
         self.psk: Psk | None = psk
 
     async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
+        session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
         writer.write(packet1)
         await writer.drain()
         emsg: EncryptedMessage = await EncryptedMessage.aread_from(reader)
-        ack: bytes = emsg.decrypt(pair.rx)
+        ack: bytes = emsg.decrypt(session_pair.rx)
         if ack != OK_MESSAGE:
             raise KeyExchangeException("Server did not respond with 'OK' after sending packet1")
-        return pair
+        return session_pair
 
 
 class KX_KK_AsyncTCPClient(BaseAsyncTCPClient):
@@ -835,7 +859,53 @@ class KX_KK_AsyncTCPClient(BaseAsyncTCPClient):
         # read the server's response: expected KX_KK_PACKET2BYTES
         packet2 = await reader.readexactly(KX_KK_PACKET2BYTES)
         # finish the key exchange
-        return st.client_finish_kx_kk(packet2)
+        st.client_finish_kx_kk(packet2)
+        assert st.session_pair is not None
+        return st.session_pair
+
+
+class KX_XX_AsyncTCPClient(BaseAsyncTCPClient):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        client_pair: KxPair,
+        *,
+        psk: Psk | None = None,
+        validate_server_public_key: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = None,
+    ):
+        super().__init__(server_address)
+        self.client_pair: KxPair = client_pair
+        self.psk: Psk | None = psk
+        self._validate_func: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = validate_server_public_key
+
+    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
+        st = self.client_pair.client_init_kx_xx(self.psk)
+        writer.write(st.packet1)
+        await writer.drain()
+        # read the server's response: expected KX_XX_PACKET2BYTES
+        packet2 = await reader.readexactly(KX_XX_PACKET2BYTES)
+        # continue the key exchange
+        st.client_process_kx_xx(packet2)
+        # send the final packet to the server
+        writer.write(st.packet3)
+        await writer.drain()
+        assert st.session_pair is not None
+        assert st.server_public_key is not None
+        try:
+            await self.validate_server_public_key(st.server_public_key)
+        except Exception as ex:
+            raise KeyExchangeException("Server public key validation failed") from ex
+        emsg: EncryptedMessage = await EncryptedMessage.aread_from(reader)
+        ack: bytes = emsg.decrypt(st.session_pair.rx)
+        if ack != OK_MESSAGE:
+            raise KeyExchangeException("Server did not respond with 'OK' after sending packet3")
+        return st.session_pair
+
+    async def validate_server_public_key(self, server_public_key: KxPublicKey):
+        logger.info(f"discovered server public key: {server_public_key}")
+        if self._validate_func is not None:
+            # if a validation function is provided, call it
+            await self._validate_func(self, server_public_key)
 
 
 class _AsyncClientIterator:
@@ -874,14 +944,14 @@ REQUEST_CANCELLED_ERROR = asyncio.CancelledError("Client connection closed, requ
 
 
 class BaseAsyncRequestResponseClient:
-    def __init__(self, client: BaseAsyncTCPClient, request_timeout_secs: int | None = 30):
+    def __init__(self, client: BaseAsyncTCPClient, *, request_timeout_secs: int | None = 30):
         self._client: BaseAsyncTCPClient = client
         self._counter = Counter()
         self._pending_requests: dict[int, asyncio.Future] = {}
         self._read_task: asyncio.Task | None = None
         self._request_timeout_secs = request_timeout_secs
 
-    async def connect(self, retry: int = -1) -> None:
+    async def connect(self, *, retry: int = -1) -> None:
         await self._client.connect(retry=retry)
         if self._read_task is None:
             self._read_task = asyncio.create_task(self._read_responses())
@@ -911,7 +981,7 @@ class BaseAsyncRequestResponseClient:
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.close()
 
-    async def request(self, msg: Buffer, timeout_secs: int | None = None) -> bytes:
+    async def request(self, msg: Buffer, *, timeout_secs: int | None = None) -> bytes:
         timeout_secs = timeout_secs if timeout_secs is not None else self._request_timeout_secs
         if self._read_task is None:
             raise RuntimeError("Client is not connected. Call connect() before making requests.")
@@ -978,12 +1048,18 @@ class BaseAsyncRequestResponseClient:
                     # get the future associated with this msg_id
                     # we assume that the server sends the response with the request 'msg_id', using the same msg_id
                     fut = self._pending_requests.pop(msg_id)
+                    fut.set_result(msg)
                 except KeyError:
-                    logger.warning(f"Received response with unknown msg_id {msg_id}, ignoring")
-                fut.set_result(msg)
+                    await self.handle_unexpected_response(msg, msg_id)
         finally:
             # if the read loop unexpectedly exits, be sure to close the client
             await self.close()
+
+    async def handle_unexpected_response(self, msg: bytes, msg_id: int) -> None:
+        # this method is called when the client receives a response with an unknown msg_id
+        # you can override this method to handle unexpected responses
+        # by default, we just ignore it
+        logger.warning(f"Unexpected response received with msg_id {msg_id}")
 
 
 class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
@@ -995,7 +1071,7 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         psk: Psk | None = None,
         request_timeout_secs: int | None = 30,
     ):
-        client = KX_N_AsyncTCPClient(server_address, server_public_key, psk)
+        client = KX_N_AsyncTCPClient(server_address, server_public_key, psk=psk)
         super().__init__(client, request_timeout_secs=request_timeout_secs)
 
 
@@ -1005,9 +1081,24 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         server_address: tuple[str, int],
         client_pair: KxPair,
         server_public_key: KxPublicKey,
+        *,
         request_timeout_secs: int | None = 30,
     ):
         client = KX_KK_AsyncTCPClient(server_address, client_pair, server_public_key)
+        super().__init__(client, request_timeout_secs=request_timeout_secs)
+
+
+class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        client_pair: KxPair,
+        *,
+        psk: Psk | None = None,
+        request_timeout_secs: int | None = 30,
+        validate_server_public_key: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = None,
+    ):
+        client = KX_XX_AsyncTCPClient(server_address, client_pair, psk=psk, validate_server_public_key=validate_server_public_key)
         super().__init__(client, request_timeout_secs=request_timeout_secs)
 
 
