@@ -494,3 +494,137 @@ cdef kx_kk_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsign
     tx = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(session_ptr.tx), hydro_kx_SESSIONKEYBYTES, PyBUF_READ))
 
     return rx, tx
+
+
+# int hydro_kx_xx_1(
+#   hydro_kx_state *state,
+#   uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+#   const uint8_t psk[hydro_kx_PSKBYTES])
+
+cdef kx_xx_1(hydro_kx_state* state, const unsigned char[:] psk):
+    if psk is not None and len(psk) != hydro_kx_PSKBYTES:
+        raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
+
+    cdef bytearray packet1 = bytearray(hydro_kx_XX_PACKET1BYTES)
+    cdef uint8_t* packet1_ptr = packet1
+    cdef const uint8_t* psk_ptr = NULL
+    if psk is not None:
+        psk_ptr = &psk[0]
+
+    cdef int ret = hydro_kx_xx_1(state, packet1_ptr, psk_ptr)
+    if ret != 0:
+        raise RuntimeError("Failed to generate packet1 for key exchange xx")
+
+    return bytes(packet1)
+
+# int hydro_kx_xx_2(
+#   hydro_kx_state *state,
+#   uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+#   const uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+#   const uint8_t psk[hydro_kx_PSKBYTES],
+#   const hydro_kx_keypair *static_kp)
+
+cdef kx_xx_2(hydro_kx_state* state, const unsigned char[:] packet1, const unsigned char[:] psk, const unsigned char[:] static_kp):
+    if packet1 is None:
+        raise ValueError("Packet1 cannot be None")
+    if len(packet1) != hydro_kx_XX_PACKET1BYTES:
+        raise ValueError(f"Packet1 must be {hydro_kx_XX_PACKET1BYTES} bytes long")
+    if psk is not None and len(psk) != hydro_kx_PSKBYTES:
+        raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
+    if static_kp is None:
+        raise ValueError("Static keypair cannot be None")
+    if len(static_kp) != sizeof(hydro_kx_keypair):
+        raise ValueError("Static keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
+
+    cdef bytearray packet2 = bytearray(hydro_kx_XX_PACKET2BYTES)
+    cdef uint8_t* packet2_ptr = packet2
+    cdef const uint8_t* packet1_ptr = &packet1[0]
+    cdef const uint8_t* psk_ptr = NULL
+    if psk is not None:
+        psk_ptr = &psk[0]
+    cdef const hydro_kx_keypair* static_kp_ptr = <const hydro_kx_keypair*>(<const void*>(&static_kp[0]))
+
+    cdef int ret = hydro_kx_xx_2(state, packet2_ptr, packet1_ptr, psk_ptr, static_kp_ptr)
+    if ret != 0:
+        raise RuntimeError("Failed to generate packet2 for key exchange xx")
+
+    return bytes(packet2)
+
+# int hydro_kx_xx_3(
+#   hydro_kx_state *state,
+#   hydro_kx_session_keypair *kp,
+#   uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
+#   uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+#   const uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+#   const uint8_t psk[hydro_kx_PSKBYTES],
+#   const hydro_kx_keypair *static_kp)
+
+cdef kx_xx_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsigned char[:] psk, const unsigned char[:] static_kp):
+    if packet2 is None:
+        raise ValueError("Packet2 cannot be None")
+    if len(packet2) != hydro_kx_XX_PACKET2BYTES:
+        raise ValueError(f"Packet2 must be {hydro_kx_XX_PACKET2BYTES} bytes long")
+    if psk is not None and len(psk) != hydro_kx_PSKBYTES:
+        raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
+    if static_kp is None:
+        raise ValueError("Static keypair cannot be None")
+    if len(static_kp) != sizeof(hydro_kx_keypair):
+        raise ValueError("Static keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
+
+    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
+    cdef bytearray packet3 = bytearray(hydro_kx_XX_PACKET3BYTES)
+    cdef uint8_t* packet3_ptr = packet3
+    cdef SafeMemory peer_static_pk = SafeMemory(hydro_kx_PUBLICKEYBYTES)
+    cdef uint8_t* peer_static_pk_ptr = <uint8_t*>(peer_static_pk.ptr)
+    cdef const uint8_t* packet2_ptr = &packet2[0]
+    cdef const uint8_t* psk_ptr = NULL
+    if psk is not None:
+        psk_ptr = &psk[0]
+    cdef const hydro_kx_keypair* static_kp_ptr = <const hydro_kx_keypair*>(<const void*>(&static_kp[0]))
+
+    cdef int ret = hydro_kx_xx_3(state, session_ptr, packet3_ptr, peer_static_pk_ptr, packet2_ptr, psk_ptr, static_kp_ptr)
+    if ret != 0:
+        raise RuntimeError("Failed to generate packet3 for key exchange xx")
+
+    rx = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(session_ptr.rx), hydro_kx_SESSIONKEYBYTES, PyBUF_READ))
+    tx = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(session_ptr.tx), hydro_kx_SESSIONKEYBYTES, PyBUF_READ))
+    peer_pk = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(peer_static_pk_ptr), hydro_kx_PUBLICKEYBYTES, PyBUF_READ))
+
+    return rx, tx, peer_pk, bytes(packet3)
+
+
+# int hydro_kx_xx_4(
+#   hydro_kx_state *state,
+#   hydro_kx_session_keypair *kp,
+#   uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+#   const uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
+#   const uint8_t psk[hydro_kx_PSKBYTES]
+
+
+cdef kx_xx_4(hydro_kx_state* state, const unsigned char[:] packet3, const unsigned char[:] psk):
+    if packet3 is None:
+        raise ValueError("Packet3 cannot be None")
+    if len(packet3) != hydro_kx_XX_PACKET3BYTES:
+        raise ValueError(f"Packet3 must be {hydro_kx_XX_PACKET3BYTES} bytes long")
+    if psk is not None and len(psk) != hydro_kx_PSKBYTES:
+        raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
+
+    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
+    cdef SafeMemory peer_static_pk = SafeMemory(hydro_kx_PUBLICKEYBYTES)
+    cdef uint8_t* peer_static_pk_ptr = <uint8_t*>(peer_static_pk.ptr)
+    cdef const uint8_t* packet3_ptr = &packet3[0]
+    cdef const uint8_t* psk_ptr = NULL
+    if psk is not None:
+        psk_ptr = &psk[0]
+
+    cdef int ret = hydro_kx_xx_4(state, session_ptr, peer_static_pk_ptr, packet3_ptr, psk_ptr)
+    if ret != 0:
+        raise RuntimeError("Failed to finalize key exchange xx")
+
+    rx = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(session_ptr.rx), hydro_kx_SESSIONKEYBYTES, PyBUF_READ))
+    tx = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(session_ptr.tx), hydro_kx_SESSIONKEYBYTES, PyBUF_READ))
+    peer_pk = SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(peer_static_pk_ptr), hydro_kx_PUBLICKEYBYTES, PyBUF_READ))
+
+    return rx, tx, peer_pk

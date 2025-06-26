@@ -19,6 +19,10 @@ KX_KK_PACKET2BYTES: int
 The number of bytes of the second packet sent to the client in key exchange variant KK.
 """
 
+KX_XX_PACKET1BYTES: int
+KX_XX_PACKET2BYTES: int
+KX_XX_PACKET3BYTES: int
+
 KX_PAIR_SIZE: int
 """
 The size of a key exchange pair (KxPair) in bytes.
@@ -30,7 +34,7 @@ class Psk(BaseKey):
 
     Pre-shared keys are used optionally by the key exchange algorithms.
     """
-
+    def __init__(self, data: str | bytes | None) -> None: ...
     def __eq__(self, other: object) -> bool: ...
 
 class SessionPair:
@@ -131,9 +135,9 @@ class KxKkClientState:
     """
 
     packet1: bytes
-    session_pair: SessionPair
+    session_pair: SessionPair | None
 
-    def client_finish_kx_kk(self, packet2: bytes) -> SessionPair:
+    def client_finish_kx_kk(self, packet2: bytes) -> Self:
         """
         Finalizes the key exchange variant KK from the client side.
 
@@ -141,12 +145,31 @@ class KxKkClientState:
             packet2: The packet received from the server.
 
         Returns:
-            A SessionPair with the symmetric keys for the session.
+            The updated state including the session keys.
 
         Raises:
             KeyExchangeException: If the operation fails. In particular, this exception is raised if the packet is invalid or if the key exchange fails.
         """
         ...
+
+class KxXxClientState:
+    packet1: bytes
+    packet3: bytes
+    session_pair: SessionPair | None
+    server_public_key: KxPublicKey | None
+
+    def __init__(self, client_kp: KxPair, psk: Psk | None = None): ...
+    def __str__(self) -> str: ...
+    def client_process_kx_xx(self, packet2: bytes) -> Self: ...
+
+class KxXxServerState:
+    packet2: bytes
+    session_pair: SessionPair | None
+    client_public_key: KxPublicKey | None
+
+    def __init__(self, psk: Psk | None = None): ...
+    def __str__(self) -> str: ...
+    def server_finish_kx_xx(self, packet3: bytes) -> Self: ...
 
 class KxPair:
     """
@@ -230,6 +253,8 @@ class KxPair:
         """
         ...
 
+    def client_init_kx_xx(self, psk: Psk | None = None) -> KxXxClientState: ...
+    def server_process_kx_xx(self, packet1: bytes, psk: Psk | None = None) -> KxXxServerState: ...
     @classmethod
     def gen(cls) -> Self:
         """
