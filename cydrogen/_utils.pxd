@@ -1,5 +1,7 @@
 # cython: language_level=3
 
+cimport cython
+
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -46,6 +48,7 @@ cdef class Counter:
     cpdef uint64_t value(self) noexcept
 
 
+@cython.final
 cdef class SafeMemory:
     cdef bint readonly_protected
     cdef void *ptr
@@ -71,6 +74,7 @@ cpdef load16(const unsigned char[:] src)
 cpdef store16(unsigned char[:] dst, uint16_t src)
 
 
+@cython.final
 cdef class FileOpener:
     cdef object fileobj
     cdef object path
@@ -78,6 +82,7 @@ cdef class FileOpener:
     cdef __enter__(self)
 
 
+@cython.final
 cdef class SafeReader:
     cdef object fileobj
     cdef bint direct
@@ -85,17 +90,21 @@ cdef class SafeReader:
     cpdef readinto(self, unsigned char[:] buf)
     cpdef read(self, size_t length=*)
 
+
+@cython.final
 cdef class AsyncSafeReader:
     cdef object reader
     cdef bint has_readexactly
 
 
+@cython.final
 cdef class SafeWriter:
     cdef object fileobj
     cdef bint direct
     cpdef write(self, const unsigned char[:] buf)
 
 
+@cython.final
 cdef class TeeWriter:
     cdef object w1
     cdef object w2
