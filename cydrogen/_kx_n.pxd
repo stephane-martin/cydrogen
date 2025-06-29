@@ -50,6 +50,7 @@ cdef class KxKkClientState:
     cdef readonly SessionPair session_pair
     cdef KxPair client_kp
     cdef hydro_kx_state state
+    cdef object mu
 
     cpdef client_finish_kx_kk(self, bytes packet2)
 
@@ -59,6 +60,7 @@ cdef class KxXxClientState:
     cdef readonly bytes packet3
     cdef readonly SessionPair session_pair
     cdef readonly KxPublicKey server_public_key
+    cdef object mu
 
     cdef KxPair client_kp
     cdef Psk psk
@@ -70,6 +72,7 @@ cdef class KxXxServerState:
     cdef readonly bytes packet2
     cdef readonly SessionPair session_pair
     cdef readonly KxPublicKey client_public_key
+    cdef object mu
 
     cdef Psk psk
     cdef hydro_kx_state state

@@ -39,6 +39,8 @@ cdef class BaseSigner:
     cdef readonly Context ctx
     cdef hydro_sign_state state
     cdef bint finalized
+    cdef object mu
+
     cpdef update(self, const unsigned char[:] data)
     cpdef write(self, const unsigned char[:] data)
     cpdef update_from(self, fileobj, chunk_size=*)

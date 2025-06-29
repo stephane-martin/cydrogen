@@ -17,6 +17,7 @@ from ._exceptions cimport KeyExchangeException
 from ._secretbox cimport SecretBoxKey
 
 import base64
+import threading
 
 
 KX_PAIR_SIZE = sizeof(hydro_kx_keypair)
@@ -71,22 +72,24 @@ cdef class KxKkClientState:
         self.packet1 = b""
         self.session_pair = None
         self.client_kp = client_kp
+        self.mu = threading.Lock()
 
     cpdef client_finish_kx_kk(self, bytes packet2):
-        if not self.packet1:
-            raise RuntimeError("client_finish_kx_kk called before client_init_kx_kk")
-        if self.session_pair is not None:
-            raise RuntimeError("client_finish_kx_kk already called")
-        if packet2 is None:
-            raise ValueError("packet2 cannot be None")
-        if len(packet2) != hydro_kx_KK_PACKET2BYTES:
-            raise ValueError(f"Packet2 must be {hydro_kx_KK_PACKET2BYTES} bytes long")
-        try:
-            rx, tx = kx_kk_3(&self.state, packet2, self.client_kp)
-        except RuntimeError as ex:
-            raise KeyExchangeException("failed to finish key exchange") from ex
-        self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
-        return self
+        with self.mu:
+            if not self.packet1:
+                raise RuntimeError("client_finish_kx_kk called before client_init_kx_kk")
+            if self.session_pair is not None:
+                raise RuntimeError("client_finish_kx_kk already called")
+            if packet2 is None:
+                raise ValueError("packet2 cannot be None")
+            if len(packet2) != hydro_kx_KK_PACKET2BYTES:
+                raise ValueError(f"Packet2 must be {hydro_kx_KK_PACKET2BYTES} bytes long")
+            try:
+                rx, tx = kx_kk_3(&self.state, packet2, self.client_kp)
+            except RuntimeError as ex:
+                raise KeyExchangeException("failed to finish key exchange") from ex
+            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            return self
 
 cdef class KxXxClientState:
     def __init__(self, KxPair client_kp, Psk psk=None):
@@ -96,6 +99,7 @@ cdef class KxXxClientState:
         self.session_pair = None
         self.client_kp = client_kp
         self.psk = psk
+        self.mu = threading.Lock()
 
     def __str__(self) -> str:
         return f"""packet1: {self.packet1}
@@ -104,22 +108,23 @@ server_public_key: {self.server_public_key}
 session_pair: {self.session_pair}"""
 
     cpdef client_process_kx_xx(self, bytes packet2):
-        if not self.packet1:
-            raise RuntimeError("client_process_kx_xx called before client_init_kx_xx")
-        if self.packet3:
-            raise RuntimeError("client_process_kx_xx already called")
-        if packet2 is None:
-            raise ValueError("packet2 cannot be None")
-        if len(packet2) != hydro_kx_XX_PACKET2BYTES:
-            raise ValueError(f"Packet2 must be {hydro_kx_XX_PACKET2BYTES} bytes long")
-        try:
-            rx, tx, peer_pk, packet3 = kx_xx_3(&self.state, packet2, self.psk, self.client_kp)
-        except RuntimeError as ex:
-            raise KeyExchangeException("failed to process second packet for key exchange") from ex
-        self.packet3 = packet3
-        self.server_public_key = KxPublicKey(peer_pk)
-        self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
-        return self
+        with self.mu:
+            if not self.packet1:
+                raise RuntimeError("client_process_kx_xx called before client_init_kx_xx")
+            if self.packet3:
+                raise RuntimeError("client_process_kx_xx already called")
+            if packet2 is None:
+                raise ValueError("packet2 cannot be None")
+            if len(packet2) != hydro_kx_XX_PACKET2BYTES:
+                raise ValueError(f"Packet2 must be {hydro_kx_XX_PACKET2BYTES} bytes long")
+            try:
+                rx, tx, peer_pk, packet3 = kx_xx_3(&self.state, packet2, self.psk, self.client_kp)
+            except RuntimeError as ex:
+                raise KeyExchangeException("failed to process second packet for key exchange") from ex
+            self.packet3 = packet3
+            self.server_public_key = KxPublicKey(peer_pk)
+            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            return self
 
 
 cdef class KxXxServerState:
@@ -128,6 +133,7 @@ cdef class KxXxServerState:
         self.client_public_key = None
         self.session_pair = None
         self.psk = psk
+        self.mu = threading.Lock()
 
     def __str__(self) -> str:
         return f"""packet2: {self.packet2}
@@ -135,19 +141,22 @@ client_public_key: {self.client_public_key}
 session_pair: {self.session_pair}
 """
     cpdef server_finish_kx_xx(self, bytes packet3):
-        if not self.packet2:
-            raise RuntimeError("server_finish_kx_xx called before server_process_kx_xx")
-        if packet3 is None:
-            raise ValueError("packet3 cannot be None")
-        if len(packet3) != hydro_kx_XX_PACKET3BYTES:
-            raise ValueError(f"Packet3 must be {hydro_kx_XX_PACKET3BYTES} bytes long")
-        try:
-            rx, tx, client_public_key = kx_xx_4(&self.state, packet3, self.psk)
-        except RuntimeError as ex:
-            raise KeyExchangeException("failed to finish key exchange") from ex
-        self.client_public_key = KxPublicKey(client_public_key)
-        self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
-        return self
+        with self.mu:
+            if self.session_pair is not None:
+                raise RuntimeError("server_finish_kx_xx already called")
+            if not self.packet2:
+                raise RuntimeError("server_finish_kx_xx called before server_process_kx_xx")
+            if packet3 is None:
+                raise ValueError("packet3 cannot be None")
+            if len(packet3) != hydro_kx_XX_PACKET3BYTES:
+                raise ValueError(f"Packet3 must be {hydro_kx_XX_PACKET3BYTES} bytes long")
+            try:
+                rx, tx, client_public_key = kx_xx_4(&self.state, packet3, self.psk)
+            except RuntimeError as ex:
+                raise KeyExchangeException("failed to finish key exchange") from ex
+            self.client_public_key = KxPublicKey(client_public_key)
+            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            return self
 
 cdef class KxPublicKey:
     def __init__(self, kp):

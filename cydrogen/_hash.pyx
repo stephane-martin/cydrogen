@@ -1,6 +1,7 @@
 # cython: language_level=3
 
 import base64
+import threading
 
 from ._basekey cimport BaseKey
 from ._masterkey cimport MasterKey
@@ -72,6 +73,7 @@ cdef class Hash:
         self.block_size = 64
         self.finalized = 0
         self.result = bytes()
+        self.mu = threading.Lock()
 
         hash_init(&self.state, self.ctx, self.key)
 
@@ -79,15 +81,15 @@ cdef class Hash:
             self.update(data)
 
     cpdef update(self, const unsigned char[:] data):
-        if self.finalized == 1:
-            raise RuntimeError("Hash has already been finalized")
         if data is None:
-            return
-        cdef size_t n = len(data)
-        if n == 0:
-            return
-        hash_update(&self.state, data)
-        return self
+            return self
+        if len(data) == 0:
+            return self
+        with self.mu:
+            if self.finalized == 1:
+                raise RuntimeError("Hash has already been finalized")
+            hash_update(&self.state, data)
+            return self
 
     cpdef update_from(self, fileobj, chunk_size=8182):
         if fileobj is None:
@@ -111,13 +113,14 @@ cdef class Hash:
         return len(data)
 
     cpdef digest(self):
-        if self.finalized == 1:
-            return self.result
         cdef bytearray res = bytearray(self.digest_size)
-        hash_final(&self.state, res)
-        self.result = bytes(res)
-        self.finalized = 1
-        return self.result
+        with self.mu:
+            if self.finalized == 1:
+                return self.result
+            hash_final(&self.state, res)
+            self.result = bytes(res)
+            self.finalized = 1
+            return self.result
 
     cpdef hexdigest(self):
         return self.digest().hex()

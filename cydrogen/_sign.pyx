@@ -1,6 +1,7 @@
 # cython: language_level=3
 
 import base64
+import threading
 
 from cpython.buffer cimport PyBuffer_FillInfo
 
@@ -192,6 +193,7 @@ cdef class BaseSigner:
     def __init__(self, *, ctx=None, data=None):
         self.ctx = make_context(ctx)
         self.finalized = 0
+        self.mu = threading.Lock()
         try:
             sign_init(&self.state, self.ctx)
         except ValueError:
@@ -206,13 +208,14 @@ cdef class BaseSigner:
             return
         if len(data) == 0:
             return
-        try:
-            sign_update(&self.state, data)
-        except ValueError:
-            raise
-        except Exception as ex:
-            raise SignException("Failed to update signer") from ex
-        return self
+        with self.mu:
+            try:
+                sign_update(&self.state, data)
+            except ValueError:
+                raise
+            except Exception as ex:
+                raise SignException("Failed to update signer") from ex
+            return self
 
     cpdef write(self, const unsigned char[:] data):
         if data is None:
@@ -243,17 +246,18 @@ cdef class Signer(BaseSigner):
         self.key = make_sign_secret_key(private_key)
 
     cpdef sign(self):
-        if self.finalized == 1:
-            raise RuntimeError("already finalized")
-        self.finalized = 1
         cdef bytearray sig = bytearray(hydro_sign_BYTES)
-        try:
-            sign_final_create(&self.state, self.key, sig)
-        except ValueError:
-            raise
-        except Exception as ex:
-            raise SignException("Failed to create signature") from ex
-        return bytes(sig)
+        with self.mu:
+            if self.finalized == 1:
+                raise RuntimeError("already finalized")
+            self.finalized = 1
+            try:
+                sign_final_create(&self.state, self.key, sig)
+            except ValueError:
+                raise
+            except Exception as ex:
+                raise SignException("Failed to create signature") from ex
+            return bytes(sig)
 
 
 cdef class Verifier(BaseSigner):
@@ -268,15 +272,16 @@ cdef class Verifier(BaseSigner):
             raise ValueError("Signature cannot be None")
         if len(signature) != hydro_sign_BYTES:
             raise ValueError("Signature must be 64 bytes long")
-        if self.finalized == 1:
-            raise RuntimeError("already finalized")
-        self.finalized = 1
-        try:
-            sign_final_verify(&self.state, self.key, signature)
-        except ValueError:
-            raise
-        except Exception as ex:
-            raise VerifyException("Failed to verify signature") from ex
+        with self.mu:
+            if self.finalized == 1:
+                raise RuntimeError("already finalized")
+            self.finalized = 1
+            try:
+                sign_final_verify(&self.state, self.key, signature)
+            except ValueError:
+                raise
+            except Exception as ex:
+                raise VerifyException("Failed to verify signature") from ex
 
 
 cpdef sign_file(key, fileobj, ctx=None, chunk_size=8192):
