@@ -20,6 +20,7 @@ cdef class Hash:
     cdef hydro_hash_state state
     cdef bytes result
     cdef bint finalized
+    cdef object mu
 
     cpdef update(self, const unsigned char[:] data)
     cpdef write(self, const unsigned char[:] data)
