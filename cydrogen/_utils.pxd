@@ -41,9 +41,16 @@ cdef extern from "cyutils.h" nogil:
     int cyd_is_big_endian()
 
 
+cdef extern from "atomic.h" nogil:
+    ctypedef uint64_t psnip_atomic_uint64
+    ctypedef uint64_t psnip_uint64_t
+    void psnip_atomic_uint64_store(psnip_atomic_uint64* ptr, psnip_uint64_t value)
+    psnip_uint64_t psnip_atomic_uint64_add(psnip_atomic_uint64* ptr, psnip_uint64_t value)
+
+
+@cython.auto_pickle(False)
 cdef class Counter:
-    cdef uint64_t count
-    cdef object lock
+    cdef psnip_atomic_uint64 count
 
     cpdef uint64_t value(self) noexcept
 

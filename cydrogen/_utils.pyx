@@ -12,20 +12,20 @@ import io
 import os
 import pathlib
 import tempfile
-import threading
+
+cdef psnip_uint64_t one = 1
+cdef psnip_uint64_t increment = 2
 
 
 cdef class Counter:
+    def __cinit__(self):
+        psnip_atomic_uint64_store(&self.count, one)
+
     def __init__(self):
-        self.count = 1
-        self.lock = threading.Lock()
+        pass
 
     cpdef uint64_t value(self) noexcept:
-        cdef uint64_t val = 0
-        with self.lock:
-            val = self.count
-            self.count += 2
-            return val
+        return psnip_atomic_uint64_add(&self.count, increment)
 
     def __call__(self):
         return self.value()
