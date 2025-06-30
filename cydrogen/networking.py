@@ -1,990 +1,1131 @@
 import asyncio
+import contextvars
 import logging
-import platform
-import socket
-import socketserver
-import threading
-import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Buffer, Coroutine, Iterator
-from typing import Awaitable, BinaryIO, Callable, Self, TypeVar
+from collections import deque
+from collections.abc import Awaitable, Buffer, Callable
+from enum import Enum, StrEnum
+from typing import Any, Self
 
-from cydrogen import (
+from ._decls import NOGIL_THRESHOLD_BYTES
+from ._exceptions import DecryptException, KeyExchangeException
+from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
     KX_N_PACKET1BYTES,
     KX_XX_PACKET1BYTES,
     KX_XX_PACKET2BYTES,
     KX_XX_PACKET3BYTES,
-    Counter,
-    DecryptException,
-    EncryptedMessage,
-    KeyExchangeException,
     KxPair,
     KxPublicKey,
+    KxXxClientState,
+    KxXxServerState,
     Psk,
-    SecretBox,
-    SecretBoxKey,
     SessionPair,
     client_init_kx_n,
-    load64,
-    store64,
 )
+from ._networking import BytearrayBuilder, MsgQueue, ReadBuffers
+from ._secretbox import EncryptedMessage, SecretBox, encrypted_message_header
+from ._utils import Counter, load64, store64
 
 logger = logging.getLogger("cydrogen")
 
-T = TypeVar("T")
-PLATFORM = platform.system().lower()
-OK_MESSAGE = b"OK"
-CANCEL_MESSAGE_ID = 0
+OK_MESSAGE: bytes = b"OK"
+CANCEL_MESSAGE_ID: int = 0
+_DEFAULT_LIMIT: int = 2**16  # 64 KiB
 
 
-class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
-    """
-    KX_N_TCPHandler provides a handler to build a TCP server.
+class MachineState(Enum):
+    INITIAL = 0
+    CONNECTED = 1
+    READER_CLOSED = 2
+    WRITER_CLOSED = 3
+    READER_WRITER_CLOSED = 4
+    WAITING_FOR_PACKET1 = 5
+    WAITING_FOR_PACKET2 = 6
+    WAITING_FOR_PACKET3 = 7
+    WAITING_FOR_SERVER_ACK = 8
 
-    Subclasses must implement the handle_message() method to define how to process incoming messages.
-    """
-
-    def __init__(self, request, client_address, server: "KX_N_TCPServer") -> None:
-        self.kx_pair: KxPair = server.kx_pair
-        self.psk: Psk | None = server.psk
-        self.session_pair: SessionPair
-        self._write_lock = threading.Lock()
-        self.server: KX_N_TCPServer = server  # to make type checker happy
-        self.peer = request.getpeername()
-        self.finishing_ev = threading.Event()  # to signal when the thread is finishing
-        self.tbox: SecretBox
-        super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
-
-    def setup(self) -> None:
-        logger.warning(f"Connection from {self.peer}")
-        self.server.add_accepted_socket(self.request)
-        super().setup()  # creates self.rfile and self.wfile
-
-    def finish(self) -> None:
-        self.finishing_ev.set()  # signal that this thread is finishing, can be used in handle_message() and post_connected()
-        super().finish()  # closes self.rfile and self.wfile
-        self.server.remove_accepted_socket(self.request)
-        logger.warning(f"Connection from {self.peer} closed")
-        # That's all we need to do, the server itself will shutdown/close the accepted socket
-        # for this thread by calling its shutdown_request(socket) method.
-
-    def post_connected(self) -> None:
-        logger.info(f"Connection established with {self.peer}, session keys generated")
-
-    def handle(self) -> None:
-        # called by __init__
-        set_keepalive(self.request)
-        # receive packet1 from the client
-        packet1 = self.rfile.read(KX_N_PACKET1BYTES)
-        if len(packet1) != KX_N_PACKET1BYTES:
-            logger.error(f"Received packet1 from {self.peer} is not the expected length: {len(packet1)}")
-            return
-        # calculate the session keys
-        try:
-            self.session_pair = self.kx_pair.server_finish_kx_n(packet1, self.psk)
-        except KeyExchangeException as e:
-            logger.error(f"Key exchange failed with {self.peer}: {e}")
-            return
-        self.tbox = SecretBox(self.session_pair.tx)
-        self.write(OK_MESSAGE)
-
-        self.post_connected()  # allow subclasses to do something after the connection is established
-
-        while True:
-            # note that we successively read a message from the client, and then process it, and then loop.
-            # contrary to the async handler, processing a message happens after reading it, not concurrently.
-            # this means that the non-async server can only handle one message at a time per client connection.
-            if not self._handle_message():
-                logger.info(f"Stopping message handling for {self.peer}")
-                return
-
-    def _handle_message(self) -> bool:
-        # basically, this method reads a message from the client, decrypts it, and calls handle_message()
-        try:
-            emsg: EncryptedMessage = EncryptedMessage.read_from(self.rfile)
-        except OSError as e:
-            logger.warning(f"Connection closed by {self.peer} or read error: {e}")
-            return False
-        try:
-            msg: bytes = emsg.decrypt(self.session_pair.rx)
-        except DecryptException as e:
-            logger.warning(f"Decryption failed for client {self.peer}, closing connection: {e}")
-            return False
-        if emsg.msg_id == CANCEL_MESSAGE_ID:
-            # do nothing cause the threaded server does not support multiplexed requests, so
-            # there are never pending requests to cancel
-            return True
-        try:
-            if not self.handle_message(msg, emsg.msg_id):
-                logger.info(f"Stopping message handling for {self.peer}")
-                return False  # if handle_message returns False, we stop handling messages
-        except Exception as e:
-            logger.error(f"Error handling message from {self.peer}: {e}")
-            return False
-        return True  # continue handling messages
-
-    @abstractmethod
-    def handle_message(self, msg: bytes, msg_id: int) -> bool:
-        raise NotImplementedError()
-
-    def write(self, msg: Buffer, *, msg_id: int = 1):
-        with self._write_lock:
-            self.tbox.encrypt(msg, msg_id=msg_id, out=self.wfile)
-            self.wfile.flush()
-
-
-class KX_N_TCPServer(socketserver.ThreadingTCPServer):
-    """
-    KX_N_TCPServer provides a threading TCP server with key exchange variant N.
-    """
-
-    def __init__(self, addr: tuple[str, int], server_keys: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None):
-        super().__init__(addr, handler, bind_and_activate=False)
-        self.allow_reuse_address = True
-        self.kx_pair = server_keys
-        self.psk = psk
-        self.running = False
-        self.thread: threading.Thread | None = None
-        self.sockets: dict[int, socket.socket] = {}  # to keep track of accepted sockets
-        self.sockets_lock = threading.Lock()
-
-    def _reset_main_socket(self):
-        if self.socket is not None:
-            try:
-                self.socket.close()
-            except OSError:
-                pass
-        self.socket = socket.socket(self.address_family, self.socket_type)
-
-    def add_accepted_socket(self, sock: socket.socket):
-        with self.sockets_lock:
-            self.sockets[sock.fileno()] = sock
-
-    def remove_accepted_socket(self, sock: socket.socket):
-        with self.sockets_lock:
-            if sock.fileno() in self.sockets:
-                del self.sockets[sock.fileno()]
-
-    def close_all_sockets(self):
-        with self.sockets_lock:
-            for sock in self.sockets.values():
-                try:
-                    sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-            self.sockets.clear()
-
-    def run(self, background: bool = False):
-        if self.running:
-            raise RuntimeError("Server is already running, cannot start again")
-        self.running = True
-        with self.sockets_lock:
-            self.sockets.clear()
-        if background:
-            logger.info("Starting server in background thread")
-            self.thread = threading.Thread(target=self._run)
-            self.thread.start()
-        else:
-            self.thread = None
-            logger.info("Starting server in the main thread")
-            self._run()
-
-    def _run(self):
-        # reset the socket to ensure a clean start
-        self._reset_main_socket()
-        try:
-            with self as server:  # on exit, the context manager will call server_close
-                server.server_bind()
-                server.server_activate()
-                logger.info(f"Server is running on {server.server_address}")
-                server.serve_forever()  # this will block until shutdown is called
-        finally:
-            self.running = False
-            logger.info("Server has stopped running")
-
-    def server_close(self):
-        logger.info("server_close")
-        # close all the accepted sockets to interrupt the child threads
-        self.close_all_sockets()
-        super().server_close()  # close the main server socket and wait for threads to finish
-
-    def shutdown(self):
-        if not self.running:
-            logger.warning("Server is not running, nothing to shutdown")
-            return
-        logger.info("shutdown")
-        super().shutdown()  # trigger event to exit the serve_forever loop
-        if self.thread is not None:  # when serve_forever runs in background, wait for the thread to finish
-            self.thread.join()
-            self.thread = None
-
-
-async def do_before_event(coro: Coroutine[None, None, T], before: asyncio.Event, name: str | None = None) -> T:
-    t: asyncio.Task[T] = asyncio.create_task(coro, name=name)
-    stop: asyncio.Task[bool] = asyncio.create_task(before.wait(), name="event_wait")
-    try:
-        done, pending = await asyncio.wait([t, stop], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            # if t is done, it means we cancel 'waiting for before event'
-            # if stop is done, it means we cancel 'coro'
-            task.cancel()
-    except asyncio.CancelledError:
-        # If 'do_before_event' is canceled, while 't' has thrown an exception, we want to await t to retrieve the exception.
-        # Else asyncio will complain that the exception was never retrieved
-        pass
-    return await t
-
-
-class PendingProcessingTasks:
-    def __init__(self) -> None:
-        self.pending: dict[int, set[asyncio.Task]] = {}  # to keep track of pending tasks
-
-    def register(self, msg_id: int, task: asyncio.Task):
-        if msg_id not in self.pending:
-            self.pending[msg_id] = set()
-        self.pending[msg_id].add(task)
-
-    def done(self, msg_id: int, task: asyncio.Task) -> None:
-        if msg_id in self.pending:
-            self.pending[msg_id].discard(task)
-
-    def cancel(self, msg_id: int) -> None:
-        if msg_id in self.pending:
-            for task in self.pending[msg_id]:
-                task.cancel()
-
-    def cancel_all(self) -> int:
-        nb = 0
-        for msg_id, tasks in self.pending.items():
-            nb += len(tasks)
-            for task in tasks:
-                task.cancel()
-        self.pending.clear()
-        return nb
-        if nb > 0:
-            logger.info(f"Cancelled {nb} pending responses for {self.peername}")
-
-
-class AsyncHandler(ABC):
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, rbox: SecretBox, tbox: SecretBox, peername: str):
-        self.reader: asyncio.StreamReader = reader
-        self.writer: asyncio.StreamWriter = writer
-        self.rbox: SecretBox = rbox
-        self.tbox: SecretBox = tbox
-        self.peername: str = peername
-        self._pending_msg_tasks: PendingProcessingTasks = PendingProcessingTasks()  # to keep track of pending tasks
-        self._stop_event = asyncio.Event()  # to signal when the handler should stop processing messages
-
-    async def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
-        # write should be called by handle_message() to reply to the client
-        # we interrupt the write operation if stop_event is set
-        await do_before_event(
-            self.tbox.aencrypt(msg, msg_id=msg_id, out=self.writer),
-            self._stop_event,
-            name="async_handler_aencrypt",
+    def kx_is_pending(self) -> bool:
+        return self in (
+            MachineState.WAITING_FOR_PACKET1,
+            MachineState.WAITING_FOR_PACKET2,
+            MachineState.WAITING_FOR_PACKET3,
+            MachineState.WAITING_FOR_SERVER_ACK,
         )
 
-    async def _msg_loop(self) -> None:
+
+class TransitionEvent(StrEnum):
+    CONNECTION_LOST = "connection_lost"
+    READER_EOF = "reader_eof"
+    WRITER_EOF = "writer_eof"
+    WRITE_EMESSAGE = "write_emessage"
+    RECEIVE_DATA = "receive_data"
+    DATA_TO_SEND = "data_to_send"
+
+
+type TransitionDestination = tuple[MachineState, Callable]
+type TransitionsByOrigState = dict[MachineState, TransitionDestination]
+type TransitionsByEvent = dict[TransitionEvent, TransitionsByOrigState]
+
+type StreamHandlerFunction = Callable[["StreamReaderWriter"], Awaitable[None]]
+type ValidatePeerKeyFunc = Callable[[KxPublicKey], Awaitable[None]]
+
+ALL_STATES: set[MachineState] = set(MachineState)
+
+
+class Transitions:
+    def __init__(self) -> None:
+        self.d: TransitionsByEvent = {}
+
+    def add(self, event: TransitionEvent, orig_state: MachineState, dest_state: MachineState, callback: Callable) -> None:
+        if event not in self.d:
+            self.d[event] = {}
+        if orig_state not in self.d[event]:
+            self.d[event][orig_state] = (dest_state, callback)
+        else:
+            raise RuntimeError(f"Transition {orig_state} => {event} already exists")
+
+    def add_many(self, transitions: TransitionsByEvent) -> None:
+        for event, orig_states in transitions.items():
+            if event not in self.d:
+                self.d[event] = {}
+            for orig_state, (dest_state, callback) in orig_states.items():
+                if orig_state not in self.d[event]:
+                    self.d[event][orig_state] = (dest_state, callback)
+                else:
+                    raise RuntimeError(f"Transition {orig_state} => {event} already exists")
+
+    def get(self, event: TransitionEvent, orig_state: MachineState) -> TransitionDestination:
+        try:
+            return self.d[event][orig_state]
+        except KeyError as ex:
+            raise RuntimeError(f"Invalid transition for {event} from {orig_state}") from ex
+
+
+class BaseMachine:
+    # INITIAL                   => connection_lost  => READER_WRITER_CLOSED
+    # CONNECTED                 => connection_lost  => READER_WRITER_CLOSED
+    # READER_CLOSED             => connection_lost  => READER_WRITER_CLOSED
+    # WRITER_CLOSED             => connection_lost  => READER_WRITER_CLOSED
+    # READER_WRITER_CLOSED      => connection_lost  => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET1       => connection_lost  => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET2       => connection_lost  => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET3       => connection_lost  => READER_WRITER_CLOSED
+    # WAITING_FOR_SERVER_ACK    => connection_lost  => READER_WRITER_CLOSED
+
+    # INITIAL                   => reader_eof       => READER_WRITER_CLOSED
+    # CONNECTED                 => reader_eof       => READER_CLOSED
+    # READER_CLOSED             => reader_eof       => READER_CLOSED
+    # WRITER_CLOSED             => reader_eof       => READER_WRITER_CLOSED
+    # READER_WRITER_CLOSED      => reader_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET1       => reader_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET2       => reader_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET3       => reader_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_SERVER_ACK    => reader_eof       => READER_WRITER_CLOSED
+
+    # INITIAL                   => writer_eof       => READER_WRITER_CLOSED
+    # CONNECTED                 => writer_eof       => WRITER_CLOSED
+    # READER_CLOSED             => writer_eof       => READER_WRITER_CLOSED
+    # WRITER_CLOSED             => writer_eof       => WRITER_CLOSED
+    # READER_WRITER_CLOSED      => writer_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET1       => writer_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET2       => writer_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_PACKET3       => writer_eof       => READER_WRITER_CLOSED
+    # WAITING_FOR_SERVER_ACK    => writer_eof       => READER_WRITER_CLOSED
+
+    # CONNECTED                 => write_emessage   => CONNECTED
+    # READER_CLOSED             => write_emessage   => READER_CLOSED
+
+    # CONNECTED                 => receive_data     => CONNECTED
+    # WRITER_CLOSED             => receive_data     => WRITER_CLOSED
+
+    _valid_states: frozenset[MachineState] = frozenset()
+    eof_exception = EOFError("Connection closed by peer")
+
+    def __init__(self, kx_completed: asyncio.Future) -> None:
+        self._transitions = Transitions()
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.CONNECTION_LOST: {
+                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.CONNECTED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.READER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                },
+                TransitionEvent.READER_EOF: {
+                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.CONNECTED: (MachineState.READER_CLOSED, self._reader_eof),
+                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._reader_eof),
+                    MachineState.WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                },
+                TransitionEvent.WRITER_EOF: {
+                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.CONNECTED: (MachineState.WRITER_CLOSED, self._writer_eof),
+                    MachineState.READER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._writer_eof),
+                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                },
+                TransitionEvent.WRITE_EMESSAGE: {
+                    MachineState.CONNECTED: (MachineState.CONNECTED, self._write_emessage),
+                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._write_emessage),
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET1, self._write_emessage),
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_PACKET2, self._write_emessage),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.WAITING_FOR_PACKET3, self._write_emessage),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.WAITING_FOR_SERVER_ACK, self._write_emessage),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.CONNECTED: (MachineState.CONNECTED, self._receive_data_connected),
+                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._receive_data_connected),
+                },
+                TransitionEvent.DATA_TO_SEND: {
+                    # no MachineState.INITIAL case, because that will be handled by the subclass
+                    MachineState.CONNECTED: (MachineState.CONNECTED, self._data_to_send),
+                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._data_to_send),
+                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._data_to_send),
+                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._data_to_send),
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_PACKET2, self._data_to_send),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.WAITING_FOR_PACKET3, self._data_to_send),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.WAITING_FOR_SERVER_ACK, self._data_to_send),
+                },
+            },
+        )
+
+        self._kx_completed: asyncio.Future = kx_completed
+        self._invalid_states: set[MachineState] = ALL_STATES - self._valid_states
+        self._state: MachineState = MachineState.INITIAL
+        self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
+        self._read_buffers: ReadBuffers = ReadBuffers()
+
+        self._session_pair: SessionPair
+        self._rbox: SecretBox
+        self._tbox: SecretBox
+
+        self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
+        self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
+        self._exception: Exception | None = None
+
+    def get_buffer(self) -> memoryview:
+        return self._read_buffers.get_buffer()
+
+    @property
+    def received_size(self) -> int:
+        return self._received_decrypted_msgs.bytesize
+
+    async def read_message(self) -> tuple[bytes, int]:
+        return await self._received_decrypted_msgs.get()
+
+    async def decrypt_received_messages(self) -> None:
+        logger.info("starting to decrypt received messages")
+        while True:
+            try:
+                incoming, _ = await self._received_encrypted_msgs.get()
+            except Exception as ex:  # noqa: BLE001
+                logger.info("decrypt received messages has finished: %s", ex)
+                self._received_decrypted_msgs.close(ex)
+                return
+            # decrypt the message and push the result downstream to _received_decrypted_msgs queue
+            emsg = EncryptedMessage.from_bytes(incoming)
+            msg_id = emsg.msg_id
+            try:
+                plaintext: bytes = await asyncio.to_thread(self._rbox.decrypt, emsg)
+                del emsg
+                self._read_buffers.release_bytearray(incoming)  # return the mview to the freelist
+                self._received_decrypted_msgs.put_nowait(plaintext, msg_id)
+            except Exception as ex:
+                # DecryptException will be captured by the protocol, which will abort the transport
+                raise DecryptException("Failed to decrypt message from peer") from ex
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        event = TransitionEvent.CONNECTION_LOST
+        dest, callback = self._transitions.get(event, self._state)
+        callback(exc)
+        self._state = dest
+
+    def _connection_lost(self, exc: Exception | None) -> None:
+        if self._exception is None:
+            # make sure a new reader would get rejected
+            self._exception = self.eof_exception if exc is None else exc
+            self._received_encrypted_msgs.close(self._exception)
+        if self._state.kx_is_pending():
+            self._fail_kx(self._exception)
+
+    def reader_eof(self) -> None:
+        event = TransitionEvent.READER_EOF
+        dest, callback = self._transitions.get(event, self._state)
+        callback()
+        self._state = dest
+
+    def _reader_eof(self) -> None:
+        if self._exception is None:
+            # make sure a new reader would get rejected
+            self._exception = self.eof_exception
+            self._received_encrypted_msgs.close(self._exception)
+        if self._state.kx_is_pending():
+            self._fail_kx(self._exception)
+
+    def writer_eof(self) -> None:
+        event = TransitionEvent.WRITER_EOF
+        dest, callback = self._transitions.get(event, self._state)
+        callback()
+        self._state = dest
+
+    def _writer_eof(self) -> None:
+        if self._state.kx_is_pending():
+            self._fail_kx(self.eof_exception)
+
+    def _fail_kx(self, exc: Exception) -> None:
+        if not self._kx_completed.done():
+            logger.error("Key exchange failed")
+            self._kx_completed.set_exception(exc)
+
+    def _complete_kx(self) -> None:
+        if not self._kx_completed.done():
+            logger.info("Key exchange completed successfully")
+            self._kx_completed.set_result(None)
+
+    def encrypt_message(self, msg: Buffer, msg_id: int) -> bytearray:
+        # This method only depends on self._tbox, which is set after the key exchange is completed
+        # and is a constant for the lifetime of the machine.
+        # So for practical purposes, it is thread-safe.
+        # It makes it possible to offload the encryption to a thread if needed.
+        return self._tbox.encrypt(msg, msg_id=msg_id)
+
+    def write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
+        event = TransitionEvent.WRITE_EMESSAGE
+        dest, callback = self._transitions.get(event, self._state)
+        callback(ciphertext, msg_id)
+        self._state = dest
+
+    def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
+        # called by Protocol to prepare sending a message to the server
+        self._data_ready_to_send.add(encrypted_message_header(ciphertext, msg_id))
+        self._data_ready_to_send.add(ciphertext)
+
+    def _get_small_message(self) -> tuple[bytes, int] | None:
+        # for small messages that occur during key exchange, we consider the decryption is immediate,
+        # so we don't need to go through the two queues.
+        try:
+            b = self._read_buffers.consume_message()
+            if b is None:
+                # not enough data to read the message
+                return None
+            if len(b) >= NOGIL_THRESHOLD_BYTES:
+                logger.warning("_get_small_message: consuming abnormal big message: %s bytes", len(b))
+            emsg = EncryptedMessage.from_bytes(b)
+            msg_id = emsg.msg_id
+            plaintext: bytes = self._rbox.decrypt(emsg)  # considered immediate
+            del emsg
+            self._read_buffers.release_bytearray(b)  # return the mview to the freelist
+            return plaintext, msg_id
+        except Exception as ex:
+            self._fail_kx(ex)
+            raise
+
+    def receive_data(self, nbytes: int) -> None:
+        event = TransitionEvent.RECEIVE_DATA
+        self._read_buffers.buffer_updated(nbytes)
         try:
             while True:
-                # read and decrypt next msg
-                msg, msg_id, ok = await self._read_decrypt_next_msg()
-                if not ok:
-                    # stop the loop, whatever the reason
+                dest, callback = self._transitions.get(event, self._state)
+                if not callback():
+                    # not enough data
                     return
-                # if the message is a cancel message, we handle it separately
-                if self._if_cancel_message(msg, msg_id):
-                    continue  # it was a cancel message, do not handle it further and let the loop continue
-                # process the message in the background
-                self._process_msg_background(msg, msg_id)  # no await!
-                # and loop immediately!
-        finally:
-            self._stop_event.set()  # just in case, lets be sure to send the stop signal when we exit the loop
-            nb = self._pending_msg_tasks.cancel_all()  # cancel all pending message processing tasks
-            if nb > 0:
-                logger.info(f"Cancelled {nb} pending responses for {self.peername}")
-
-    async def _read_decrypt_next_msg(self) -> tuple[bytes, int, bool]:
-        # read next message from the client but interrupt if stop_event is set
-        wrong = (b"", 0, False)  # return value in case of error
-        try:
-            emsg: EncryptedMessage = await do_before_event(
-                EncryptedMessage.aread_from(self.reader),
-                self._stop_event,
-                name="async_handler_aread_from",
-            )
-        except asyncio.CancelledError:
-            logger.info("Read canceled because server is stopping")
-            return wrong
-        except OSError as e:
-            if not self._stop_event.is_set():
-                self._stop_event.set()
-                logger.info(f"Failed to read next client message: {e}")
-            return wrong
-        except ConnectionError as e:
-            if not self._stop_event.is_set():
-                self._stop_event.set()
-                logger.info(f"Connection error while reading next client message: {e}")
-            return wrong
-        except Exception as e:
-            logger.error(f"Unexpected error reading message: {e}")
-            self._stop_event.set()
-            return wrong
-        try:
-            msg = self.rbox.decrypt(emsg)  # warning, maybe TODO: this is a CPU bound operation, should we use a thread pool executor?
-            return msg, emsg.msg_id, True
-        except DecryptException as e:
-            self._stop_event.set()
-            logger.error(f"Decryption failed, closing connection: {e}")
-            return wrong
-
-    def _if_cancel_message(self, msg: bytes, msg_id: int) -> bool:
-        if msg_id != CANCEL_MESSAGE_ID:
-            return False
-        msg_id_to_cancel = load64(msg)
-        logger.info(f"Received cancel request for msg_id {msg_id_to_cancel} from {self.peername}, cancelling pending response")
-        self._pending_msg_tasks.cancel(msg_id_to_cancel)
-        return True  # do not continue handling this message, it was a cancel request
-
-    def _process_msg_background(self, msg: bytes, msg_id: int) -> None:
-        # create a task to handle the message
-        # the point is to avoid blocking the read loop while handling the message
-        # this allows the server to handle multiple messages concurrently
-        process_msg_task = asyncio.create_task(self._handle_message(msg, msg_id))
-        # keep track of the task to protect it against GC and to cancel it if needed
-        self._pending_msg_tasks.register(msg_id, process_msg_task)
-        # untrack the task when it is done
-        process_msg_task.add_done_callback(lambda t: self._pending_msg_tasks.done(msg_id, t))
-
-    async def _handle_message(self, msg: bytes, msg_id: int) -> None:
-        # this is executed as a separate task, so we can handle multiple messages concurrently
-        # basically, it just calls handle_message() and handles exceptions/cancellation
-        if self._stop_event.is_set():
-            logger.info("Interrupting message handling")
-            return
-        should_continue: bool = False
-        try:
-            should_continue = await self.handle_message(msg, msg_id)
-            if not should_continue:
-                self._stop_event.set()
-                logger.info("Stopping message handling as requested by handler")
-        except asyncio.CancelledError:
-            self._stop_event.set()
-        except ConnectionError as e:
-            if not self._stop_event.is_set():
-                logger.info(f"Connection error while handling message: {e}")
-                self._stop_event.set()
-        except Exception as e:
-            logger.warning(f"Error handling message: {e}")
-            self._stop_event.set()
-
-    @abstractmethod
-    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
-        # handle_message defines the behavior of the server when it receives a message.
-        # typically, you could
-        # - do something with the incoming message (bytes)
-        # - prepare a response message (bytes)
-        # - write the response message using self.write
-        # using the same incoming msg_id for the response would enable the client to match the response with the request
-        raise NotImplementedError()
-
-
-class BaseAsyncTCPServer(ABC):
-    def __init__(self, addr: tuple[str, int], handler_class: type[AsyncHandler]):
-        self.host: str = addr[0]
-        self.port: int = addr[1]
-        self._handler_class: type[AsyncHandler] = handler_class
-        self._server: asyncio.Server | None = None
-
-    async def client_connected(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        try:
-            await self._client_connected(reader, writer)
-        finally:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except ConnectionError:
-                pass
-
-    async def _client_connected(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        peername = writer.get_extra_info("peername")
-        logger.info(f"Connection from {peername}")
-
-        try:
-            session_pair: SessionPair = await self.key_exchange(reader, writer)
+                # when callback returns False, it means there was not enough available data to advance the state
+                # when callback returns True, there was some advance, hence set the destination state
+                old_state = self._state
+                self._state = dest
+                if old_state.kx_is_pending() and self._state == MachineState.CONNECTED:
+                    self._complete_kx()
         except Exception as ex:
-            logger.error(f"Key exchange failed with {peername}: {ex}")
-            return
+            self._fail_kx(ex)
+            raise
 
-        rbox = SecretBox(session_pair.rx)
-        tbox = SecretBox(session_pair.tx)
-        logger.info(f"Session keys established with {peername}")
+    def _receive_data_connected(self) -> bool:
+        # we don't call _get_small_message here, because the message may be big and decrypting it may block the loop
+        encrypted_data = self._read_buffers.consume_message()
+        if encrypted_data is None:
+            # not enough data to read more messages, we're finished for now
+            return False
+        self._received_encrypted_msgs.put_nowait(encrypted_data)
+        return True
 
-        # instantiate a handler instance to deal with this client
-        handler_instance = self._handler_class(reader, writer, rbox, tbox, peername)
-        try:
-            await handler_instance._msg_loop()
-        finally:
-            logger.info(f"Handler for {peername} finished")
+    def data_to_send(self) -> bytes:
+        event = TransitionEvent.DATA_TO_SEND
+        dest, callback = self._transitions.get(event, self._state)
+        data: bytes = callback()
+        self._state = dest
+        return data
 
-    @abstractmethod
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        raise NotImplementedError()
+    def _data_to_send(self) -> bytearray:
+        return self._data_ready_to_send.get()
 
-    async def run(self) -> None:
-        if self._server is not None:
-            logger.info("Async server is already running, skipping start")
-            return
-        self._server = await asyncio.start_server(
-            self.client_connected,
-            host=self.host,
-            port=self.port,
-            keep_alive=True,
-            reuse_address=True,
-            start_serving=False,
+    # TODO: use it
+    def _check_invalid_state(self) -> None:
+        if self._state in self._invalid_states:
+            ex = RuntimeError(f"Invalid state: {self._state}")
+            self._fail_kx(ex)
+            raise ex
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return None
+
+
+class KX_N_ClientStateMachine(BaseMachine):
+    # INITIAL                   => data_to_send => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK    => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,  # initial state, we can send packet1
+            MachineState.WAITING_FOR_SERVER_ACK,  # waiting for server ACK after it has processed packet1
+            MachineState.CONNECTED,  # key exchange completed successfully
+            MachineState.READER_CLOSED,  # reader closed, we can still send data
+            MachineState.WRITER_CLOSED,  # writer closed, we can still read data
+            MachineState.READER_WRITER_CLOSED,  # both reader and writer closed, final state
+        },
+    )
+
+    def __init__(self, server_public_key: KxPublicKey, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.CONNECTED, self._receive_server_ack),
+                },
+            },
         )
-        logger.info(f"Async server is running on {self.host}:{self.port}")
-        try:
-            await self._server.serve_forever()
-        except asyncio.CancelledError:
-            logger.info("Async server has been cancelled")
-        finally:
-            self._server.close()
-            self._server.close_clients()
-            await self._server.wait_closed()
-            self._server = None
-            logger.info("Async server has stopped running")
+
+        self._server_public_key: KxPublicKey = server_public_key
+        self._session_pair, self._packet1 = client_init_kx_n(server_public_key, psk)
+        self._rbox: SecretBox = SecretBox(self._session_pair.rx)
+        self._tbox: SecretBox = SecretBox(self._session_pair.tx)
+
+    def _receive_server_ack(self) -> bool:
+        two_uple = self._get_small_message()
+        if two_uple is None:
+            # not enough data to read the message
+            return False
+        if two_uple[0] != OK_MESSAGE:
+            raise RuntimeError("Server did not respond with OK")
+        return True
+
+    def _data_to_send_initial(self) -> bytearray:
+        self._data_ready_to_send.add(self._packet1)
+        return self._data_to_send()
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return self._server_public_key
+
+
+class KX_N_ServerStateMachine(BaseMachine):
+    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,
+            MachineState.CONNECTED,
+            MachineState.READER_CLOSED,
+            MachineState.WRITER_CLOSED,
+            MachineState.READER_WRITER_CLOSED,
+            MachineState.WAITING_FOR_PACKET1,
+        },
+    )
+
+    def __init__(self, server_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.CONNECTED, self._receive_packet1),
+                },
+            },
+        )
+
+        self._server_pair: KxPair = server_pair
+        self._psk: Psk | None = psk
+
+    def _receive_packet1(self) -> bool:
+        # we expect to receive packet1 from the client, length KX_N_PACKET1BYTES
+        packet1: bytes | None = self._read_buffers.consume_bytes(KX_N_PACKET1BYTES)
+        if packet1 is None:
+            # not enough data to read the packet1
+            return False
+        self._session_pair = self._server_pair.server_finish_kx_n(packet1, self._psk)
+        self._rbox = SecretBox(self._session_pair.rx)
+        self._tbox = SecretBox(self._session_pair.tx)
+        # send OK message to the client
+        ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
+        self.write_emessage(ciphertext, 0)
+        return True
+
+
+class KX_KK_ClientStateMachine(BaseMachine):
+    # INITIAL               => data_to_send => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET2 if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,
+            MachineState.CONNECTED,
+            MachineState.READER_CLOSED,
+            MachineState.WRITER_CLOSED,
+            MachineState.READER_WRITER_CLOSED,
+            MachineState.WAITING_FOR_PACKET2,
+        },
+    )
+
+    def __init__(self, client_pair: KxPair, server_public_key: KxPublicKey, kx_completed: asyncio.Future) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET2, self._data_to_send_initial),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.CONNECTED, self._receive_packet2),
+                },
+            },
+        )
+
+        self._client_pair: KxPair = client_pair
+        self._server_public_key: KxPublicKey = server_public_key
+        self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
+
+    def _receive_packet2(self) -> bool:
+        # we expect to receive packet2 from the server, length KX_KK_PACKET2BYTES
+        packet2: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET2BYTES)
+        if packet2 is None:
+            # not enough data to read the packet2
+            return False
+        self._kx_state.client_finish_kx_kk(packet2)
+        assert self._kx_state.session_pair is not None
+        self._session_pair = self._kx_state.session_pair
+        self._rbox = SecretBox(self._session_pair.rx)
+        self._tbox = SecretBox(self._session_pair.tx)
+        return True
+
+    def _data_to_send_initial(self) -> bytes:
+        self._data_ready_to_send.add(self._kx_state.packet1)
+        return self._data_to_send()
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return self._server_public_key
+
+
+class KX_KK_ServerStateMachine(BaseMachine):
+    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,
+            MachineState.CONNECTED,
+            MachineState.READER_CLOSED,
+            MachineState.WRITER_CLOSED,
+            MachineState.READER_WRITER_CLOSED,
+            MachineState.WAITING_FOR_PACKET1,
+        },
+    )
+
+    def __init__(self, server_pair: KxPair, client_public_key: KxPublicKey, kx_completed: asyncio.Future) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.CONNECTED, self._receive_packet1),
+                },
+            },
+        )
+
+        self._server_pair: KxPair = server_pair
+        self._client_public_key: KxPublicKey = client_public_key
+
+    def _receive_packet1(self) -> bool:
+        # we expect to receive packet1 from the client, length KX_KK_PACKET1BYTES
+        packet1: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET1BYTES)
+        if packet1 is None:
+            # not enough data to read the packet1
+            return False
+        pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, packet1)
+        self._session_pair = pair
+        self._rbox = SecretBox(self._session_pair.rx)
+        self._tbox = SecretBox(self._session_pair.tx)
+        self._data_ready_to_send.add(packet2)
+        return True
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return self._client_public_key
+
+
+class KX_XX_ClientStateMachine(BaseMachine):
+    # INITIAL                => data_to_send => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2    => receive_data => WAITING_FOR_SERVER_ACK (or stay in WAITING_FOR_PACKET2 if not enough data)
+    # WAITING_FOR_SERVER_ACK => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,
+            MachineState.CONNECTED,
+            MachineState.READER_CLOSED,
+            MachineState.WRITER_CLOSED,
+            MachineState.READER_WRITER_CLOSED,
+            MachineState.WAITING_FOR_PACKET2,
+            MachineState.WAITING_FOR_SERVER_ACK,
+        },
+    )
+
+    def __init__(self, client_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET2, self._data_to_send_initial),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2),
+                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.CONNECTED, self._receive_server_ack),
+                },
+            },
+        )
+
+        self._client_pair: KxPair = client_pair
+        self._psk: Psk | None = psk
+        self._kx_state: KxXxClientState = self._client_pair.client_init_kx_xx(self._psk)
+        self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
+
+    def _receive_packet2(self) -> bool:
+        # we expect to receive packet2 from the server, length KX_XX_PACKET2BYTES
+        packet2: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET2BYTES)
+        if packet2 is None:
+            # not enough data to read the packet2
+            return False
+        self._kx_state.client_process_kx_xx(packet2)
+        assert self._kx_state.packet3
+        assert self._kx_state.session_pair is not None
+        assert self._kx_state.server_public_key is not None
+        self._session_pair = self._kx_state.session_pair
+        self._rbox = SecretBox(self._session_pair.rx)
+        self._tbox = SecretBox(self._session_pair.tx)
+        self._server_public_key = self._kx_state.server_public_key
+        # send packet3 to the server
+        self._data_ready_to_send.add(self._kx_state.packet3)
+        return True
+
+    def _receive_server_ack(self) -> bool:
+        # self._state == MachineState.WAITING_FOR_SERVER_ACK:
+        two_uple = self._get_small_message()
+        if two_uple is None:
+            # not enough data to read the message
+            return False
+        if two_uple[0] != OK_MESSAGE:
+            raise RuntimeError("Server did not respond with OK")
+        return True
+
+    def _data_to_send_initial(self) -> bytes:
+        self._data_ready_to_send.add(self._kx_state.packet1)
+        return self._data_to_send()
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return self._server_public_key
+
+
+class KX_XX_ServerStateMachine(BaseMachine):
+    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data => WAITING_FOR_PACKET3 (or stay in WAITING_FOR_PACKET1 if not enough data)
+    # WAITING_FOR_PACKET3   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET3 if not enough data)
+
+    _valid_states = frozenset(
+        {
+            MachineState.INITIAL,
+            MachineState.CONNECTED,
+            MachineState.READER_CLOSED,
+            MachineState.WRITER_CLOSED,
+            MachineState.READER_WRITER_CLOSED,
+            MachineState.WAITING_FOR_PACKET1,
+            MachineState.WAITING_FOR_PACKET3,
+        },
+    )
+
+    def __init__(self, server_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
+        super().__init__(kx_completed)
+
+        self._transitions.add_many(
+            {
+                TransitionEvent.DATA_TO_SEND: {
+                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                },
+                TransitionEvent.RECEIVE_DATA: {
+                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET3, self._receive_packet1),
+                    MachineState.WAITING_FOR_PACKET3: (MachineState.CONNECTED, self._receive_packet3),
+                },
+            },
+        )
+
+        self._server_pair: KxPair = server_pair
+        self._psk: Psk | None = psk
+        self._client_public_key: KxPublicKey | None = None  # will be set after receiving packet1 from the client
+        self._kx_state: KxXxServerState
+
+    def _receive_packet1(self) -> bool:
+        # we expect to receive packet1 from the client, length KX_XX_PACKET1BYTES
+        packet1: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET1BYTES)
+        if packet1 is None:
+            # not enough data to read the packet1
+            return False
+        self._kx_state = self._server_pair.server_process_kx_xx(packet1, self._psk)
+        assert self._kx_state.packet2
+        # send packet2 to the client
+        self._data_ready_to_send.add(self._kx_state.packet2)
+        return True
+
+    def _receive_packet3(self) -> bool:
+        # self._state == MachineState.WAITING_FOR_PACKET3
+        packet3: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET3BYTES)
+        if packet3 is None:
+            # not enough data to read the packet3
+            return False
+        self._kx_state.server_finish_kx_xx(packet3)
+        assert self._kx_state.session_pair is not None
+        assert self._kx_state.client_public_key is not None
+        self._session_pair = self._kx_state.session_pair
+        self._rbox = SecretBox(self._session_pair.rx)
+        self._tbox = SecretBox(self._session_pair.tx)
+        self._client_public_key = self._kx_state.client_public_key
+        # send OK message to the client
+        ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
+        self.write_emessage(ciphertext, 0)
+        return True
+
+    def get_peer_key(self) -> KxPublicKey | None:
+        return self._client_public_key
+
+
+class StreamReaderWriter:
+    def __init__(self, protocol: "KXProtocol") -> None:
+        self._protocol: KXProtocol = protocol
+        self.peername = protocol.peername
 
     def close(self) -> None:
-        if self._server is not None:
-            logger.info("Asking to close server")
-            self._server.close()  # interrupts the serve_forever loop
-            self._server.close_clients()
+        self._protocol.close()
+
+    def is_closing(self) -> bool:
+        return self._protocol.is_closing()
+
+    async def wait_closed(self) -> None:
+        await self._protocol.wait_closed()
+
+    async def get_next_msg(self) -> tuple[bytes, int]:
+        return await self._protocol.get_next_msg()
+
+    async def write_cancel_msg(self, target_msg_id: int) -> None:
+        await self._protocol.write_cancel_msg(target_msg_id)
+
+    async def write_msg(self, msg: Buffer, msg_id: int) -> None:
+        await self._protocol.write_msg(msg, msg_id)
+
+    def write_eof(self) -> None:
+        self._protocol.write_eof()
+
+    def can_write_eof(self) -> bool:
+        return self._protocol.can_write_eof()
+
+    async def drain(self) -> None:
+        await self._protocol.drain()
+
+    def get_extra_info(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
+        return self._protocol.get_extra_info(name, default)
 
 
-class KX_N_AsyncTCPServer(BaseAsyncTCPServer):
-    def __init__(self, addr: tuple[str, int], handler_class: type[AsyncHandler], server_pair: KxPair, *, psk: Psk | None = None):
-        super().__init__(addr, handler_class)
-        self.server_pair: KxPair = server_pair
-        self.psk: Psk | None = psk
+class KXProtocol(asyncio.BufferedProtocol):
+    eof_exception = EOFError("Connection closed by peer")
 
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        packet1 = await reader.readexactly(KX_N_PACKET1BYTES)  # will trigger exception if not enough data
-        session_pair = self.server_pair.server_finish_kx_n(
-            packet1, self.psk
-        )  # this will raise KeyExchangeException if the key exchange fails
-        await SecretBox(session_pair.tx).aencrypt(OK_MESSAGE, 0, out=writer)
-        return session_pair
-
-
-class KX_KK_AsyncTCPServer(BaseAsyncTCPServer):
-    def __init__(self, addr: tuple[str, int], handler_class: type[AsyncHandler], server_pair: KxPair, client_public_key: KxPublicKey):
-        super().__init__(addr, handler_class)
-        self.server_pair: KxPair = server_pair
-        self.client_public_key: KxPublicKey = client_public_key
-
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        # read packet1 from the client, expected length is KX_KK_PACKET1BYTES
-        packet1 = await reader.readexactly(KX_KK_PACKET1BYTES)
-        # calculate the session keys
-        session_pair, packet2 = self.server_pair.server_process_kx_kk(self.client_public_key, packet1)
-        # send packet2 to the client
-        writer.write(packet2)
-        await writer.drain()
-        return session_pair
-
-
-class KX_XX_AsyncTCPServer(BaseAsyncTCPServer):
-    def __init__(self, addr: tuple[str, int], handler_class: type[AsyncHandler], server_pair: KxPair, *, psk: Psk | None = None):
-        super().__init__(addr, handler_class)
-        self.server_pair: KxPair = server_pair
-        self.psk: Psk | None = psk
-
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        # read packet1 from the client, expected length is KX_XX_PACKET1BYTES
-        packet1 = await reader.readexactly(KX_XX_PACKET1BYTES)
-        st = self.server_pair.server_process_kx_xx(packet1, self.psk)
-        # send packet2 to the client
-        writer.write(st.packet2)
-        await writer.drain()
-        # read packet3 from the client, expected length is KX_XX_PACKET3BYTES
-        packet3 = await reader.readexactly(KX_XX_PACKET3BYTES)
-        # calculate the session keys
-        st.server_finish_kx_xx(packet3)
-        assert st.session_pair is not None
-        assert st.client_public_key is not None
-        try:
-            await self.validate_client_public_key(st.client_public_key)
-        except Exception as ex:
-            raise KeyExchangeException("Client public key validation failed") from ex
-        # send OK message to the client
-        await SecretBox(st.session_pair.tx).aencrypt(OK_MESSAGE, 0, out=writer)
-        return st.session_pair
-
-    async def validate_client_public_key(self, client_public_key: KxPublicKey) -> None:
-        logger.info(f"discovered client public key: {client_public_key}")
-
-
-class KX_N_TCPClient:
-    """
-    EncryptedTCPClient provides a client to connect to a TCP server using key exchange variant N.
-
-    The client uses the server's public key to authenticate the server and generate session keys.
-    """
-
-    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, *, psk: Psk | None = None):
-        self.server_address: tuple[str, int] = server_address
-        self.server_public_key: KxPublicKey = server_public_key
-        self.psk: Psk | None = psk
-
-        self.connected: bool = False
-        self.closed: bool = True
-
-        self.session_pair: SessionPair | None = None
-
-        self.socket: socket.socket | None = None
-        self.rfile: BinaryIO | None = None
-        self.wfile: BinaryIO | None = None
-
-        self.read_lock = threading.Lock()
-        self.write_lock = threading.Lock()
-
-    def connect(self, *, retry: int = -1) -> None:
-        if self.connected:
-            raise RuntimeError("Client is already connected")
-        if not self.closed:
-            raise RuntimeError("Client is already connecting")
-        self.closed = False
-        try:
-            self._connect(retry=retry)
-        except:
-            self.close()
-            raise
-        else:
-            self.connected = True
-            logger.info("Server acknowledged, session keys established")
-
-    def _connect(self, retry: int) -> None:
-        while True:
-            try:
-                self.socket = socket.create_connection(self.server_address, timeout=30)
-            except ConnectionRefusedError:
-                if retry == 0:
-                    raise
-                if retry > 0:
-                    retry -= 1
-            else:
-                break
-            logger.warning(f"Connection to {self.server_address} failed, retrying in 1 second...")
-            time.sleep(1)
-
-        self.socket.settimeout(None)  # timeout does not play nice with makefile
-        set_keepalive(self.socket)
-        logger.info(f"Connected to server at {self.server_address}")
-        self.rfile = self.socket.makefile("rb")
-        self.wfile = self.socket.makefile("wb")
-
-        self.session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
-        self.wfile.write(packet1)
-        self.wfile.flush()
-        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with 'OK' after sending packet1")
-
-    def write(self, msg: Buffer, *, msg_id: int = 1):
-        if not self.connected or self.wfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected. Call connect() before writing.")
-        if not msg:
-            logger.warning("Attempted to write an empty message, skipping")
-            return
-        tx, wfile = self.session_pair.tx, self.wfile
-        try:
-            with self.write_lock:
-                SecretBox(tx).encrypt(msg, msg_id=msg_id, out=wfile)
-                wfile.flush()
-        except OSError:
-            logger.error("Failed to write to server, closing connection")
-            self.close()
-            raise
-
-    def read(self) -> tuple[bytes, int]:
-        if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected. Call connect() before reading.")
-        return self._read(self.rfile, self.session_pair.rx)
-
-    def _read(self, rfile, rx) -> tuple[bytes, int]:
-        if not self.connected or self.closed:
-            raise RuntimeError("Client is not connected. Call connect() before reading.")
-        try:
-            with self.read_lock:
-                emsg: EncryptedMessage = EncryptedMessage.read_from(rfile)
-            return emsg.decrypt(rx), emsg.msg_id
-        except OSError:
-            logger.error("Failed to read from server, closing connection")
-            self.close()
-            raise
-        except DecryptException:
-            logger.error("Decryption failed, closing connection")
-            self.close()
-            raise
-
-    def __iter__(self) -> Iterator[tuple[bytes, int]]:
-        if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected. Call connect() before iterating.")
-        return _ClientIterator(self)
-
-    def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        self.connected = False
-        if self.socket is not None:
-            try:
-                self.socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        if self.rfile is not None:
-            try:
-                self.rfile.close()
-            except OSError:
-                pass
-        if self.wfile is not None:
-            try:
-                self.wfile.close()
-            except OSError:
-                pass
-        if self.socket is not None:
-            try:
-                self.socket.close()
-            except OSError:
-                pass
-
-    def __enter__(self):
-        self.connect()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
-
-
-class _ClientIterator:
-    def __init__(self, client: KX_N_TCPClient):
-        self.client = client
-        self.stopped = False
-        self.rfile = client.rfile
-        if client.session_pair is None:
-            raise RuntimeError("Client is not connected. Call connect() before iterating.")
-        self.rx = client.session_pair.rx
-
-    def __iter__(self) -> Self:
-        return self
-
-    def __next__(self) -> tuple[bytes, int]:
-        if self.stopped:
-            raise StopIteration
-        try:
-            return self.client._read(self.rfile, self.rx)
-        except OSError as e:
-            self.stopped = True
-            logger.warning(f"Connection closed or read error, stopping iteration: {e}")
-            raise StopIteration
-        except DecryptException:
-            self.stopped = True
-            logger.warning("Decryption failed, stopping read loop")
-            raise
-        except:
-            self.stopped = True
-            raise
-
-
-class BaseAsyncTCPClient(ABC):
-    def __init__(self, server_address: tuple[str, int]):
-        self.server_address: tuple[str, int] = server_address
-
-        self.connected: bool = False
-        self.closed: bool = True
-
-        self.session_pair: SessionPair | None = None
-        self.reader: asyncio.StreamReader | None = None
-        self.writer: asyncio.StreamWriter | None = None
-
-    async def connect(self, retry: int = -1) -> None:
-        if self.connected:
-            logger.info("Client is already connected, skipping connect")
-            return
-        if not self.closed:
-            logger.info("Client is already connecting, skipping connect")
-            return
-        self.closed = False  # to indicate that we are in the process of connecting
-        try:
-            await self._connect(retry=retry)
-            self.connected = True  # success, we are connected
-            logger.info("Server acknowledged, session keys established")
-        except:
-            # if _connect failed, the reader/writer/session_pair are not set
-            # we just need to reset the state to closed
-            self.closed = True
-            self.connected = False
-            raise
-
-    async def _connect(self, retry: int) -> None:
-        reader: asyncio.StreamReader
-        writer: asyncio.StreamWriter
-        session_pair: SessionPair
-
-        while True:
-            try:
-                reader, writer = await asyncio.open_connection(self.server_address[0], self.server_address[1])
-            except ConnectionRefusedError:
-                if retry == 0:
-                    raise
-                if retry > 0:
-                    retry -= 1
-            else:
-                break
-            logger.warning(f"Connection to {self.server_address} failed, retrying in 1 second...")
-            await asyncio.sleep(1)
-
-        logger.info(f"Connected to server at {self.server_address}")
-
-        session_pair = await self._key_exchange(reader, writer)
-        # if no exception, everything is fine, we can set the session pair and reader/writer
-        self.reader = reader
-        self.writer = writer
-        self.session_pair = session_pair
-
-    async def _key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        try:
-            return await self.key_exchange(reader, writer)
-        except Exception as ex:
-            raise KeyExchangeException("Key exchange failed") from ex
-
-    @abstractmethod
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        raise NotImplementedError()
-
-    async def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        writer = self.writer
-        self.connected = False
-        self.writer = None
-        self.reader = None
-        self.session_pair = None  # let the garbage collector clean up the session pair
-        if writer is not None:
-            if not writer.is_closing():
-                writer.close()
-            await writer.wait_closed()
-
-    async def write(self, msg: Buffer, msg_id: int = 1) -> None:
-        if self.session_pair is None or self.writer is None:
-            raise RuntimeError("Client is not connected")
-        tx: SecretBoxKey = self.session_pair.tx
-        writer: asyncio.StreamWriter = self.writer
-        if msg is None:
-            raise ValueError("Msg cannot be None")
-        try:
-            await SecretBox(tx).aencrypt(msg, msg_id, writer)
-        except:
-            logger.warning("Failed to write to server")
-            await self.close()
-            raise
-
-    async def read(self) -> tuple[bytes, int]:
-        if self.session_pair is None or self.reader is None:
-            raise RuntimeError("Client is not connected")
-        reader: asyncio.StreamReader = self.reader
-        rx: SecretBoxKey = self.session_pair.rx
-        try:
-            emsg: EncryptedMessage = await EncryptedMessage.aread_from(reader)
-            return emsg.decrypt(rx), emsg.msg_id
-        except OSError:
-            logger.info("Connection closed or read error")
-            await self.close()
-            raise
-        except DecryptException:
-            logger.error("Decryption failed")
-            await self.close()
-            raise
-        except:
-            logger.warning("Unknown error while reading from server")
-            await self.close()
-            raise
-
-    def __aiter__(self) -> AsyncIterator[tuple[bytes, int]]:
-        if self.session_pair is None or self.reader is None:
-            raise RuntimeError("Client is not connected. Call connect() before iterating.")
-        return _AsyncClientIterator(self, self.reader, self.session_pair.rx)
-
-    async def __aenter__(self):
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.close()
-
-
-class KX_N_AsyncTCPClient(BaseAsyncTCPClient):
-    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, *, psk: Psk | None = None):
-        super().__init__(server_address)
-        self.server_public_key: KxPublicKey = server_public_key
-        self.psk: Psk | None = psk
-
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
-        writer.write(packet1)
-        await writer.drain()
-        emsg: EncryptedMessage = await EncryptedMessage.aread_from(reader)
-        ack: bytes = emsg.decrypt(session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with 'OK' after sending packet1")
-        return session_pair
-
-
-class KX_KK_AsyncTCPClient(BaseAsyncTCPClient):
-    def __init__(self, server_address: tuple[str, int], client_pair: KxPair, server_public_key: KxPublicKey):
-        super().__init__(server_address)
-        self.client_pair: KxPair = client_pair
-        self.server_public_key: KxPublicKey = server_public_key
-
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        # generate first packet
-        st = self.client_pair.client_init_kx_kk(self.server_public_key)
-        # send st.packet1 to the server
-        writer.write(st.packet1)
-        await writer.drain()
-        # read the server's response: expected KX_KK_PACKET2BYTES
-        packet2 = await reader.readexactly(KX_KK_PACKET2BYTES)
-        # finish the key exchange
-        st.client_finish_kx_kk(packet2)
-        assert st.session_pair is not None
-        return st.session_pair
-
-
-class KX_XX_AsyncTCPClient(BaseAsyncTCPClient):
     def __init__(
         self,
-        server_address: tuple[str, int],
-        client_pair: KxPair,
+        machine: BaseMachine,
+        kx_completed: asyncio.Future,
         *,
-        psk: Psk | None = None,
-        validate_server_public_key: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = None,
-    ):
-        super().__init__(server_address)
-        self.client_pair: KxPair = client_pair
-        self.psk: Psk | None = psk
-        self._validate_func: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = validate_server_public_key
+        loop: asyncio.AbstractEventLoop | None = None,
+        client_handler: StreamHandlerFunction | None = None,
+        limit: int = _DEFAULT_LIMIT,
+        validate_peer_key: ValidatePeerKeyFunc | None = None,
+    ) -> None:
+        if loop is None:
+            self._loop = asyncio.get_event_loop()
+        else:
+            self._loop = loop
+        self._reading_paused = False
+        self._writing_paused = False
+        self._drain_futures: deque[asyncio.Future] = deque()
+        self._connection_lost = False
+        self._machine = machine
+        self._closed_fut = self._loop.create_future()
+        self._limit = limit
+        self._client_handler: StreamHandlerFunction | None = client_handler
+        self._kx_completed: asyncio.Future = kx_completed
+        self._validate_peer_key: ValidatePeerKeyFunc | None = validate_peer_key
+        self._task: asyncio.Task | None = None
+        self._validation_fut: asyncio.Future | None = None
+        if self._client_handler is None:
+            self._validation_fut = self._loop.create_future()
+        self.peername: str = ""
 
-    async def key_exchange(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> SessionPair:
-        st = self.client_pair.client_init_kx_xx(self.psk)
-        writer.write(st.packet1)
-        await writer.drain()
-        # read the server's response: expected KX_XX_PACKET2BYTES
-        packet2 = await reader.readexactly(KX_XX_PACKET2BYTES)
-        # continue the key exchange
-        st.client_process_kx_xx(packet2)
-        # send the final packet to the server
-        writer.write(st.packet3)
-        await writer.drain()
-        assert st.session_pair is not None
-        assert st.server_public_key is not None
+        self._transport: asyncio.Transport
+
+    def close(self) -> None:
+        self._transport.close()
+
+    def is_closing(self) -> bool:
+        return self._transport.is_closing()
+
+    async def wait_closed(self) -> None:
+        await self._closed_fut
+
+    async def get_next_msg(self) -> tuple[bytes, int]:
+        return await self._machine.read_message()
+
+    async def write_cancel_msg(self, target_msg_id: int) -> None:
+        cancel_msg = bytearray(8)
+        store64(cancel_msg, target_msg_id)
+        ciphertext = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
+        self._machine.write_emessage(ciphertext, CANCEL_MESSAGE_ID)
+        data = self._machine.data_to_send()
+        if data:
+            self._transport.write(data)
+            await self.drain()
+
+    async def write_msg(self, msg: Buffer, msg_id: int) -> None:
+        if msg_id == CANCEL_MESSAGE_ID:
+            raise ValueError("Cannot write a message with msg_id CANCEL_MESSAGE_ID")
+        length = len(memoryview(msg))
+        if length == 0:
+            return
+        # execute encryption in a separate thread to avoid blocking the event loop
+        ciphertext = await asyncio.to_thread(self._machine.encrypt_message, msg, msg_id)
+        self._machine.write_emessage(ciphertext, msg_id)
+        data = self._machine.data_to_send()
+        if data:
+            self._transport.write(data)
+            await self.drain()
+
+    def write_eof(self) -> None:
+        self._machine.writer_eof()
+        self._transport.write_eof()
+
+    def can_write_eof(self) -> bool:
+        return self._transport.can_write_eof()
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        assert isinstance(transport, asyncio.Transport)
+        self._transport = transport
+        self.peername = str(transport.get_extra_info("peername", ""))
+        if self._client_handler is None:
+            logger.info("connected to server %s", self.peername)
+        else:
+            logger.info("new connection from client %s", self.peername)
+        self._kx_completed.add_done_callback(self.key_exchange_completed)
+        # state is INITIAL, we need to move the state and if necessary send the first packet
+        data = self._machine.data_to_send()
+        if data:
+            self._transport.write(data)
+
+    def key_exchange_completed(self, kx_completed: asyncio.Future) -> None:
+        if kx_completed.cancelled():
+            logger.warning("Key exchange with %s was cancelled", self.peername)
+            self._transport.abort()
+            return
+        if kx_completed.exception() is not None:
+            logger.error("Key exchange with %s failed: %s", self.peername, kx_completed.exception())
+            self._transport.abort()
+            return
+
+        logger.info("key exchange with %s completed with success", self.peername)
+
+        self._task = self._loop.create_task(self.validate_and_handle())
+
+    async def continuous_decrypt(self) -> None:
         try:
-            await self.validate_server_public_key(st.server_public_key)
+            await self._machine.decrypt_received_messages()
+        except Exception:
+            logger.exception("Continuous decryption task failed")
+            self._transport.abort()
+            # restart the task to unblock readers
+            await self._machine.decrypt_received_messages()
+
+    async def validate_and_handle(self) -> None:
+        try:
+            await self.validate_peer_key()
+            if self._validation_fut is not None:
+                self._validation_fut.set_result(None)
+        except asyncio.CancelledError:
+            self._transport.abort()
+            logger.warning("Peer public key validation for %s cancelled", self.peername)
+            if self._validation_fut is not None:
+                self._validation_fut.cancel()
+            return
         except Exception as ex:
-            raise KeyExchangeException("Server public key validation failed") from ex
-        emsg: EncryptedMessage = await EncryptedMessage.aread_from(reader)
-        ack: bytes = emsg.decrypt(st.session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with 'OK' after sending packet3")
-        return st.session_pair
+            self._transport.abort()
+            logger.exception("Peer public key validation for %s failed", self.peername)
+            if self._validation_fut is not None:
+                self._validation_fut.set_exception(ex)
+            return
+        logger.info("Peer public key validation for %s passed", self.peername)
 
-    async def validate_server_public_key(self, server_public_key: KxPublicKey):
-        logger.info(f"discovered server public key: {server_public_key}")
-        if self._validate_func is not None:
-            # if a validation function is provided, call it
-            await self._validate_func(self, server_public_key)
+        self._decrypt_task = self._loop.create_task(self.continuous_decrypt())
 
-
-class _AsyncClientIterator:
-    def __init__(self, client: BaseAsyncTCPClient, reader: asyncio.StreamReader, rx: SecretBoxKey):
-        self.stopped = False
-        self.reader: asyncio.StreamReader = reader
-        self.rx: SecretBoxKey = rx
-        self.client: BaseAsyncTCPClient = client
-
-    def __aiter__(self) -> Self:
-        return self
-
-    async def __anext__(self) -> tuple[bytes, int]:
-        if self.stopped:
-            raise StopAsyncIteration
+        if self._client_handler is None:
+            logger.debug("skipping client handler")
+            return
         try:
-            emsg: EncryptedMessage = await EncryptedMessage.aread_from(self.reader)
-            return emsg.decrypt(self.rx), emsg.msg_id
-        except OSError:
-            self.stopped = True
-            await self.client.close()
-            raise StopAsyncIteration
-        except DecryptException:
-            self.stopped = True
-            logger.error("Stopping iteration: decryption failed")
-            await self.client.close()
-            raise
-        except:
-            self.stopped = True
-            logger.warning("Stopping iteration: unexpected error")
-            await self.client.close()
-            raise
+            await self._client_handler(StreamReaderWriter(self))
+        except asyncio.CancelledError:
+            logger.info("Client handler for %s cancelled", self.peername)
+        except Exception:
+            logger.exception("Client handler for %s", self.peername)
+        finally:
+            self._transport.close()
+            logger.info("Client %s disconnected", self.peername)
 
+    async def validate_peer_key(self) -> None:
+        peer_key = self._machine.get_peer_key()
+        if peer_key is None:
+            logger.debug("No peer public key to validate")
+            return
+        if self._validate_peer_key is None:
+            logger.debug("No peer public key validation function provided")
+            return
+        logger.debug("Validating peer public key")
+        await self._validate_peer_key(peer_key)
 
-REQUEST_CANCELLED_ERROR = asyncio.CancelledError("Client connection closed, request cancelled")
+    async def wait_for_validation(self) -> None:
+        if self._validation_fut is None:
+            return
+        await self._validation_fut
 
+    def get_buffer(self, sizehint: int) -> memoryview:  # noqa: ARG002
+        return self._machine.get_buffer()
 
-class BaseAsyncRequestResponseClient:
-    def __init__(self, client: BaseAsyncTCPClient, *, request_timeout_secs: int | None = 30):
-        self._client: BaseAsyncTCPClient = client
-        self._counter = Counter()
-        self._pending_requests: dict[int, asyncio.Future] = {}
-        self._read_task: asyncio.Task | None = None
-        self._request_timeout_secs = request_timeout_secs
+    def buffer_updated(self, nbytes: int) -> None:
+        try:
+            self._machine.receive_data(nbytes)
+        except (DecryptException, KeyExchangeException):
+            logger.exception("decryption or key exchange failed: abort connection with %s", self.peername)
+            self._transport.abort()
+            return
+        except Exception:
+            logger.exception("While processing received data from %s", self.peername)
+            self._transport.close()
+            return
 
-    async def connect(self, *, retry: int = -1) -> None:
-        await self._client.connect(retry=retry)
-        if self._read_task is None:
-            self._read_task = asyncio.create_task(self._read_responses())
+        self.maybe_pause_reading()  # TODO: move ?
 
-    async def close(self) -> None:
-        read_task = self._read_task
-        # make request() fail if called after close()
-        self._read_task = None
-        # safe to call in any case because the _client.close() method is guarded
-        await self._client.close()
-        # now we can cancel the read task
-        if read_task is not None:
-            read_task.cancel()
+        data = self._machine.data_to_send()
+        if data:
+            self._transport.write(data)
+
+    def maybe_pause_reading(self) -> None:
+        if self._reading_paused:
+            return
+        logger.debug("maybe_pause_reading called, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+        if self._machine.received_size > 2 * self._limit:
             try:
-                await read_task
-            except asyncio.CancelledError:
-                logger.info("Read task cancelled")
-        # from here no more responses will be received, so cancel all pending requests
-        for fut in self._pending_requests.values():
-            if not fut.done():
-                fut.set_exception(REQUEST_CANCELLED_ERROR)
+                logger.info("Transport asked to pause reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+                self._transport.pause_reading()
+                self._reading_paused = True
+            except NotImplementedError:
+                pass
 
-    async def __aenter__(self):
-        await self.connect()
+    def maybe_resume_reading(self) -> None:
+        if not self._reading_paused:
+            return
+        logger.debug("maybe_resume_reading called, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+        if self._machine.received_size <= self._limit:
+            logger.info("Transport asked to resume reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+            self._reading_paused = False
+            self._transport.resume_reading()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        logger.info("connection lost for %s, exc: %s", self.peername, exc)
+        self._machine.connection_lost(exc)
+
+        # make wait_closed() return
+        if not self._closed_fut.done():
+            if exc is None:
+                self._closed_fut.set_result(None)
+            else:
+                self._closed_fut.set_exception(exc)
+
+        self._connection_lost = True  # makes next calls to drain() raise EOFError
+
+        if not self._writing_paused:
+            return
+        # some writers may be on pause, we need to unblock them
+        for dfut in self._drain_futures:
+            if not dfut.done():
+                if exc is None:
+                    dfut.set_result(None)
+                else:
+                    dfut.set_exception(exc)
+
+    def eof_received(self) -> bool:
+        logger.info("eof received from %s", self.peername)
+        self._machine.reader_eof()
+        return False
+
+    async def drain(self) -> None:
+        if self._connection_lost:
+            raise self.eof_exception
+        if self._transport.is_closing():
+            await asyncio.sleep(0)
+        if self._connection_lost:
+            raise self.eof_exception
+        if not self._writing_paused:
+            return
+        waiter = self._loop.create_future()
+        self._drain_futures.append(waiter)
+        try:
+            await waiter
+        finally:
+            self._drain_futures.remove(waiter)
+
+    def pause_writing(self) -> None:
+        logger.info("pause_writing called: Transport asked protocol to pause writing")
+        self._writing_paused = True
+
+    def resume_writing(self) -> None:
+        logger.info("resume_writing called: Transport asked protocol to resume writing")
+        self._writing_paused = False
+
+        for waiter in self._drain_futures:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def get_extra_info(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
+        return self._transport.get_extra_info(name, default)
+
+
+async def open_kx_n_connection(
+    host: str,
+    port: int,
+    server_public_key: KxPublicKey,
+    *,
+    psk: Psk | None = None,
+    limit: int = _DEFAULT_LIMIT,
+) -> StreamReaderWriter:
+    loop = asyncio.get_running_loop()
+    kx_completed = loop.create_future()
+    machine = KX_N_ClientStateMachine(server_public_key, kx_completed, psk=psk)
+    protocol = KXProtocol(machine, kx_completed, limit=limit)
+    await loop.create_connection(lambda: protocol, host, port)
+    await kx_completed  # wait for the key exchange to complete
+    return StreamReaderWriter(protocol)
+
+
+async def open_kx_kk_connection(
+    host: str,
+    port: int,
+    client_pair: KxPair,
+    server_public_key: KxPublicKey,
+    *,
+    limit: int = _DEFAULT_LIMIT,
+) -> StreamReaderWriter:
+    loop = asyncio.get_running_loop()
+    kx_completed = loop.create_future()
+    machine = KX_KK_ClientStateMachine(client_pair, server_public_key, kx_completed)
+    protocol = KXProtocol(machine, kx_completed, limit=limit)
+    await loop.create_connection(lambda: protocol, host, port)
+    await kx_completed  # wait for the key exchange to complete
+    return StreamReaderWriter(protocol)
+
+
+async def open_kx_xx_connection(
+    host: str,
+    port: int,
+    client_pair: KxPair,
+    *,
+    psk: Psk | None = None,
+    limit: int = _DEFAULT_LIMIT,
+    validate_server_key: ValidatePeerKeyFunc | None = None,
+) -> StreamReaderWriter:
+    loop = asyncio.get_running_loop()
+    kx_completed = loop.create_future()
+    machine = KX_XX_ClientStateMachine(client_pair, kx_completed, psk=psk)
+    protocol = KXProtocol(machine, kx_completed, limit=limit, validate_peer_key=validate_server_key)
+    await loop.create_connection(lambda: protocol, host, port)
+    await kx_completed  # wait for the key exchange to complete
+    await protocol.wait_for_validation()  # will raise an exception if the validation fails
+    return StreamReaderWriter(protocol)
+
+
+class AsyncRequestResponseClient:
+    def __init__(self, rw: StreamReaderWriter, *, request_timeout_secs: int | None = 30) -> None:
+        self._rw: StreamReaderWriter = rw
+        self._counter = Counter()
+        self._pending_requests: dict[int, asyncio.Future[bytes]] = {}
+        self._request_timeout_secs = request_timeout_secs
+        self._read_task: asyncio.Task = asyncio.create_task(self._read_responses())
+
+    def close(self, ex: BaseException | None = None) -> None:
+        self._rw.close()
+        if ex is None:
+            for fut in self._pending_requests.values():
+                fut.cancel()
+        else:
+            for fut in self._pending_requests.values():
+                if not fut.done():
+                    fut.set_exception(ex)
+
+    async def wait_closed(self) -> None:
+        await self._rw.wait_closed()
+        try:
+            await self._read_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as ex:  # noqa: BLE001
+            logger.info("Read task stopped with error: %s", ex)
+
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.close()
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:  # noqa: ANN001
+        self.close()
+        await self.wait_closed()
 
     async def request(self, msg: Buffer, *, timeout_secs: int | None = None) -> bytes:
+        if self._read_task.done():
+            raise RuntimeError("RequestResponseClient is closed")
         timeout_secs = timeout_secs if timeout_secs is not None else self._request_timeout_secs
-        if self._read_task is None:
-            raise RuntimeError("Client is not connected. Call connect() before making requests.")
         # ensure we get a unique message ID for this request
         msg_id: int = self._counter()
         # create and register the future that will hold the response to this request
@@ -992,140 +1133,282 @@ class BaseAsyncRequestResponseClient:
         # when the response is received in read_task, we will set the result of this future
         self._pending_requests[msg_id] = fut
         try:
-            await self._client.write(msg, msg_id=msg_id)
+            await self._rw.write_msg(msg, msg_id=msg_id)
         except:
             # a response will never come, so clean up the future
             del self._pending_requests[msg_id]
-            await self.close()
+            self.close()
             raise
-        if timeout_secs is None:
-            # no timeout
-            # we still have to take care of request cancellation by the user
-            try:
-                return await fut
-            except asyncio.CancelledError:
-                del self._pending_requests[msg_id]
-                logger.info(f"Request {msg_id} cancelled")
-                await self._cancel_request(msg_id)  # attempt to cancel the request on the server side
-                raise
-        # with timeout
         try:
             async with asyncio.timeout(timeout_secs):
                 return await fut
         except TimeoutError:
-            try:
-                del self._pending_requests[msg_id]
-            except KeyError:
-                pass
-            logger.info(f"Request {msg_id} timed out")
             await self._cancel_request(msg_id)  # attempt to cancel the request on the server side
+            logger.info("Request timed out: %s", msg_id)
             raise
         except asyncio.CancelledError:
-            try:
-                del self._pending_requests[msg_id]
-            except KeyError:
-                pass
-            logger.info(f"Request {msg_id} cancelled")
             await self._cancel_request(msg_id)  # attempt to cancel the request on the server side
             raise
+        finally:
+            if msg_id in self._pending_requests:
+                del self._pending_requests[msg_id]
 
     async def _cancel_request(self, msg_id: int) -> None:
         # send a short cancel message to the server
         # msg_id = CANCEL_MESSAGE_ID is reserved for cancel requests
-        cancel_msg = bytearray(8)
-        store64(cancel_msg, msg_id)
+
         try:
-            await self._client.write(cancel_msg, msg_id=CANCEL_MESSAGE_ID)
-        except Exception as e:
-            logger.info(f"Failed to send cancel request for msg_id {msg_id}: {e}")
+            await self._rw.write_cancel_msg(msg_id)
+            logger.info("Request cancelled: %s", msg_id)
+        except Exception as ex:  # noqa: BLE001
+            logger.info("Failed to cancel request: %s: %s", msg_id, ex)
 
     async def _read_responses(self) -> None:
         # read responses from the server in a loop
-        fut: asyncio.Future[bytes]
         try:
-            async for msg, msg_id in self._client:
-                try:
-                    # get the future associated with this msg_id
-                    # we assume that the server sends the response with the request 'msg_id', using the same msg_id
-                    fut = self._pending_requests.pop(msg_id)
-                    fut.set_result(msg)
-                except KeyError:
+            while True:
+                msg, msg_id = await self._rw.get_next_msg()
+                fut = self._pending_requests.get(msg_id)
+                if fut is None:
                     await self.handle_unexpected_response(msg, msg_id)
-        finally:
-            # if the read loop unexpectedly exits, be sure to close the client
-            await self.close()
+                else:
+                    fut.set_result(msg)
+        except Exception as ex:  # noqa: BLE001
+            self.close(ex)
+        else:
+            self.close()
 
     async def handle_unexpected_response(self, msg: bytes, msg_id: int) -> None:
         # this method is called when the client receives a response with an unknown msg_id
         # you can override this method to handle unexpected responses
         # by default, we just ignore it
-        logger.warning(f"Unexpected response received with msg_id {msg_id}")
+        logger.warning("Unexpected response received. nbytes = %s, msg_id = %s", len(msg), msg_id)
 
 
-class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        server_public_key: KxPublicKey,
-        *,
-        psk: Psk | None = None,
-        request_timeout_secs: int | None = 30,
-    ):
-        client = KX_N_AsyncTCPClient(server_address, server_public_key, psk=psk)
-        super().__init__(client, request_timeout_secs=request_timeout_secs)
+async def make_kx_n_client(
+    host: str,
+    port: int,
+    server_public_key: KxPublicKey,
+    *,
+    psk: Psk | None = None,
+    limit: int = _DEFAULT_LIMIT,
+    request_timeout_secs: int | None = 30,
+) -> AsyncRequestResponseClient:
+    rw = await open_kx_n_connection(host, port, server_public_key, psk=psk, limit=limit)
+    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
-class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        client_pair: KxPair,
-        server_public_key: KxPublicKey,
-        *,
-        request_timeout_secs: int | None = 30,
-    ):
-        client = KX_KK_AsyncTCPClient(server_address, client_pair, server_public_key)
-        super().__init__(client, request_timeout_secs=request_timeout_secs)
+async def make_kx_kk_client(
+    host: str,
+    port: int,
+    client_pair: KxPair,
+    server_public_key: KxPublicKey,
+    *,
+    limit: int = _DEFAULT_LIMIT,
+    request_timeout_secs: int | None = 30,
+) -> AsyncRequestResponseClient:
+    rw = await open_kx_kk_connection(host, port, client_pair, server_public_key, limit=limit)
+    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
-class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        client_pair: KxPair,
-        *,
-        psk: Psk | None = None,
-        request_timeout_secs: int | None = 30,
-        validate_server_public_key: Callable[[BaseAsyncTCPClient, KxPublicKey], Awaitable[None]] | None = None,
-    ):
-        client = KX_XX_AsyncTCPClient(server_address, client_pair, psk=psk, validate_server_public_key=validate_server_public_key)
-        super().__init__(client, request_timeout_secs=request_timeout_secs)
+async def make_kx_xx_client(
+    host: str,
+    port: int,
+    client_pair: KxPair,
+    *,
+    psk: Psk | None = None,
+    limit: int = _DEFAULT_LIMIT,
+    validate_server_key: ValidatePeerKeyFunc | None = None,
+    request_timeout_secs: int | None = 30,
+) -> AsyncRequestResponseClient:
+    rw = await open_kx_xx_connection(host, port, client_pair, psk=psk, limit=limit, validate_server_key=validate_server_key)
+    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
-def set_keepalive_linux(sock: socket.socket, after_idle_sec: int, interval_sec: int, max_fails: int):
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    if after_idle_sec is not None:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, after_idle_sec)
-    if interval_sec is not None:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_sec)
-    if max_fails is not None:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, max_fails)
+class ServerPendingProcessingTasks:
+    def __init__(self) -> None:
+        # keep track of pending server tasks by incoming message ID
+        self.pending: dict[int, set[asyncio.Task]] = {}
+
+    def register(self, msg_id: int, task: asyncio.Task) -> None:
+        if msg_id not in self.pending:
+            self.pending[msg_id] = set()
+        self.pending[msg_id].add(task)
+
+    def done(self, msg_id: int, task: asyncio.Task) -> None:
+        s = self.pending.get(msg_id)
+        if s is None:
+            return
+        s.discard(task)
+        if not s:
+            del self.pending[msg_id]
+
+    def cancel(self, msg_id: int) -> None:
+        for task in self.pending.get(msg_id, []):
+            task.cancel()
+
+    def cancel_all(self) -> int:
+        nb = 0
+        for tasks in self.pending.values():
+            nb += len(tasks)
+            for task in tasks:
+                task.cancel()
+        return nb
 
 
-def set_keepalive_osx(sock, after_idle_sec, interval_sec, max_fails):
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, interval_sec)
+class BaseServerHandler(ABC):
+    def __init__(self) -> None:
+        self._tasks = ServerPendingProcessingTasks()
+        self._stopping: bool = False
+        self.rw: StreamReaderWriter
+        self._msgid_var: contextvars.ContextVar = contextvars.ContextVar("msgid")
+
+    @classmethod
+    def func(cls) -> StreamHandlerFunction:
+        """Return a StreamHandlerFunction that can be used to handle the connection."""
+        return cls().handle
+
+    async def _handle_message(self, msg: bytes, msg_id: int) -> None:
+        self._msgid_var.set(msg_id)
+        try:
+            if not await self.handle_message(msg, msg_id):
+                self._stopping = True
+                self.rw.close()
+        except Exception:
+            logger.exception("Error while handling message %s", msg_id)
+
+    @abstractmethod
+    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        raise NotImplementedError
+
+    async def handle(self, rw: StreamReaderWriter) -> None:
+        # self.handle is a StreamHandlerFunction
+        self.rw = rw
+        try:
+            while not self._stopping:
+                try:
+                    msg, msg_id = await rw.get_next_msg()
+                except EOFError:
+                    logger.info("EOF received")
+                    return
+                except Exception as ex:  # noqa: BLE001
+                    logger.warning("While reading next message: %s", ex)
+                    return
+                self._process(msg, msg_id)
+
+        finally:
+            self._stopping = True
+            nb = self._tasks.cancel_all()
+            logger.info("Cancelled pending tasks: %s", nb)
+            rw.close()
+            await rw.wait_closed()
+
+    def _process(self, msg: bytes, msg_id: int) -> None:
+        if msg_id == CANCEL_MESSAGE_ID:
+            msg_id_to_cancel = load64(msg)
+            logger.info("Received cancel for request: %s (%s)", msg_id_to_cancel, self.rw.peername)
+            self._tasks.cancel(msg_id_to_cancel)
+            return
+        if self._stopping:
+            # not scheduling new tasks if we are stopping
+            return
+        # schedule a new task to handle the message
+        task: asyncio.Task = asyncio.create_task(self._handle_message(msg, msg_id))
+        self._tasks.register(msg_id, task)
+
+        def cb(t: asyncio.Task) -> None:
+            self._tasks.done(msg_id, t)
+
+        task.add_done_callback(cb)
 
 
-def set_keepalive_win(sock, after_idle_sec, interval_sec, max_fails):
-    sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, after_idle_sec * 1000, interval_sec * 1000))
+class StreamHandler(BaseServerHandler, ABC):
+    async def write(self, msg: bytes, msg_id: int | None = None) -> None:
+        # the write method can be used by subclasses to implement handle_message
+        # it automatically uses the message ID from the incoming message to write the response, if not provided
+        if msg_id is None:
+            msg_id = self._msgid_var.get()
+        await self.rw.write_msg(msg, msg_id)
+
+    @abstractmethod
+    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        raise NotImplementedError
 
 
-def set_keepalive(sock: socket.socket, *, after_idle_sec: int = 10, interval_sec: int = 5, max_fails: int = 4):
-    if PLATFORM == "linux":
-        return set_keepalive_linux(sock, after_idle_sec, interval_sec, max_fails)
-    if PLATFORM == "darwin":
-        return set_keepalive_osx(sock, after_idle_sec, interval_sec, max_fails)
-    if PLATFORM == "Windows":
-        return set_keepalive_win(sock, after_idle_sec, interval_sec, max_fails)
-    logger.warning(f"Keepalive not supported on {PLATFORM} platform, skipping")
+class RequestResponseHandler(BaseServerHandler, ABC):
+    @abstractmethod
+    async def response(self, msg: bytes, msg_id: int) -> Buffer:
+        raise NotImplementedError
+
+    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        resp = await self.response(msg, msg_id)
+        await self.rw.write_msg(resp, msg_id)
+        return True
+
+
+def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
+    if isinstance(handler, type) and issubclass(handler, BaseServerHandler):
+        return handler.func()
+    if not isinstance(handler, type):
+        return handler
+    raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
+
+
+async def start_kx_n_server(
+    handler: StreamHandlerFunction | type[BaseServerHandler],
+    host: str,
+    port: int,
+    server_pair: KxPair,
+    *,
+    psk: Psk | None = None,
+    limit: int = _DEFAULT_LIMIT,
+) -> asyncio.AbstractServer:
+    loop = asyncio.get_running_loop()
+
+    def factory() -> KXProtocol:
+        kx_completed = loop.create_future()
+        # the machine will close the kx_completed future when the key exchange is done
+        machine = KX_N_ServerStateMachine(server_pair, kx_completed, psk=psk)
+        # kxprotocol will wait for the kx_completed future before triggering the handler
+        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
+
+    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+
+
+async def start_kx_kk_server(
+    handler: StreamHandlerFunction | type[BaseServerHandler],
+    host: str,
+    port: int,
+    server_pair: KxPair,
+    client_public_key: KxPublicKey,
+    *,
+    limit: int = _DEFAULT_LIMIT,
+) -> asyncio.AbstractServer:
+    loop = asyncio.get_running_loop()
+
+    def factory() -> KXProtocol:
+        kx_completed = loop.create_future()
+        machine = KX_KK_ServerStateMachine(server_pair, client_public_key, kx_completed)
+        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
+
+    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+
+
+async def start_kx_xx_server(
+    handler: StreamHandlerFunction | type[BaseServerHandler],
+    host: str,
+    port: int,
+    server_pair: KxPair,
+    *,
+    psk: Psk | None,
+    limit: int = _DEFAULT_LIMIT,
+    validate_client_key: ValidatePeerKeyFunc | None = None,
+) -> asyncio.AbstractServer:
+    loop = asyncio.get_running_loop()
+
+    def factory() -> KXProtocol:
+        kx_completed = loop.create_future()
+        machine = KX_XX_ServerStateMachine(server_pair, kx_completed, psk=psk)
+        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key)
+
+    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)

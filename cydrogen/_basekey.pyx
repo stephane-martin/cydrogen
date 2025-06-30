@@ -13,7 +13,6 @@ cdef class BaseKey:
         if b is None:
             # empty key
             self.key = SafeMemory(hydro_hash_KEYBYTES)
-            self.key.mark_readonly()
             return
         if isinstance(b, SafeMemory):
             # no need to allocate a new SafeMemory object
@@ -43,7 +42,7 @@ cdef class BaseKey:
 
     @classmethod
     def gen(cls):
-        cdef SafeMemory mem = SafeMemory(hydro_hash_KEYBYTES)
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, hydro_hash_KEYBYTES)
         randomize_buffer(mem)
         mem.mark_readonly()
         return cls(mem)
@@ -51,7 +50,6 @@ cdef class BaseKey:
     @classmethod
     def zero(cls):
         cdef SafeMemory mem = SafeMemory(hydro_hash_KEYBYTES)
-        mem.mark_readonly()
         return cls(mem)
 
     cpdef is_zero(self):

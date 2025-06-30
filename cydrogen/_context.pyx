@@ -57,6 +57,9 @@ cdef class Context:
         except (ValueError, TypeError):
             return False
 
+    def __hash__(self):
+        return hash(self.ctx)
+
     def __bool__(self):
         return not self.is_empty()
 

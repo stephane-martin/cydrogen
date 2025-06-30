@@ -7,10 +7,47 @@ from ._context import Context
 from ._masterkey import MasterKey
 from ._protocols import AsyncReader, AsyncWriter, Reader, Writer
 
-ENC_MSG_HEADER: bytes
+ENC_MSG_MARKER: bytes
 """
-ENC_MSG_HEADER is the magic header for encrypted messages.
+ENC_MSG_MARKER is the magic marker for encrypted messages.
 """
+
+ENC_MSG_HEADER_SIZE: int
+"""
+ENC_MSG_HEADER_SIZE is the size of the header for encrypted messages.
+
+It includes the magic marker (4 bytes), length of the message (8 bytes), and message ID (8 bytes).
+"""
+
+def parse_encrypted_message_header(header: Buffer) -> tuple[int, int]:
+    """
+    Parse the header of a framed encrypted message.
+
+    Args:
+        header: A bytes-like object containing the header.
+
+    Returns:
+        The length of the encrypted message.
+        The message ID.
+
+    Raises:
+        ValueError: If the header is None or if parsing fails.
+        OSError: If the provided header is too short.
+    """
+    ...
+
+def encrypted_message_header(ciphertext: Buffer, msg_id: int) -> bytearray:
+    """
+    Return the header to frame an encrypted message.
+
+    Args:
+        ciphertext: the ciphertext for the encrypted message
+        msg_id: the message ID
+
+    Returns:
+        The header to frame the encrypted message
+    """
+    ...
 
 class SecretBoxKey(BaseKey):
     """
@@ -19,7 +56,7 @@ class SecretBoxKey(BaseKey):
     The secretbox API is used for authenticated encryption of messages.
     """
 
-    def __init__(self, key: bytes | str | Self | Buffer):
+    def __init__(self, key: bytes | str | Self | Buffer) -> None:
         """
         Initialize the SecretBoxKey with a key.
 
@@ -32,7 +69,7 @@ class SecretBoxKey(BaseKey):
         """
         ...
 
-    def secretbox(self, ctx: bytes | str | Context | Buffer | None = None) -> "SecretBox":
+    def secretbox(self, ctx: bytes | str | Context | Buffer | None = None) -> SecretBox:
         """
         Create a SecretBox instance with the current key and context.
 
@@ -91,14 +128,14 @@ class EncryptedMessage:
     All attributes are readonly after initialization.
 
     Attributes:
-        ciphertext: The encrypted message as bytes.
+        ciphertext: The encrypted message itself.
         msg_id: The message ID associated with the encrypted message.
     """
 
-    ciphertext: bytes
+    ciphertext: Buffer
     msg_id: int
 
-    def __init__(self, ctext: bytes | Buffer, msg_id: int):
+    def __init__(self, ctext: Buffer, msg_id: int) -> None:
         """
         Initialize the encrypted message.
 
@@ -117,6 +154,15 @@ class EncryptedMessage:
 
         Returns:
             bytes: The serialized encrypted message.
+        """
+        ...
+
+    def __len__(self) -> int:
+        """
+        Return the length of the framed, encrypted message in bytes, including the header and message ID.
+
+        Returns:
+            int: The length of the encrypted message.
         """
         ...
 
@@ -175,12 +221,14 @@ class EncryptedMessage:
         ...
 
     @classmethod
-    def from_bytes(cls, framed: bytes | Buffer) -> Self:
+    def from_bytes(cls, framed: bytes | Buffer, *, max_msg_size: int | None = None) -> Self:
         """
         Create an EncryptedMessage from a framed bytes object.
 
         Args:
             framed: A bytes-like object containing the framed ciphertext.
+            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
+                          if the message size exceeds this limit.
 
         Returns:
             An instance of EncryptedMessage.
@@ -212,7 +260,7 @@ class EncryptedMessage:
         ...
 
     @classmethod
-    async def aread_from(cls, reader: AsyncReader, *, max_msg_size: int | None = None):
+    async def aread_from(cls, reader: AsyncReader, *, max_msg_size: int | None = None) -> Self:
         """
         Read an EncryptedMessage asynchronously from an async reader.
 
@@ -246,7 +294,7 @@ class SecretBox:
     key: SecretBoxKey
     ctx: Context
 
-    def __init__(self, key: bytes | str | SecretBoxKey | Buffer, *, ctx: bytes | str | Context | Buffer | None = None):
+    def __init__(self, key: bytes | str | SecretBoxKey | Buffer, *, ctx: bytes | str | Context | Buffer | None = None) -> None:
         """
         Initialize the secret box with a key and context.
 
@@ -260,7 +308,7 @@ class SecretBox:
         """
         ...
 
-    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = ..., out: Writer | None = None) -> bytes:
+    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = ..., out: Writer | None = None) -> bytearray:
         """
         Encrypt the plaintext using the secret box key, context and message ID.
 
@@ -278,18 +326,6 @@ class SecretBox:
             ValueError: If the plaintext is None.
             TypeError: if the out object does not support writing.
             EncryptException: If encryption fails.
-        """
-        ...
-
-    async def aencrypt(self, plaintext: bytes | Buffer, msg_id: int, out: AsyncWriter) -> None:
-        """
-        Encrypt the plaintext using the secretbox and message ID. Then write the framed ciphertext
-        to the provided async writer and drain it.
-
-        Args:
-            plaintext: The plaintext to encrypt.
-            msg_id: The message ID to associate with the encrypted message.
-            out: An async writer to write the framed encrypted ciphertext to.
         """
         ...
 
@@ -313,18 +349,6 @@ class SecretBox:
             ValueError: If the ciphertext is None or if the ciphertext is too short.
             TypeError: If the out object does not support writing.
             DecryptException: If decryption fails.
-        """
-        ...
-
-    async def adecrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int, out: AsyncWriter) -> None:
-        """
-        Decrypt the ciphertext using the secretbox and the message ID. Then write the plaintext
-        to the provided async writer and drain it.
-
-        Args:
-            ciphertext: The ciphertext to decrypt. Can be an EncryptedMessage or a bytes-like object.
-            msg_id: The message ID to verify against the ciphertext.
-            out: An async writer to write the decrypted plaintext to.
         """
         ...
 

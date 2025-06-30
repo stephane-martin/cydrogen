@@ -1,10 +1,8 @@
 import base64
 import io
-from itertools import product
-
-import pytest
 
 import cydrogen
+import pytest
 
 SK_BYTES = b"\xb5\xb3Y\x8bV\x13\xb1`?\xea\xa2\x96\x93\xf3\xfc&:\x0e+pIZ\x13\x84\x99\x94\xb7\x94a\xb0\x12*\xdf\xba=;\x9d\xe3\xfe\xee2\xef\xd3\x905\xba!pI@J\x88\xf3j\x8d\xc2\xae\x0eA\x98\xaa,\xfe\x02"
 PK_BYTES = b"\xdf\xba=;\x9d\xe3\xfe\xee2\xef\xd3\x905\xba!pI@J\x88\xf3j\x8d\xc2\xae\x0eA\x98\xaa,\xfe\x02"
@@ -17,7 +15,10 @@ MESSAGES = [
     b"I don't want to talk to you no more, you empty headed animal food trough wiper.",
 ]
 
-CONTEXTS = [b"EXAMPLES", b"CONTEXTS"]
+
+@pytest.fixture(params=[b"EXAMPLES", b"CONTEXTS"])
+def context(request: pytest.FixtureRequest) -> cydrogen.Context:
+    return cydrogen.Context(request.param)
 
 
 def test_gen_kp():
@@ -56,45 +57,47 @@ def test_sk_pk_consistent():
     assert sk.check_public_key(pk)
 
 
-def test_sign_message():
-    kp = cydrogen.SignKeyPair(SK_BYTES)
-    signatures = set()
-
-    for msg, ctx in product(MESSAGES, CONTEXTS):
-        signer = kp.signer(ctx=ctx)
-        signer.update(msg)
-        signature = signer.sign()
-        assert len(signature) == 64
-        assert signature not in signatures
-        signatures.add(signature)
+test_sign_message_set = set()
 
 
-def test_verify_message():
+@pytest.mark.parametrize("message", MESSAGES)
+def test_sign_message(context: cydrogen.Context, message: bytes):
     kp = cydrogen.SignKeyPair(SK_BYTES)
 
-    for msg, ctx in product(MESSAGES, CONTEXTS):
-        signer = kp.signer(ctx=ctx)
-        signer.update(msg)
-        signature = signer.sign()
-        verifier = kp.verifier(ctx=ctx)
-        verifier.update(msg)
+    signer = kp.signer(ctx=context)
+    signer.update(message)
+    signature = signer.sign()
+    assert len(signature) == 64
+    assert signature not in test_sign_message_set
+    test_sign_message_set.add(signature)
+
+
+@pytest.mark.parametrize("message", MESSAGES)
+def test_verify_message(context: cydrogen.Context, message: bytes):
+    kp = cydrogen.SignKeyPair(SK_BYTES)
+
+    signer = kp.signer(ctx=context)
+    signer.update(message)
+    signature = signer.sign()
+    verifier = kp.verifier(ctx=context)
+    verifier.update(message)
+    verifier.verify(signature)
+
+    # now lets modify the message
+    msg2 = bytearray(message)
+    msg2[0] = (msg2[0] + 1) % 256
+    verifier = kp.verifier(ctx=context)
+    verifier.update(msg2)
+    with pytest.raises(cydrogen.VerifyException):
         verifier.verify(signature)
 
-        # now lets modify the message
-        msg2 = bytearray(msg)
-        msg2[0] = (msg2[0] + 1) % 256
-        verifier = kp.verifier(ctx=ctx)
-        verifier.update(msg2)
-        with pytest.raises(cydrogen.VerifyException):
-            verifier.verify(signature)
-
-        # now lets modify the signature
-        signature2 = bytearray(signature)
-        signature2[0] = (signature2[0] + 1) % 256
-        verifier = kp.verifier(ctx=ctx)
-        verifier.update(msg)
-        with pytest.raises(cydrogen.VerifyException):
-            verifier.verify(signature2)
+    # now lets modify the signature
+    signature2 = bytearray(signature)
+    signature2[0] = (signature2[0] + 1) % 256
+    verifier = kp.verifier(ctx=context)
+    verifier.update(message)
+    with pytest.raises(cydrogen.VerifyException):
+        verifier.verify(signature2)
 
 
 def test_sign_file():

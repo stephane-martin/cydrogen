@@ -21,7 +21,7 @@ class Context:
         >>> empty_ctx = Context()                               # creates an empty context (8 spaces)
         >>> assert(Context("short") == Context("short   "))     # shorter strings are padded with spaces
     """
-    def __init__(self, ctx: str | bytes | Self | Buffer | None = None):
+    def __init__(self, ctx: str | bytes | Self | Buffer | None = None) -> None:
         """
         Initializes a new context.
 

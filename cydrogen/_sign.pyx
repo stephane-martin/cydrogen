@@ -55,6 +55,9 @@ cdef class SignPublicKey:
         cdef SignPublicKey o = <SignPublicKey>other
         return self.key == o.key
 
+    def __hash__(self):
+        return hash(self.key)
+
     cpdef writeto(self, out):
         if out is None:
             raise ValueError("Output cannot be None")
@@ -113,6 +116,9 @@ cdef class SignSecretKey:
         cdef SignSecretKey o = <SignSecretKey>other
         return self.key == o.key
 
+    def __hash__(self):
+        return hash(self.key)
+
     cpdef writeto(self, out):
         if out is None:
             raise ValueError("Output cannot be None")
@@ -158,6 +164,9 @@ cdef class SignKeyPair:
             return False
         cdef SignKeyPair o = <SignKeyPair>other
         return self.secret_key.eq(o.secret_key)
+
+    def __hash__(self):
+        return hash(self.secret_key)
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         PyBuffer_FillInfo(buffer, self, self.secret_key.key.ptr, self.secret_key.key.size, 1, flags)

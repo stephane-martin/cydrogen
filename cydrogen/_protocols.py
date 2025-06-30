@@ -1,11 +1,12 @@
 from collections.abc import Buffer
-from typing import Protocol, type_check_only
+from typing import Protocol
 
-@type_check_only
+
 class Reader(Protocol):
     """
     Protocol for reading bytes from a source.
     """
+
     def read(self, length: int = -1) -> bytes:
         """
         Read at most `length` bytes from the source.
@@ -18,11 +19,12 @@ class Reader(Protocol):
         """
         ...
 
-@type_check_only
+
 class AsyncReader(Protocol):
     """
     Protocol for reading bytes from a source asynchronously.
     """
+
     async def read(self, length: int = -1) -> bytes:
         """
         Asynchronously read at most `length` bytes from the source.
@@ -35,14 +37,14 @@ class AsyncReader(Protocol):
         """
         ...
 
-@type_check_only
+
 class Writer(Protocol):
     """
     Protocol for writing bytes to a destination.
     """
+
     def write(self, buf: Buffer) -> int:
         """
-        Write bytes to the destination.
 
         Args:
             buf (Buffer): The bytes to write.
@@ -52,12 +54,13 @@ class Writer(Protocol):
         """
         ...
 
-@type_check_only
+
 class AsyncWriter(Protocol):
     """
     Protocol for writing bytes to a destination asynchronously.
     """
-    def write(self, data) -> None:
+
+    def write(self, data: Buffer) -> None:
         """
         Asynchronously write bytes to the destination.
 

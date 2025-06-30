@@ -40,9 +40,9 @@ cdef class KxPair:
 
     cpdef client_init_kx_kk(self, KxPublicKey server_public_key)
     cpdef client_init_kx_xx(self, Psk psk=*)
-    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, bytes packet1)
-    cpdef server_process_kx_xx(self, bytes packet1, Psk psk=*)
-    cpdef server_finish_kx_n(self, bytes packet1, Psk psk=*)
+    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, const unsigned char[:] packet1)
+    cpdef server_process_kx_xx(self, const unsigned char[:] packet1, Psk psk=*)
+    cpdef server_finish_kx_n(self, const unsigned char[:] packet1, Psk psk=*)
 
 
 cdef class KxKkClientState:
@@ -52,7 +52,7 @@ cdef class KxKkClientState:
     cdef hydro_kx_state state
     cdef object mu
 
-    cpdef client_finish_kx_kk(self, bytes packet2)
+    cpdef client_finish_kx_kk(self, const unsigned char[:] packet2)
 
 
 cdef class KxXxClientState:
@@ -66,7 +66,7 @@ cdef class KxXxClientState:
     cdef Psk psk
     cdef hydro_kx_state state
 
-    cpdef client_process_kx_xx(self, bytes packet2)
+    cpdef client_process_kx_xx(self, const unsigned char[:] packet2)
 
 cdef class KxXxServerState:
     cdef readonly bytes packet2
@@ -77,7 +77,7 @@ cdef class KxXxServerState:
     cdef Psk psk
     cdef hydro_kx_state state
 
-    cpdef server_finish_kx_xx(self, bytes packet3)
+    cpdef server_finish_kx_xx(self, const unsigned char[:] packet3)
 
 cpdef client_init_kx_n(KxPublicKey peer, Psk psk=*)
-cpdef server_finish_kx_n(KxPair static, bytes packet1, Psk psk=*)
+cpdef server_finish_kx_n(KxPair static, const unsigned char[:] packet1, Psk psk=*)

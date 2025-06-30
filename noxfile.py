@@ -1,4 +1,3 @@
-import glob
 import pathlib
 import shutil
 
@@ -13,7 +12,7 @@ ROOT = pathlib.Path(__file__).parent.resolve()
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
-def develop(session: nox.Session):
+def develop(session: nox.Session) -> None:
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
@@ -23,7 +22,7 @@ def develop(session: nox.Session):
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
-def lint(session: nox.Session):
+def lint(session: nox.Session) -> None:
     print()
     session.install(*nox.project.dependency_groups(PYPROJECT, "lint"))
     print("\n=== linters ===\n")
@@ -47,7 +46,7 @@ def lint(session: nox.Session):
     if shutil.which("shellcheck") is None:
         print("===> shellcheck not found, skipping")
     else:
-        bash_files = glob.glob("**/*.sh", recursive=True)
+        bash_files = ROOT.glob("**/*.sh")
         if not bash_files:
             print("no bash files found")
         else:
@@ -72,7 +71,7 @@ def lint(session: nox.Session):
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
-def test(session: nox.Session):
+def test(session: nox.Session) -> None:
     print("\n=== tests ===\n")
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
     session.install(".")
@@ -80,21 +79,21 @@ def test(session: nox.Session):
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
-def build(session: nox.Session):
+def build(session: nox.Session) -> None:
     _build(session)
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
-def build_sdist(session: nox.Session):
+def build_sdist(session: nox.Session) -> None:
     _build(session, with_wheel=False)
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
-def build_wheel(session: nox.Session):
+def build_wheel(session: nox.Session) -> None:
     _build(session, with_sdist=False)
 
 
-def _build(session: nox.Session, *, with_sdist=True, with_wheel=True):
+def _build(session: nox.Session, *, with_sdist: bool = True, with_wheel: bool = True) -> None:
     print("\n=== build ===\n")
     if not with_sdist and not with_wheel:
         print("===> nothing to build")
@@ -114,18 +113,18 @@ def _build(session: nox.Session, *, with_sdist=True, with_wheel=True):
         session.run("python", "tools/check_pyext_symbol_hiding.py", "dist")
 
 
-def _build_sdist(session: nox.Session):
+def _build_sdist(session: nox.Session) -> None:
     print("===> building sdist")
     session.run("python", "-m", "build", "--sdist")
 
 
-def _build_wheel(session: nox.Session):
+def _build_wheel(session: nox.Session) -> None:
     print("===> building wheel")
     session.run("python", "-m", "build", "--wheel")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
-def docs(session: nox.Session):
+def docs(session: nox.Session) -> None:
     print("\n=== generate docs ===\n")
     mkdocs_conf = ROOT / "mkdocs.yml"
     session.install(*nox.project.dependency_groups(PYPROJECT, "docs"))
@@ -133,16 +132,16 @@ def docs(session: nox.Session):
 
 
 @nox.session(venv_backend=None)
-def tidy(session: nox.Session):
+def tidy(session: nox.Session) -> None:
     print("\n=== clang-tidy ===\n")
     if shutil.which("clang-tidy") is None:
         print("===> clang-tidy not found, skipping")
         return
     commands_path = ROOT / "compile_commands.json"
     tpl_path = ROOT / "compile_commands.tpl.json"
-    with open(tpl_path, "rt", encoding="utf-8") as tpl:
+    with tpl_path.open(encoding="utf-8") as tpl:
         template = tpl.read()
         template = template.replace("ROOT", str(ROOT))
-    with open(commands_path, "wt", encoding="utf-8") as out:
+    with commands_path.open(mode="wt", encoding="utf-8") as out:
         out.write(template)
     session.run("clang-tidy", "-header-filter=.*", "cydrogen/cyutils.c", "cydrogen/src/hydrogen.c", external=True)

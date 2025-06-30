@@ -48,6 +48,9 @@ cdef class MasterKey(BaseKey):
         cdef MasterKey o = <MasterKey>other
         return self.eq(o)
 
+    def __hash__(self):
+        return hash(self.key)
+
     def __repr__(self):
         return f'MasterKey({repr(str(self))})'
 

@@ -49,6 +49,9 @@ cdef class HashKey(BaseKey):
         # call the BaseKey equality method
         return self.eq(o)
 
+    def __hash__(self):
+        return hash(self.key)
+
     def __repr__(self):
         return f'HashKey({repr(str(self))})'
 
