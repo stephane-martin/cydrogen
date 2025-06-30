@@ -47,6 +47,9 @@ cdef class Psk(BaseKey):
         cdef Psk o = <Psk>other
         return self.key == o.key
 
+    def __hash__(self):
+        return hash(self.key)
+
 
 cdef class SessionPair:
     def __init__(self, SecretBoxKey rx, SecretBoxKey tx):
@@ -66,6 +69,8 @@ cdef class SessionPair:
         cdef SessionPair o = <SessionPair>other
         return self.rx == o.rx and self.tx == o.tx
 
+    def __hash__(self):
+        return hash((self.rx, self.tx))
 
 cdef class KxKkClientState:
     def __init__(self, KxPair client_kp):
@@ -74,7 +79,7 @@ cdef class KxKkClientState:
         self.client_kp = client_kp
         self.mu = threading.Lock()
 
-    cpdef client_finish_kx_kk(self, bytes packet2):
+    cpdef client_finish_kx_kk(self, const unsigned char[:] packet2):
         with self.mu:
             if not self.packet1:
                 raise RuntimeError("client_finish_kx_kk called before client_init_kx_kk")
@@ -107,7 +112,7 @@ packet3: {self.packet3}
 server_public_key: {self.server_public_key}
 session_pair: {self.session_pair}"""
 
-    cpdef client_process_kx_xx(self, bytes packet2):
+    cpdef client_process_kx_xx(self, const unsigned char[:] packet2):
         with self.mu:
             if not self.packet1:
                 raise RuntimeError("client_process_kx_xx called before client_init_kx_xx")
@@ -140,7 +145,7 @@ cdef class KxXxServerState:
 client_public_key: {self.client_public_key}
 session_pair: {self.session_pair}
 """
-    cpdef server_finish_kx_xx(self, bytes packet3):
+    cpdef server_finish_kx_xx(self, const unsigned char[:] packet3):
         with self.mu:
             if self.session_pair is not None:
                 raise RuntimeError("server_finish_kx_xx already called")
@@ -174,7 +179,7 @@ cdef class KxPublicKey:
                 self.kp = kp
                 return
             if len(kp) == hydro_kx_PUBLICKEYBYTES:
-                mem = SafeMemory(KX_PAIR_SIZE)
+                mem = SafeMemory.__new__(SafeMemory, KX_PAIR_SIZE)
                 kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
                 dst = <uint8_t*>(kp_ptr.pk)
                 src = <uint8_t*>((<SafeMemory>kp).ptr)
@@ -194,7 +199,7 @@ cdef class KxPublicKey:
             raise ValueError(f"{hydro_kx_PUBLICKEYBYTES} bytes required for public key")
         # KxPublicKey holds memory for a full keypair to allow for easy initialization from a keypair
         # but in fact we will only store the public key part.
-        mem = SafeMemory(KX_PAIR_SIZE)
+        mem = SafeMemory.__new__(SafeMemory, KX_PAIR_SIZE)
         # treat the memory as a hydro_kx_keypair
         kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         # find the public key pointer in the keypair
@@ -227,6 +232,8 @@ cdef class KxPublicKey:
         # we must only compare the public parts of the keypairs
         return memcmp(self.ptr(), o.ptr(), hydro_kx_PUBLICKEYBYTES) == 0
 
+    def __hash__(self):
+        return hash(bytes(self))
 
 cdef class KxSecretKey:
     def __init__(self, kp):
@@ -247,7 +254,7 @@ cdef class KxSecretKey:
         kp = bytes(kp)
         if len(kp) != hydro_kx_SECRETKEYBYTES:
             raise ValueError(f"{hydro_kx_SECRETKEYBYTES} bytes required for secret key")
-        cdef SafeMemory mem = SafeMemory(KX_PAIR_SIZE)
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, KX_PAIR_SIZE)
         cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         cdef uint8_t* dst = <uint8_t*>(kp_ptr.sk)
         cdef uint8_t* src = kp
@@ -276,6 +283,9 @@ cdef class KxSecretKey:
         cdef KxSecretKey o = <KxSecretKey>other
         # we must only compare the secret parts of the keypairs
         return memcmp(self.ptr(), o.ptr(), hydro_kx_SECRETKEYBYTES) == 0
+
+    def __hash__(self):
+        return hash(bytes(self))
 
 
 cdef class KxPair:
@@ -326,13 +336,16 @@ cdef class KxPair:
         cdef KxPair o = <KxPair>other
         return self.kp == o.kp
 
+    def __hash__(self):
+        return hash(self.kp)
+
     cpdef public_key(self):
         return KxPublicKey(self.kp)
 
     cpdef secret_key(self):
         return KxSecretKey(self.kp)
 
-    cpdef server_finish_kx_n(self, bytes packet1, Psk psk=None):
+    cpdef server_finish_kx_n(self, const unsigned char[:] packet1, Psk psk=None):
         return server_finish_kx_n(self, packet1, psk)
 
     cpdef client_init_kx_kk(self, KxPublicKey server_public_key):
@@ -345,7 +358,7 @@ cdef class KxPair:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
         return state
 
-    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, bytes packet1):
+    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, const unsigned char[:] packet1):
         if client_public_key is None:
             raise ValueError("Client public key cannot be None")
         if packet1 is None:
@@ -366,7 +379,7 @@ cdef class KxPair:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
         return state
 
-    cpdef server_process_kx_xx(self, bytes packet1, Psk psk=None):
+    cpdef server_process_kx_xx(self, const unsigned char[:] packet1, Psk psk=None):
         if packet1 is None:
             raise ValueError("packet1 cannot be None")
         cdef KxXxServerState state = KxXxServerState(psk)
@@ -392,7 +405,7 @@ cdef class KxPair:
         cdef KxPublicKey pk = KxPublicKey(public_key)
         cdef KxSecretKey sk = KxSecretKey(secret_key)
 
-        cdef SafeMemory mem = SafeMemory(KX_PAIR_SIZE)
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, KX_PAIR_SIZE)
         cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
         memcpy(<uint8_t*>(kp_ptr.sk), sk.ptr(), hydro_kx_SECRETKEYBYTES)
         memcpy(<uint8_t*>(kp_ptr.pk), pk.ptr(), hydro_kx_PUBLICKEYBYTES)
@@ -411,7 +424,7 @@ cpdef client_init_kx_n(KxPublicKey server_public_key, Psk psk=None):
     return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), packet1
 
 
-cpdef server_finish_kx_n(KxPair server_kp, bytes packet1, Psk psk=None):
+cpdef server_finish_kx_n(KxPair server_kp, const unsigned char[:] packet1, Psk psk=None):
     if server_kp is None:
         raise ValueError("static key pair cannot be None")
     if packet1 is None:

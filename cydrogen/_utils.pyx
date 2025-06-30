@@ -3,6 +3,7 @@
 cimport cython
 
 from cpython.buffer cimport PyBuffer_FillInfo, PyBUF_WRITABLE
+from libc.stdint cimport int64_t
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -11,10 +12,15 @@ import asyncio
 import io
 import os
 import pathlib
+import random
 import tempfile
+
 
 cdef psnip_uint64_t one = 1
 cdef psnip_uint64_t increment = 2
+
+cdef uint32_t fnv_prefix = random.randint(0, 0xFFFFFFFF)
+cdef uint32_t fnv_suffix = random.randint(0, 0xFFFFFFFF)
 
 
 cdef class Counter:
@@ -33,21 +39,27 @@ cdef class Counter:
 
 cdef class SafeMemory:
     def __cinit__(self, size_t size):
-        if size == 0:
-            return
+        if size > 65536:
+            # you're not supposed to allocate big amounts of memory with SafeMemory,
+            raise ValueError("Size must be less than or equal to 65536 bytes")
         self.ptr = cyd_malloc(size)
-        if self.ptr != NULL:
-            self.size = size
-            cyd_memzero(self.ptr, self.size)
+        if self.ptr == NULL:
+            raise MemoryError("Failed to allocate memory")
+        cyd_memzero(self.ptr, size)
+        self.size = size
+        self.readonly_protected = 0
+
+    def __init__(self, size_t size):
+        # mark as readonly as we don't want to enable python code to manipulate uninitialized SafeMemory.
+        # this means that you have to:
+        # - use the factory methods `read_from` or `from_buffer` to create SafeMemory instances
+        # - or, if you really need it from cython, create the SafeMemory instance with __new__ instead of __init__,
+        #   modify the memory and then call `mark_readonly` to make it readonly.
+        self.mark_readonly()
 
     def __dealloc__(self):
         if self.ptr != NULL:
             cyd_free(self.ptr)
-
-    def __init__(self, size_t size):
-        if self.ptr == NULL:
-            raise MemoryError("Failed to allocate memory")
-        self.readonly_protected = 0
 
     def __len__(self):
         return self.size
@@ -75,6 +87,16 @@ cdef class SafeMemory:
 
     def __bool__(self):
         return cyd_is_zero(<const unsigned char*>(self.ptr), self.size) == 0
+
+    def __hash__(self):
+        if not self.readonly_protected:
+            raise TypeError("unhashable because not readonly")
+        # TODO: replace with Py_HashBuffer when python 3.14 is the minimum version
+        return fnv(self)
+
+    @property
+    def readonly(self):
+        return self.readonly_protected == 1
 
     cdef set(self, const unsigned char[:] data):
         if self.readonly_protected == 1:
@@ -107,7 +129,7 @@ cdef class SafeMemory:
     def read_from(cls, reader, size_t size):
         if reader is None:
             raise ValueError("reader cannot be None")
-        cdef SafeMemory mem = cls(size)
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, size)
         if size == 0:
             mem.mark_readonly()
             return mem
@@ -121,8 +143,21 @@ cdef class SafeMemory:
     def from_buffer(cls, const unsigned char[:] data):
         if data is None:
             raise ValueError("data cannot be None")
-        cdef SafeMemory mem = cls(len(data))
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, len(data))
         mem.set(data)
+        return mem
+
+    @classmethod
+    def build(cls, size_t size, callback):
+        if size == 0:
+            return SafeMemory(0)
+        if callback is None:
+            return SafeMemory(size)
+        cdef SafeMemory mem = SafeMemory.__new__(SafeMemory, size)
+        cdef unsigned char[:] view = mem
+        callback(view)
+        del view
+        mem.mark_readonly()
         return mem
 
 
@@ -221,7 +256,7 @@ cdef class FileOpener:
             return
         raise TypeError("fileobj must be path-like or a file-like")
 
-    cdef __enter__(self):
+    def __enter__(self):
         if self.path is not None:
             self.fileobj = open(self.path, self.mode)
         return self.fileobj
@@ -240,7 +275,7 @@ cdef class SafeReader:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeReader, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = reader_is_buffered(fileobj)
+        self.direct = reader_is_safe(fileobj)
         self.has_readinto = hasattr(fileobj, "readinto")
 
     cpdef readinto(self, unsigned char[:] buf):
@@ -336,7 +371,7 @@ cdef class SafeWriter:
         self.fileobj = fileobj
         # when the underlying file object is already a SafeWriter, we don't need to wrap it again.
         # when the underlying file object is buffered, we can use it directly too.
-        self.direct = writer_is_buffered(fileobj)
+        self.direct = writer_is_safe(fileobj)
 
     cpdef write(self, const unsigned char[:] buf):
         if buf is None:
@@ -354,16 +389,16 @@ cdef class SafeWriter:
         return length
 
 
-cdef reader_is_buffered(fileobj):
+cdef reader_is_safe(fileobj):
     return isinstance(fileobj, (SafeReader, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
 
 
-cdef writer_is_buffered(fileobj):
+cdef writer_is_safe(fileobj):
     return isinstance(fileobj, (SafeWriter, io.BufferedIOBase, tempfile._TemporaryFileWrapper))
 
 
 cdef make_safe_reader(fileobj):
-    if reader_is_buffered(fileobj):
+    if reader_is_safe(fileobj):
         return fileobj
     return SafeReader(fileobj)
 
@@ -374,7 +409,7 @@ cdef make_async_safe_reader(reader):
 
 
 cdef make_safe_writer(fileobj):
-    if writer_is_buffered(fileobj):
+    if writer_is_safe(fileobj):
         return fileobj
     return SafeWriter(fileobj)
 
@@ -391,3 +426,11 @@ cdef class TeeWriter:
         if n1 != n2:
             raise OSError("Writers did not write the same number of bytes")
         return n1
+
+
+cpdef int64_t fnv(const unsigned char[:] src) noexcept:
+    if src is None:
+        return 0
+    if len(src) == 0:
+        return 0
+    return fnv_impl(&src[0], len(src), fnv_prefix, fnv_suffix)

@@ -208,16 +208,19 @@ cdef extern from "hydrogen.h" nogil:
         const uint8_t psk[hydro_kx_PSKBYTES])
 
 
+cdef const size_t nogil_threshold
+
+
 cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES])
 cdef basekey_memzero(uint8_t* key)
 cdef pk_memzero(uint8_t* key)
 cdef sk_memzero(uint8_t* key)
 cdef keys_equal(const unsigned char[:] key1, const unsigned char[:] key2)
 
-
 cdef hash_init(hydro_hash_state *state, const unsigned char[:] ctx, const unsigned char[:] key)
 cdef hash_update(hydro_hash_state *state, const unsigned char[:] data)
 cdef hash_final(hydro_hash_state *state, unsigned char[:] out)
+
 
 cdef secretbox_encrypt(
         const unsigned char[:] plaintext,

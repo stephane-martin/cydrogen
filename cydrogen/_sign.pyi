@@ -9,7 +9,7 @@ class SignPublicKey:
     """
     SignPublicKey represents a public key used for signature verification.
     """
-    def __init__(self, key: str | bytes | Self | Buffer):
+    def __init__(self, key: str | bytes | Self | Buffer) -> None:
         """
         Initialize a SignPublicKey instance.
 
@@ -38,7 +38,7 @@ class SignPublicKey:
         """
         ...
 
-    def verifier(self, ctx: str | bytes | Context | Buffer | None = None) -> "Verifier":
+    def verifier(self, ctx: str | bytes | Context | Buffer | None = None) -> Verifier:
         """
         Create a Verifier instance using this public key.
 
@@ -78,7 +78,7 @@ class SignSecretKey:
     """
     SignSecretKey represents a secret key used for signing messages.
     """
-    def __init__(self, key: str | bytes | Self | Buffer):
+    def __init__(self, key: str | bytes | Self | Buffer) -> None:
         """
         Initialize a SignSecretKey instance.
 
@@ -119,7 +119,7 @@ class SignSecretKey:
         """
         ...
 
-    def signer(self, ctx: str | bytes | Context | Buffer | None = None) -> "Signer":
+    def signer(self, ctx: str | bytes | Context | Buffer | None = None) -> Signer:
         """
         Create a Signer instance using this secret key.
 
@@ -169,7 +169,7 @@ class SignKeyPair:
     public_key: SignPublicKey
     secret_key: SignSecretKey
 
-    def __init__(self, kp: str | bytes | Self | SignSecretKey | Buffer):
+    def __init__(self, kp: str | bytes | Self | SignSecretKey | Buffer) -> None:
         """
         Initialize a SignKeyPair instance.
 
@@ -193,7 +193,7 @@ class SignKeyPair:
         """
         ...
 
-    def signer(self, ctx: str | bytes | Context | Buffer | None = None) -> "Signer":
+    def signer(self, ctx: str | bytes | Context | Buffer | None = None) -> Signer:
         """
         Create a Signer instance using the secret key of this key pair.
 
@@ -204,7 +204,7 @@ class SignKeyPair:
         """
         ...
 
-    def verifier(self, ctx: str | bytes | Context | Buffer | None = None) -> "Verifier":
+    def verifier(self, ctx: str | bytes | Context | Buffer | None = None) -> Verifier:
         """
         Create a Verifier instance using the public key of this key pair.
 
@@ -232,7 +232,7 @@ class BaseSigner:
 
     ctx: Context
 
-    def __init__(self, *, ctx: str | bytes | Context | Buffer | None = None, data: bytes | Buffer | None = None):
+    def __init__(self, *, ctx: str | bytes | Context | Buffer | None = None, data: bytes | Buffer | None = None) -> None:
         """
         Initialize a BaseSigner instance.
 
@@ -313,7 +313,7 @@ class Signer(BaseSigner):
         *,
         ctx: str | bytes | Context | Buffer | None = None,
         data: bytes | Buffer | None = None,
-    ):
+    ) -> None:
         """
         Initialize a Signer instance.
 
@@ -358,7 +358,7 @@ class Verifier(BaseSigner):
         *,
         ctx: str | bytes | Context | Buffer | None = None,
         data: bytes | Buffer | None = None,
-    ):
+    ) -> None:
         """
         Initialize a Verifier instance.
 

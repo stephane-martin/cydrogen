@@ -1,5 +1,10 @@
 from collections.abc import Buffer
 
+NOGIL_THRESHOLD_BYTES: int
+"""
+The threshold in bytes for encrypt/decrypt operations that can be performed without the GIL.
+"""
+
 def random_u32() -> int:
     """
     Generate a random 32-bit unsigned integer.
@@ -84,3 +89,5 @@ def unpad(buf: Buffer, blocksize: int = 8192) -> bytes:
         ValueError: If the buffer is not padded correctly or if blocksize is invalid.
     """
     ...
+
+def hynit() -> None: ...

@@ -13,7 +13,7 @@ class HashKey(BaseKey):
     If you don't need to prevent dictionary attacks, you can use the empty key for hashing.
     """
 
-    def __init__(self, key: str | bytes | Self | Buffer | None = None):
+    def __init__(self, key: str | bytes | Self | Buffer | None = None) -> None:
         """
         Initialize the HashKey with an optional key. If the key is None, an empty key is created.
 
@@ -30,8 +30,11 @@ class HashKey(BaseKey):
         ...
 
     def hasher(
-        self, data: bytes | Buffer | None = None, ctx: Context | str | bytes | Buffer | None = None, digest_size: int = 16
-    ) -> "Hash":
+        self,
+        data: bytes | Buffer | None = None,
+        ctx: Context | str | bytes | Buffer | None = None,
+        digest_size: int = 16,
+    ) -> Hash:
         """
         Returns a hasher object initialized with the key.
 
@@ -76,7 +79,7 @@ class Hash:
         ctx: str | bytes | Context | Buffer | None = None,
         digest_size: int = 16,
         key: str | bytes | HashKey | Buffer | None = None,
-    ):
+    ) -> None:
         """
         Initialize the hasher.
 

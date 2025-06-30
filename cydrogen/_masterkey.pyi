@@ -10,7 +10,7 @@ class MasterKey(BaseKey):
     """
     A MasterKey can be used to derive subkeys, derive a key from a password, or hash passwords for storage.
     """
-    def __init__(self, key: str | bytes | Self | Buffer | None = None):
+    def __init__(self, key: str | bytes | Self | Buffer | None = None) -> None:
         """
         Initialize a MasterKey.
 
@@ -24,7 +24,10 @@ class MasterKey(BaseKey):
         ...
 
     def derive_key_from_password(
-        self, password: bytes | Buffer, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = 10000
+        self,
+        password: bytes | Buffer,
+        ctx: bytes | str | Context | Buffer | None = None,
+        opslimit: int = 10000,
     ) -> BaseKey:
         """
         Derive a high entropy key from a password, using the master key.
@@ -46,7 +49,11 @@ class MasterKey(BaseKey):
         ...
 
     def derive_key_from_password_with_length(
-        self, password: bytes | Buffer, length: int = 32, ctx: bytes | str | Context | Buffer | None = None, opslimit: int = 10000
+        self,
+        password: bytes | Buffer,
+        length: int = 32,
+        ctx: bytes | str | Context | Buffer | None = None,
+        opslimit: int = 10000,
     ) -> bytes:
         """
         Derive a high entropy key from a password using the master key.
@@ -118,7 +125,7 @@ class MasterKey(BaseKey):
         """
         ...
 
-    def derive_kx_pair(self) -> KxPair:
+    def derive_kx_keypair(self) -> KxPair:
         """
         Derive a key exchange pair from the master key.
 

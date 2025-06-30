@@ -58,11 +58,12 @@ lint = [
   "zizmor",
   "pyflakes",
   "pytest>=8.3.5",
+  "pytest-asyncio>=1.0.0",
 ]
 
 build = ["build>=0.11.0", "twine"]
 
-test = ["build>=0.11.0", "pytest>=8.3.5"]
+test = ["build>=0.11.0", "pytest>=8.3.5", "pytest-asyncio>=1.0.0"]
 
 docs = [
   "mkdocstrings-python>=1.16.0",
@@ -77,16 +78,93 @@ max-line-length = 140
 line-length = 140
 indent-width = 4
 target-version = "py312"
+src = ["cydrogen", "tests"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 
+[tool.ruff.lint]
+# selected ruff rules
+# see https://docs.astral.sh/ruff/rules/
+select = [
+  "YTT",   # flake8-2020
+  "ANN",   # annotations
+  "ASYNC", # async
+  "S",     # bandit
+  "BLE",   # blind except
+  "FBT",   # boolean trap
+  "B",     # bugbear
+  "A",     # builtins
+  "COM",   # commas
+  "C4",    # comprehensions
+  "ISC",   # implicit str concatenation
+  "ICN",   # import conventions
+  "LOG",   # logging
+  "G",     # logging format
+  "INP",   # implicit namespace
+  "PIE",   # pie
+  "T20",   # print
+  "PYI",   # pyi files
+  "PT",    # pytest
+  "Q",     # quotes
+  "RSE",   # raises
+  "RET",   # returns
+  "SLF",   # private members
+  "SIM",   # simplify
+  "TC",    # type checking
+  "ARG",   # unused arguments
+  "PTH",   # use pathlib
+  "I",     # unsorted imports
+  "PERF",  # performance
+  "E",     # pycodestyle
+  "W",     # pycodestyle  TODO: "D",    # docstyle
+  "F",     # pyflakes
+  "PLE",   # pylint errors
+  "PLR",   # pylint refactor
+  "PLW",   # pylint warnings
+  "UP",    # upgrades
+  "FURB",  # refurbish
+  "RUF",   # ruff
+  "TRY",   # exceptions
+]
+
+
+ignore = [
+  "S101",    # assert
+  "PIE790",  # unnecessary ... in pyi files
+  "PYI021",  # docstrings in pyi files
+  "PYI029",  # __str__ in pyi files
+  "PYI048",  # exactly one statement in pyi files 
+  "PLR0913", # too many arguments
+  "TRY300",
+  "TRY003",
+  "COM812",  # conflicts with ruff format
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+  "ANN201",  # missing type annotations
+  "PT011",   # pytest.raises too broad
+  "E501",    # line too long
+  "PLR2004", # magic values
+]
+
+"cydrogen/**.pyi" = [
+  "E501", # line too long
+]
+
+"noxfile.py" = [
+  "T201", # print statements 
+]
+
 [tool.pytest.ini_options]
 console_output_style = "classic"
 testpaths = "tests"
 addopts = "--import-mode=importlib"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
 
 [tool.meson-python.args]
 setup = ["-Dbuildtype=minsize", "-Ddebug=false", "-Db_ndebug=true"]

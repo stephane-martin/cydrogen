@@ -14,7 +14,7 @@ class BaseKey:
     BaseKey implements the buffer protocol, allowing it to be used as a bytes-like object.
     """
 
-    def __init__(self, b: bytes | None = None):
+    def __init__(self, b: bytes | None = None) -> None:
         """
         Initialize the BaseKey with an optional bytes object.
 

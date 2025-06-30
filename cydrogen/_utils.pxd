@@ -2,6 +2,7 @@
 
 cimport cython
 
+from libc.stdint cimport int64_t
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -48,6 +49,10 @@ cdef extern from "atomic.h" nogil:
     psnip_uint64_t psnip_atomic_uint64_add(psnip_atomic_uint64* ptr, psnip_uint64_t value)
 
 
+cdef extern from "fnv.h" nogil:
+    int64_t fnv_impl(const void *src, uint64_t len, uint32_t prefix, uint32_t suffix)
+
+
 @cython.auto_pickle(False)
 cdef class Counter:
     cdef psnip_atomic_uint64 count
@@ -86,7 +91,6 @@ cdef class FileOpener:
     cdef object fileobj
     cdef object path
     cdef str mode
-    cdef __enter__(self)
 
 
 @cython.final
@@ -121,3 +125,4 @@ cdef class TeeWriter:
 cdef make_safe_reader(fileobj)
 cdef make_async_safe_reader(reader)
 cdef make_safe_writer(fileobj)
+cpdef int64_t fnv(const unsigned char[:] src) noexcept

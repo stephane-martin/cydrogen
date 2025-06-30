@@ -3,14 +3,10 @@ class CyException(Exception):
     Base class for all exceptions in the `cydrogen` package.
     """
 
-    ...
-
 class EncryptException(CyException):
     """
     Exception raised for errors during encryption operations.
     """
-
-    ...
 
 class DecryptException(CyException):
     """
@@ -20,21 +16,15 @@ class DecryptException(CyException):
     or tampered ciphertext.
     """
 
-    ...
-
 class DeriveException(CyException):
     """
     Exception raised for errors during key derivation operations.
     """
 
-    ...
-
 class SignException(CyException):
     """
     Exception raised for errors during signing operations.
     """
-
-    ...
 
 class VerifyException(CyException):
     """
@@ -44,11 +34,7 @@ class VerifyException(CyException):
     invalid signature or tampered data.
     """
 
-    ...
-
 class KeyExchangeException(CyException):
     """
     Exception raised for errors during key exchange operations.
     """
-
-    ...

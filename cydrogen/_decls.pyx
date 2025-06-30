@@ -1,9 +1,15 @@
 # cython: language_level=3
 
+cimport cython
 from cpython.buffer cimport PyBUF_READ
 from cpython.memoryview cimport PyMemoryView_FromMemory
 
 from ._utils cimport SafeMemory
+
+
+cdef const size_t nogil_threshold = 1024*1024   # 1 MB
+NOGIL_THRESHOLD_BYTES = nogil_threshold
+
 
 cdef ctx_memzero(char ctx[hydro_hash_CONTEXTBYTES]):
     hydro_memzero(&ctx[0], hydro_hash_CONTEXTBYTES)
@@ -78,7 +84,16 @@ cdef secretbox_encrypt(
     cdef size_t ciphertext_len = plaintext_len + hydro_secretbox_HEADERBYTES
     if len(ciphertext) < ciphertext_len:
         raise ValueError("Ciphertext buffer is too small")
-    cdef int res = hydro_secretbox_encrypt(&ciphertext[0], &plaintext[0], plaintext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+    cdef int res = 0
+    if plaintext_len < nogil_threshold:
+        # Keep the GIL for small plaintexts
+        res = hydro_secretbox_encrypt(&ciphertext[0], &plaintext[0], plaintext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+    else:
+        # Release the GIL for larger plaintexts
+        with nogil:
+            with cython.boundscheck(False):
+                with cython.wraparound(False):
+                    res = hydro_secretbox_encrypt(&ciphertext[0], &plaintext[0], plaintext_len, msg_id, <const char*>(&ctx[0]), &key[0])
     if res != 0:
         raise RuntimeError("Failed to encrypt message")
 
@@ -100,7 +115,16 @@ cdef secretbox_decrypt(
     cdef size_t plaintext_len = ciphertext_len - hydro_secretbox_HEADERBYTES
     if len(plaintext) < plaintext_len:
         raise ValueError("Plaintext buffer is too small")
-    cdef int res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+    cdef int res = 0
+    if ciphertext_len < nogil_threshold:
+        # Keep the GIL for small ciphertexts
+        res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+    else:
+        # Release the GIL for larger ciphertexts
+        with nogil:
+            with cython.boundscheck(False):
+                with cython.wraparound(False):
+                    res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
     if res != 0:
         raise RuntimeError("Failed to decrypt message")
 
@@ -207,7 +231,7 @@ cdef pwhash_verify(
 
 
 cdef sign_keygen():
-    cdef SafeMemory kp_mem = SafeMemory(sizeof(hydro_sign_keypair))
+    cdef SafeMemory kp_mem = SafeMemory.__new__(SafeMemory, sizeof(hydro_sign_keypair))
     cdef hydro_sign_keypair* kp_ptr = <hydro_sign_keypair*>(kp_mem.ptr)
     hydro_sign_keygen(kp_ptr)
     return SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(kp_ptr.sk), hydro_sign_SECRETKEYBYTES, PyBUF_READ))
@@ -216,14 +240,14 @@ cdef sign_keygen():
 cdef sign_keygen_deterministic(const unsigned char[:] master_key):
     if len(master_key) < hydro_random_SEEDBYTES:
         raise ValueError(f"Master key must be {hydro_random_SEEDBYTES} bytes long")
-    cdef SafeMemory kp_mem = SafeMemory(sizeof(hydro_sign_keypair))
+    cdef SafeMemory kp_mem = SafeMemory.__new__(SafeMemory, sizeof(hydro_sign_keypair))
     cdef hydro_sign_keypair* kp_ptr = <hydro_sign_keypair*>(kp_mem.ptr)
     hydro_sign_keygen_deterministic(kp_ptr, &master_key[0])
     return SafeMemory.from_buffer(PyMemoryView_FromMemory(<char*>(kp_ptr.sk), hydro_sign_SECRETKEYBYTES, PyBUF_READ))
 
 
 cdef kx_keygen():
-    cdef SafeMemory kp_mem = SafeMemory(sizeof(hydro_kx_keypair))
+    cdef SafeMemory kp_mem = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_keypair))
     cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(kp_mem.ptr)
     hydro_kx_keygen(kp_ptr)
     kp_mem.mark_readonly()
@@ -233,7 +257,7 @@ cdef kx_keygen():
 cdef kx_keygen_deterministic(const unsigned char[:] master_key):
     if len(master_key) < hydro_kx_SEEDBYTES:
         raise ValueError(f"Master key must be {hydro_kx_SEEDBYTES} bytes long")
-    cdef SafeMemory kp_mem = SafeMemory(sizeof(hydro_kx_keypair))
+    cdef SafeMemory kp_mem = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_keypair))
     cdef hydro_kx_keypair* kp_ptr = <hydro_kx_keypair*>(kp_mem.ptr)
     hydro_kx_keygen_deterministic(kp_ptr, &master_key[0])
     kp_mem.mark_readonly()
@@ -364,7 +388,7 @@ cdef kx_n_1(const unsigned char[:] server_public_key, const unsigned char[:] psk
     if psk is not None and len(psk) != hydro_kx_PSKBYTES:
         raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
     # we will store the generate session keypair in 'session'
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* kp_ptr = <hydro_kx_session_keypair*>(session.ptr)
     # we will store the generated packet in 'packet1'
     cdef bytearray packet1 = bytearray(hydro_kx_N_PACKET1BYTES)
@@ -398,7 +422,7 @@ cdef kx_n_2(const unsigned char[:] packet1, const unsigned char[:] psk, const un
     if len(static_kp) != sizeof(hydro_kx_keypair):
         raise ValueError("Static keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
     # we will store the generate session keypair in 'session'
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
     # pointer to the optional psk
     cdef const uint8_t* psk_ptr = NULL
@@ -453,7 +477,7 @@ cdef kx_kk_2(const unsigned char[:] packet1, const unsigned char[:] client_publi
     if len(server_kp) != sizeof(hydro_kx_keypair):
         raise ValueError("Server keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
 
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
     cdef bytearray packet2 = bytearray(hydro_kx_KK_PACKET2BYTES)
     cdef uint8_t* packet2_ptr = packet2
@@ -481,7 +505,7 @@ cdef kx_kk_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsign
     if len(client_kp) != sizeof(hydro_kx_keypair):
         raise ValueError("Client keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
 
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
     cdef const uint8_t* packet2_ptr = &packet2[0]
     cdef const hydro_kx_keypair* static_kp_ptr = <const hydro_kx_keypair*>(<const void*>(&client_kp[0]))
@@ -571,11 +595,11 @@ cdef kx_xx_3(hydro_kx_state* state, const unsigned char[:] packet2, const unsign
     if len(static_kp) != sizeof(hydro_kx_keypair):
         raise ValueError("Static keypair must be {} bytes long".format(sizeof(hydro_kx_keypair)))
 
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
     cdef bytearray packet3 = bytearray(hydro_kx_XX_PACKET3BYTES)
     cdef uint8_t* packet3_ptr = packet3
-    cdef SafeMemory peer_static_pk = SafeMemory(hydro_kx_PUBLICKEYBYTES)
+    cdef SafeMemory peer_static_pk = SafeMemory.__new__(SafeMemory, hydro_kx_PUBLICKEYBYTES)
     cdef uint8_t* peer_static_pk_ptr = <uint8_t*>(peer_static_pk.ptr)
     cdef const uint8_t* packet2_ptr = &packet2[0]
     cdef const uint8_t* psk_ptr = NULL
@@ -610,9 +634,9 @@ cdef kx_xx_4(hydro_kx_state* state, const unsigned char[:] packet3, const unsign
     if psk is not None and len(psk) != hydro_kx_PSKBYTES:
         raise ValueError(f"PSK must be {hydro_kx_PSKBYTES} bytes long")
 
-    cdef SafeMemory session = SafeMemory(sizeof(hydro_kx_session_keypair))
+    cdef SafeMemory session = SafeMemory.__new__(SafeMemory, sizeof(hydro_kx_session_keypair))
     cdef hydro_kx_session_keypair* session_ptr = <hydro_kx_session_keypair*>(session.ptr)
-    cdef SafeMemory peer_static_pk = SafeMemory(hydro_kx_PUBLICKEYBYTES)
+    cdef SafeMemory peer_static_pk = SafeMemory.__new__(SafeMemory, hydro_kx_PUBLICKEYBYTES)
     cdef uint8_t* peer_static_pk_ptr = <uint8_t*>(peer_static_pk.ptr)
     cdef const uint8_t* packet3_ptr = &packet3[0]
     cdef const uint8_t* psk_ptr = NULL

@@ -49,7 +49,7 @@ class SessionPair:
     rx: SecretBoxKey
     tx: SecretBoxKey
 
-    def __init__(self, rx: SecretBoxKey, tx: SecretBoxKey):
+    def __init__(self, rx: SecretBoxKey, tx: SecretBoxKey) -> None:
         """
         Initializes a SessionPair instance.
 
@@ -67,7 +67,7 @@ class KxPublicKey:
 
     KxPublicKey implements the buffer protocol, allowing it to be used as a byte-like object.
     """
-    def __init__(self, kp: bytes | str | Buffer | Self):
+    def __init__(self, kp: bytes | str | Buffer | Self) -> None:
         """
         Initializes a KxPublicKey instance.
 
@@ -98,7 +98,7 @@ class KxSecretKey:
 
     KxSecretKey implements the buffer protocol, allowing it to be used as a byte-like object.
     """
-    def __init__(self, kp: bytes | str | Buffer | Self):
+    def __init__(self, kp: bytes | str | Buffer | Self) -> None:
         """
         Initializes a KxSecretKey instance.
 
@@ -137,7 +137,7 @@ class KxKkClientState:
     packet1: bytes
     session_pair: SessionPair | None
 
-    def client_finish_kx_kk(self, packet2: bytes) -> Self:
+    def client_finish_kx_kk(self, packet2: Buffer) -> Self:
         """
         Finalizes the key exchange variant KK from the client side.
 
@@ -158,18 +158,18 @@ class KxXxClientState:
     session_pair: SessionPair | None
     server_public_key: KxPublicKey | None
 
-    def __init__(self, client_kp: KxPair, psk: Psk | None = None): ...
+    def __init__(self, client_kp: KxPair, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
-    def client_process_kx_xx(self, packet2: bytes) -> Self: ...
+    def client_process_kx_xx(self, packet2: Buffer) -> Self: ...
 
 class KxXxServerState:
     packet2: bytes
     session_pair: SessionPair | None
     client_public_key: KxPublicKey | None
 
-    def __init__(self, psk: Psk | None = None): ...
+    def __init__(self, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
-    def server_finish_kx_xx(self, packet3: bytes) -> Self: ...
+    def server_finish_kx_xx(self, packet3: Buffer) -> Self: ...
 
 class KxPair:
     """
@@ -177,7 +177,7 @@ class KxPair:
 
     KxPair implements the buffer protocol, allowing it to be used as a byte-like object.
     """
-    def __init__(self, kp: str | bytes | Buffer | Self):
+    def __init__(self, kp: str | bytes | Buffer | Self) -> None:
         """
         Initializes a KxPair instance.
 
@@ -216,7 +216,7 @@ class KxPair:
         """
         ...
 
-    def server_finish_kx_n(self, packet1: bytes, psk: Psk | None = None) -> SessionPair:
+    def server_finish_kx_n(self, packet1: Buffer, psk: Psk | None = None) -> SessionPair:
         """
         See [cydrogen.server_finish_kx_n][]
         """
@@ -236,7 +236,7 @@ class KxPair:
         """
         pass
 
-    def server_process_kx_kk(self, client_public_key: KxPublicKey, packet1: bytes) -> tuple[SessionPair, bytes]:
+    def server_process_kx_kk(self, client_public_key: KxPublicKey, packet1: Buffer) -> tuple[SessionPair, bytes]:
         """
         Process a key exchange variant KK from the server side.
 
@@ -245,7 +245,7 @@ class KxPair:
             packet1: The packet received from the client.
 
         Returns:
-            A tuple containing a SessionPair with the symmetric keys for the session.
+            A SessionPair with the symmetric keys for the session.
             A bytes object representing the packet to send back to the client.
 
         Raises:
@@ -254,7 +254,7 @@ class KxPair:
         ...
 
     def client_init_kx_xx(self, psk: Psk | None = None) -> KxXxClientState: ...
-    def server_process_kx_xx(self, packet1: bytes, psk: Psk | None = None) -> KxXxServerState: ...
+    def server_process_kx_xx(self, packet1: Buffer, psk: Psk | None = None) -> KxXxServerState: ...
     @classmethod
     def gen(cls) -> Self:
         """
@@ -302,7 +302,7 @@ def client_init_kx_n(server_public_key: KxPublicKey, psk: Psk | None = None) -> 
     """
     ...
 
-def server_finish_kx_n(server_kp: KxPair, packet1: bytes, psk: Psk | None = None) -> SessionPair:
+def server_finish_kx_n(server_kp: KxPair, packet1: Buffer, psk: Psk | None = None) -> SessionPair:
     """
     Finalize a key exchange variant N (anonymous client) from the server side.
 

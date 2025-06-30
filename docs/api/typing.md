@@ -1,6 +1,6 @@
 # Typing utilities
 
-The classes in this module are only used for type hinting and do not have any functionality. You cannot import them.
+The classes in this module are only used for type hinting and do not have any functionality.
 
 ## ::: cydrogen._protocols.Reader
     options:

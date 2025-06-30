@@ -1,6 +1,6 @@
-from collections.abc import Buffer
+from collections.abc import Buffer, Callable
 from os import PathLike
-from typing import BinaryIO, Literal
+from typing import BinaryIO, Literal, Self
 
 from ._protocols import AsyncReader, Reader, Writer
 
@@ -8,7 +8,7 @@ class Counter:
     """
     A thread-safe counter that can be used to generate unique identifiers.
     """
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initialize a Counter instance.
 
@@ -27,13 +27,13 @@ class Counter:
         """
         ...
 
-    def __call__(self):
+    def __call__(self) -> int:
         """
         Just calls `value()` method.
         """
         ...
 
-def store64(dst: Buffer, src: int):
+def store64(dst: Buffer, src: int) -> None:
     """
     Store a 64-bit unsigned integer into a byte array.
 
@@ -48,7 +48,7 @@ def store64(dst: Buffer, src: int):
     """
     ...
 
-def store32(dst: Buffer, src: int):
+def store32(dst: Buffer, src: int) -> None:
     """
     Store a 32-bit unsigned integer into a byte array.
 
@@ -63,7 +63,7 @@ def store32(dst: Buffer, src: int):
     """
     ...
 
-def store16(dst: Buffer, src: int):
+def store16(dst: Buffer, src: int) -> None:
     """
     Store a 16-bit unsigned integer into a byte array.
 
@@ -141,7 +141,7 @@ class SafeReader:
     may not read the requested number of bytes. This class handles such cases
     by repeatedly reading until the requested number of bytes is read or EOF is reached.
     """
-    def __init__(self, fileobj: Reader):
+    def __init__(self, fileobj: Reader) -> None:
         """
         Initialize the SafeReader.
 
@@ -181,7 +181,7 @@ class AsyncSafeReader:
     """
     AsyncSafeReader wraps an asynchronous reader to ensure that it reads exactly the requested number of bytes.
     """
-    def __init__(self, reader: AsyncReader):
+    def __init__(self, reader: AsyncReader) -> None:
         """
         Initialize the AsyncSafeReader.
 
@@ -218,7 +218,7 @@ class SafeWriter:
     by repeatedly writing until the requested number of bytes is written or an error occurs.
     """
 
-    def __init__(self, fileobj: Writer):
+    def __init__(self, fileobj: Writer) -> None:
         """
         Initialize the SafeWriter.
 
@@ -244,7 +244,7 @@ class SafeWriter:
         ...
 
 class TeeWriter:
-    def __init__(self, w1: Writer, w2: Writer):
+    def __init__(self, w1: Writer, w2: Writer) -> None:
         """
         Initialize the TeeWriter.
 
@@ -287,7 +287,12 @@ class FileOpener:
         ...     f.write(b"data")
     """
 
-    def __init__(self, fileobj_or_path: str | PathLike | BinaryIO, *, mode: Literal["rb", "wb", "ab"] = ...):
+    def __init__(
+        self,
+        fileobj_or_path: str | PathLike | BinaryIO | SafeReader | SafeWriter,
+        *,
+        mode: Literal["rb", "wb", "ab"] = "rb",
+    ) -> None:
         """
         Initialize the FileOpener.
 
@@ -303,4 +308,21 @@ class FileOpener:
         ...
 
     def __enter__(self) -> BinaryIO: ...
-    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...  # noqa: ANN001
+
+class SafeMemory:
+    def __init__(self, size: int) -> None: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+    def __len__(self) -> int: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __bool__(self) -> bool: ...
+    def __hash__(self) -> int: ...
+    def writeto(self, out: Writer) -> int: ...
+    @classmethod
+    def read_from(cls, reader: Reader, size: int) -> Self: ...
+    @classmethod
+    def from_buffer(cls, data: Buffer) -> Self: ...
+    @classmethod
+    def build(cls, size: int, callback: Callable[[memoryview], None]) -> Self: ...
+    @property
+    def readonly(self) -> bool: ...

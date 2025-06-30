@@ -28,6 +28,7 @@ _cython_tree_cydrogen = [
   fs.copyfile('_exceptions.pxd'),
   fs.copyfile('_hash.pxd'),
   fs.copyfile('_masterkey.pxd'),
+  fs.copyfile('_networking.pxd'),
   fs.copyfile('_secretbox.pxd'),
   fs.copyfile('_sign.pxd'),
   fs.copyfile('_utils.pxd'),
@@ -40,10 +41,11 @@ cydrogen_pyx_sources = [
   ['_exceptions', ['_exceptions.pyx']],
   ['_hash', ['_hash.pyx']],
   ['_masterkey', ['_masterkey.pyx']],
+  ['_networking', ['_networking.pyx']],
   ['_secretbox', ['_secretbox.pyx']],
   ['_sign', ['_sign.pyx']],
   ['_kx_n', ['_kx_n.pyx']],
-  ['_utils', ['_utils.pyx', 'cyutils.c', 'cyd_memcpy_s.c']],
+  ['_utils', ['_utils.pyx', 'cyutils.c', 'cyd_memcpy_s.c', 'fnv.c']],
   ['_decls', ['_decls.pyx', 'src/hydrogen.c']],
 ]
 
@@ -116,6 +118,8 @@ python_sources = [
   '_hash.pyi',
   '_masterkey.pxd',
   '_masterkey.pyi',
+  '_networking.pxd',
+  '_networking.pyi',
   '_secretbox.pxd',
   '_secretbox.pyi',
   '_sign.pxd',
@@ -127,6 +131,7 @@ python_sources = [
   '_decls.pxd',
   '_decls.pyi',
   'networking.py',
+  '_protocols.py',
   'py.typed',
 ]
 
