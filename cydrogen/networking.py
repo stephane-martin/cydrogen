@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Buffer, Callable
-from enum import Enum, StrEnum
+from enum import StrEnum
 from typing import Any, Self
 
 from ._decls import NOGIL_THRESHOLD_BYTES
@@ -35,23 +35,23 @@ CANCEL_MESSAGE_ID: int = 0
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB
 
 
-class MachineState(Enum):
-    INITIAL = 0
-    CONNECTED = 1
-    READER_CLOSED = 2
-    WRITER_CLOSED = 3
-    READER_WRITER_CLOSED = 4
-    WAITING_FOR_PACKET1 = 5
-    WAITING_FOR_PACKET2 = 6
-    WAITING_FOR_PACKET3 = 7
-    WAITING_FOR_SERVER_ACK = 8
+class MState(StrEnum):
+    INITIAL = "initial"
+    CONNECTED = "connected"
+    READER_CLOSED = "reader_closed"
+    WRITER_CLOSED = "writer_closed"
+    READER_WRITER_CLOSED = "reader_writer_closed"
+    WAITING_FOR_PACKET1 = "waiting_for_packet1"
+    WAITING_FOR_PACKET2 = "waiting_for_packet2"
+    WAITING_FOR_PACKET3 = "waiting_for_packet3"
+    WAITING_FOR_SERVER_ACK = "waiting_for_server_ack"
 
     def kx_is_pending(self) -> bool:
         return self in (
-            MachineState.WAITING_FOR_PACKET1,
-            MachineState.WAITING_FOR_PACKET2,
-            MachineState.WAITING_FOR_PACKET3,
-            MachineState.WAITING_FOR_SERVER_ACK,
+            MState.WAITING_FOR_PACKET1,
+            MState.WAITING_FOR_PACKET2,
+            MState.WAITING_FOR_PACKET3,
+            MState.WAITING_FOR_SERVER_ACK,
         )
 
 
@@ -64,43 +64,65 @@ class TransitionEvent(StrEnum):
     DATA_TO_SEND = "data_to_send"
 
 
-type TransitionDestination = tuple[MachineState, Callable]
-type TransitionsByOrigState = dict[MachineState, TransitionDestination]
+type TransitionDestination = tuple[MState, Callable]
+type TransitionsByOrigState = dict[MState, TransitionDestination]
 type TransitionsByEvent = dict[TransitionEvent, TransitionsByOrigState]
 
 type StreamHandlerFunction = Callable[["StreamReaderWriter"], Awaitable[None]]
 type ValidatePeerKeyFunc = Callable[[KxPublicKey], Awaitable[None]]
 
-ALL_STATES: set[MachineState] = set(MachineState)
+ALL_STATES: set[MState] = set(MState)
 
 
 class Transitions:
     def __init__(self) -> None:
-        self.d: TransitionsByEvent = {}
+        self._t: TransitionsByEvent = {}
 
-    def add(self, event: TransitionEvent, orig_state: MachineState, dest_state: MachineState, callback: Callable) -> None:
-        if event not in self.d:
-            self.d[event] = {}
-        if orig_state not in self.d[event]:
-            self.d[event][orig_state] = (dest_state, callback)
+    def add(self, event: TransitionEvent, orig_state: MState, dest_state: MState, callback: Callable) -> None:
+        if event not in self._t:
+            self._t[event] = {}
+        if orig_state not in self._t[event]:
+            self._t[event][orig_state] = (dest_state, callback)
         else:
             raise RuntimeError(f"Transition {orig_state} => {event} already exists")
 
     def add_many(self, transitions: TransitionsByEvent) -> None:
         for event, orig_states in transitions.items():
-            if event not in self.d:
-                self.d[event] = {}
+            if event not in self._t:
+                self._t[event] = {}
             for orig_state, (dest_state, callback) in orig_states.items():
-                if orig_state not in self.d[event]:
-                    self.d[event][orig_state] = (dest_state, callback)
+                if orig_state not in self._t[event]:
+                    self._t[event][orig_state] = (dest_state, callback)
                 else:
                     raise RuntimeError(f"Transition {orig_state} => {event} already exists")
 
-    def get(self, event: TransitionEvent, orig_state: MachineState) -> TransitionDestination:
+    def get(self, event: TransitionEvent, orig_state: MState) -> TransitionDestination:
         try:
-            return self.d[event][orig_state]
+            return self._t[event][orig_state]
         except KeyError as ex:
             raise RuntimeError(f"Invalid transition for {event} from {orig_state}") from ex
+
+    def keep_only_valid_states(self, valid_states: frozenset[MState]) -> None:
+        # remove all transitions that are referencing states not in valid_states
+        to_remove: TransitionsByEvent = {}
+
+        event: TransitionEvent
+        dest: TransitionDestination
+        state_transitions: TransitionsByOrigState
+
+        for event, state_transitions in self._t.items():
+            to_remove[event] = {}
+            for orig_state, dest in state_transitions.items():
+                if orig_state not in valid_states or dest[0] not in valid_states:
+                    to_remove[event][orig_state] = dest
+
+        for event, state_transitions in to_remove.items():
+            for orig_state, dest in state_transitions.items():
+                logger.debug("Removing: %s => %s => %s", orig_state, event, dest[0])
+                del self._t[event][orig_state]
+            if not self._t[event]:
+                logger.debug("Removing event: %s", event)
+                del self._t[event]
 
 
 class BaseMachine:
@@ -140,7 +162,7 @@ class BaseMachine:
     # CONNECTED                 => receive_data     => CONNECTED
     # WRITER_CLOSED             => receive_data     => WRITER_CLOSED
 
-    _valid_states: frozenset[MachineState] = frozenset()
+    _valid_states: frozenset[MState] = frozenset()
     eof_exception = EOFError("Connection closed by peer")
 
     def __init__(self, kx_completed: asyncio.Future) -> None:
@@ -149,67 +171,67 @@ class BaseMachine:
         self._transitions.add_many(
             {
                 TransitionEvent.CONNECTION_LOST: {
-                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.CONNECTED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.READER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.CONNECTED: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.READER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._connection_lost),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._connection_lost),
                 },
                 TransitionEvent.READER_EOF: {
-                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.CONNECTED: (MachineState.READER_CLOSED, self._reader_eof),
-                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._reader_eof),
-                    MachineState.WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.CONNECTED: (MState.READER_CLOSED, self._reader_eof),
+                    MState.READER_CLOSED: (MState.READER_CLOSED, self._reader_eof),
+                    MState.WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._reader_eof),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._reader_eof),
                 },
                 TransitionEvent.WRITER_EOF: {
-                    MachineState.INITIAL: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.CONNECTED: (MachineState.WRITER_CLOSED, self._writer_eof),
-                    MachineState.READER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._writer_eof),
-                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.CONNECTED: (MState.WRITER_CLOSED, self._writer_eof),
+                    MState.READER_CLOSED: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._writer_eof),
+                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._writer_eof),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._writer_eof),
                 },
                 TransitionEvent.WRITE_EMESSAGE: {
-                    MachineState.CONNECTED: (MachineState.CONNECTED, self._write_emessage),
-                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._write_emessage),
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET1, self._write_emessage),
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_PACKET2, self._write_emessage),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.WAITING_FOR_PACKET3, self._write_emessage),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.WAITING_FOR_SERVER_ACK, self._write_emessage),
+                    MState.CONNECTED: (MState.CONNECTED, self._write_emessage),
+                    MState.READER_CLOSED: (MState.READER_CLOSED, self._write_emessage),
+                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET1, self._write_emessage),
+                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_PACKET2, self._write_emessage),
+                    MState.WAITING_FOR_PACKET3: (MState.WAITING_FOR_PACKET3, self._write_emessage),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.WAITING_FOR_SERVER_ACK, self._write_emessage),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.CONNECTED: (MachineState.CONNECTED, self._receive_data_connected),
-                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._receive_data_connected),
+                    MState.CONNECTED: (MState.CONNECTED, self._receive_data_connected),
+                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._receive_data_connected),
                 },
                 TransitionEvent.DATA_TO_SEND: {
-                    # no MachineState.INITIAL case, because that will be handled by the subclass
-                    MachineState.CONNECTED: (MachineState.CONNECTED, self._data_to_send),
-                    MachineState.READER_CLOSED: (MachineState.READER_CLOSED, self._data_to_send),
-                    MachineState.WRITER_CLOSED: (MachineState.WRITER_CLOSED, self._data_to_send),
-                    MachineState.READER_WRITER_CLOSED: (MachineState.READER_WRITER_CLOSED, self._data_to_send),
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_PACKET2, self._data_to_send),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.WAITING_FOR_PACKET3, self._data_to_send),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.WAITING_FOR_SERVER_ACK, self._data_to_send),
+                    # no MState.INITIAL case, because that will be handled by the subclass
+                    MState.CONNECTED: (MState.CONNECTED, self._data_to_send),
+                    MState.READER_CLOSED: (MState.READER_CLOSED, self._data_to_send),
+                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._data_to_send),
+                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._data_to_send),
+                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET1, self._data_to_send),
+                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_PACKET2, self._data_to_send),
+                    MState.WAITING_FOR_PACKET3: (MState.WAITING_FOR_PACKET3, self._data_to_send),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.WAITING_FOR_SERVER_ACK, self._data_to_send),
                 },
             },
         )
 
         self._kx_completed: asyncio.Future = kx_completed
-        self._invalid_states: set[MachineState] = ALL_STATES - self._valid_states
-        self._state: MachineState = MachineState.INITIAL
+        self._invalid_states: set[MState] = ALL_STATES - self._valid_states
+        self._state: MState = MState.INITIAL
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
         self._read_buffers: ReadBuffers = ReadBuffers()
 
@@ -351,7 +373,7 @@ class BaseMachine:
                 # when callback returns True, there was some advance, hence set the destination state
                 old_state = self._state
                 self._state = dest
-                if old_state.kx_is_pending() and self._state == MachineState.CONNECTED:
+                if old_state.kx_is_pending() and self._state == MState.CONNECTED:
                     self._complete_kx()
         except Exception as ex:
             self._fail_kx(ex)
@@ -393,12 +415,12 @@ class KX_N_ClientStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,  # initial state, we can send packet1
-            MachineState.WAITING_FOR_SERVER_ACK,  # waiting for server ACK after it has processed packet1
-            MachineState.CONNECTED,  # key exchange completed successfully
-            MachineState.READER_CLOSED,  # reader closed, we can still send data
-            MachineState.WRITER_CLOSED,  # writer closed, we can still read data
-            MachineState.READER_WRITER_CLOSED,  # both reader and writer closed, final state
+            MState.INITIAL,  # initial state, we can send packet1
+            MState.WAITING_FOR_SERVER_ACK,  # waiting for server ACK after it has processed packet1
+            MState.CONNECTED,  # key exchange completed successfully
+            MState.READER_CLOSED,  # reader closed, we can still send data
+            MState.WRITER_CLOSED,  # writer closed, we can still read data
+            MState.READER_WRITER_CLOSED,  # both reader and writer closed, final state
         },
     )
 
@@ -408,13 +430,14 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial),
+                    MState.INITIAL: (MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.CONNECTED, self._receive_server_ack),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.CONNECTED, self._receive_server_ack),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_public_key: KxPublicKey = server_public_key
         self._session_pair, self._packet1 = client_init_kx_n(server_public_key, psk)
@@ -444,12 +467,12 @@ class KX_N_ServerStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,
-            MachineState.CONNECTED,
-            MachineState.READER_CLOSED,
-            MachineState.WRITER_CLOSED,
-            MachineState.READER_WRITER_CLOSED,
-            MachineState.WAITING_FOR_PACKET1,
+            MState.INITIAL,
+            MState.CONNECTED,
+            MState.READER_CLOSED,
+            MState.WRITER_CLOSED,
+            MState.READER_WRITER_CLOSED,
+            MState.WAITING_FOR_PACKET1,
         },
     )
 
@@ -459,13 +482,14 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.CONNECTED, self._receive_packet1),
+                    MState.WAITING_FOR_PACKET1: (MState.CONNECTED, self._receive_packet1),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
@@ -491,12 +515,12 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,
-            MachineState.CONNECTED,
-            MachineState.READER_CLOSED,
-            MachineState.WRITER_CLOSED,
-            MachineState.READER_WRITER_CLOSED,
-            MachineState.WAITING_FOR_PACKET2,
+            MState.INITIAL,
+            MState.CONNECTED,
+            MState.READER_CLOSED,
+            MState.WRITER_CLOSED,
+            MState.READER_WRITER_CLOSED,
+            MState.WAITING_FOR_PACKET2,
         },
     )
 
@@ -506,13 +530,14 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET2, self._data_to_send_initial),
+                    MState.INITIAL: (MState.WAITING_FOR_PACKET2, self._data_to_send_initial),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.CONNECTED, self._receive_packet2),
+                    MState.WAITING_FOR_PACKET2: (MState.CONNECTED, self._receive_packet2),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._client_pair: KxPair = client_pair
         self._server_public_key: KxPublicKey = server_public_key
@@ -545,12 +570,12 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,
-            MachineState.CONNECTED,
-            MachineState.READER_CLOSED,
-            MachineState.WRITER_CLOSED,
-            MachineState.READER_WRITER_CLOSED,
-            MachineState.WAITING_FOR_PACKET1,
+            MState.INITIAL,
+            MState.CONNECTED,
+            MState.READER_CLOSED,
+            MState.WRITER_CLOSED,
+            MState.READER_WRITER_CLOSED,
+            MState.WAITING_FOR_PACKET1,
         },
     )
 
@@ -560,13 +585,14 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.CONNECTED, self._receive_packet1),
+                    MState.WAITING_FOR_PACKET1: (MState.CONNECTED, self._receive_packet1),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
         self._client_public_key: KxPublicKey = client_public_key
@@ -595,13 +621,13 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,
-            MachineState.CONNECTED,
-            MachineState.READER_CLOSED,
-            MachineState.WRITER_CLOSED,
-            MachineState.READER_WRITER_CLOSED,
-            MachineState.WAITING_FOR_PACKET2,
-            MachineState.WAITING_FOR_SERVER_ACK,
+            MState.INITIAL,
+            MState.CONNECTED,
+            MState.READER_CLOSED,
+            MState.WRITER_CLOSED,
+            MState.READER_WRITER_CLOSED,
+            MState.WAITING_FOR_PACKET2,
+            MState.WAITING_FOR_SERVER_ACK,
         },
     )
 
@@ -611,14 +637,15 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET2, self._data_to_send_initial),
+                    MState.INITIAL: (MState.WAITING_FOR_PACKET2, self._data_to_send_initial),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_PACKET2: (MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2),
-                    MachineState.WAITING_FOR_SERVER_ACK: (MachineState.CONNECTED, self._receive_server_ack),
+                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_SERVER_ACK, self._receive_packet2),
+                    MState.WAITING_FOR_SERVER_ACK: (MState.CONNECTED, self._receive_server_ack),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._client_pair: KxPair = client_pair
         self._psk: Psk | None = psk
@@ -644,7 +671,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         return True
 
     def _receive_server_ack(self) -> bool:
-        # self._state == MachineState.WAITING_FOR_SERVER_ACK:
+        # self._state == MState.WAITING_FOR_SERVER_ACK:
         two_uple = self._get_small_message()
         if two_uple is None:
             # not enough data to read the message
@@ -668,13 +695,13 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
     _valid_states = frozenset(
         {
-            MachineState.INITIAL,
-            MachineState.CONNECTED,
-            MachineState.READER_CLOSED,
-            MachineState.WRITER_CLOSED,
-            MachineState.READER_WRITER_CLOSED,
-            MachineState.WAITING_FOR_PACKET1,
-            MachineState.WAITING_FOR_PACKET3,
+            MState.INITIAL,
+            MState.CONNECTED,
+            MState.READER_CLOSED,
+            MState.WRITER_CLOSED,
+            MState.READER_WRITER_CLOSED,
+            MState.WAITING_FOR_PACKET1,
+            MState.WAITING_FOR_PACKET3,
         },
     )
 
@@ -684,14 +711,15 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._transitions.add_many(
             {
                 TransitionEvent.DATA_TO_SEND: {
-                    MachineState.INITIAL: (MachineState.WAITING_FOR_PACKET1, self._data_to_send),
+                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
                 },
                 TransitionEvent.RECEIVE_DATA: {
-                    MachineState.WAITING_FOR_PACKET1: (MachineState.WAITING_FOR_PACKET3, self._receive_packet1),
-                    MachineState.WAITING_FOR_PACKET3: (MachineState.CONNECTED, self._receive_packet3),
+                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET3, self._receive_packet1),
+                    MState.WAITING_FOR_PACKET3: (MState.CONNECTED, self._receive_packet3),
                 },
             },
         )
+        self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
@@ -711,7 +739,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         return True
 
     def _receive_packet3(self) -> bool:
-        # self._state == MachineState.WAITING_FOR_PACKET3
+        # self._state == MState.WAITING_FOR_PACKET3
         packet3: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET3BYTES)
         if packet3 is None:
             # not enough data to read the packet3
