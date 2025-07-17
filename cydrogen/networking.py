@@ -985,7 +985,6 @@ class KXProtocol(asyncio.BufferedProtocol):
     def maybe_pause_reading(self) -> None:
         if self._reading_paused:
             return
-        logger.debug("maybe_pause_reading called, received_size: %d, limit: %d", self._machine.received_size, self._limit)
         if self._machine.received_size > 2 * self._limit:
             try:
                 logger.info("Transport asked to pause reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
@@ -997,7 +996,6 @@ class KXProtocol(asyncio.BufferedProtocol):
     def maybe_resume_reading(self) -> None:
         if not self._reading_paused:
             return
-        logger.debug("maybe_resume_reading called, received_size: %d, limit: %d", self._machine.received_size, self._limit)
         if self._machine.received_size <= self._limit:
             logger.info("Transport asked to resume reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
             self._reading_paused = False
@@ -1390,7 +1388,7 @@ async def start_kx_n_server(
     *,
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
-) -> asyncio.AbstractServer:
+) -> asyncio.Server:
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
@@ -1411,7 +1409,7 @@ async def start_kx_kk_server(
     client_public_key: KxPublicKey,
     *,
     limit: int = _DEFAULT_LIMIT,
-) -> asyncio.AbstractServer:
+) -> asyncio.Server:
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
@@ -1431,7 +1429,7 @@ async def start_kx_xx_server(
     psk: Psk | None,
     limit: int = _DEFAULT_LIMIT,
     validate_client_key: ValidatePeerKeyFunc | None = None,
-) -> asyncio.AbstractServer:
+) -> asyncio.Server:
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
