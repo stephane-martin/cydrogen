@@ -2,6 +2,7 @@ import argparse
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ LAST_RELEASE_CHANGES_FNAME = ROOT / "last_release_changes.md"
 
 ISSUE_URL_TPL = "https://github.com/stephane-martin/cydrogen/issues/"
 
-with open(CHANGELOG_TPL_FNAME, "r", encoding="utf-8") as f:
+with CHANGELOG_TPL_FNAME.open("rt", encoding="utf-8") as f:
     CHANGELOG_TEMPLATE = f.read().strip()
 
 
@@ -68,7 +69,7 @@ class ChangeType(StrEnum):
 class PyProject:
     data: dict[str, Any]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.data = {}
 
     @property
@@ -124,10 +125,10 @@ class Changelog:
             for ctype in unreleased:
                 changes = []
                 for change in unreleased[ctype]:
-                    change = change.lstrip(" -").rstrip(" .")
-                    if change:
-                        change += "."
-                        changes.append(change)
+                    schange = change.lstrip(" -").rstrip(" .")
+                    if schange:
+                        schange += "."
+                        changes.append(schange)
                 if changes:
                     unreleased_changes[ChangeType(ctype.lower())] = changes
 
@@ -145,10 +146,10 @@ class Changelog:
                 change_type = ChangeType(ctype.lower())
                 changes = []
                 for change in release_data[ctype]:
-                    change = change.strip()
-                    if change:
-                        change = change + "." if not change.endswith(".") else change
-                        changes.append(change)
+                    schange = change.strip()
+                    if schange:
+                        schange = schange + "." if not schange.endswith(".") else schange
+                        changes.append(schange)
                 if changes:
                     release_changes[change_type] = changes
 
@@ -164,7 +165,7 @@ class Changelog:
         )
 
     def to_json(self) -> str:
-        data: dict[str, Any] = dict()
+        data: dict[str, Any] = {}
         if self.unreleased_changes:
             data["unreleased"] = {str(k): v for k, v in self.unreleased_changes.items() if v}
         if self.releases:
@@ -231,7 +232,7 @@ class Changelog:
                 f.write("\n")
 
 
-def sync_changelog():
+def sync_changelog() -> None:
     """
     Sync the CHANGELOG.md with the CHANGELOG.json file.
     """
@@ -239,7 +240,7 @@ def sync_changelog():
     print("=> CHANGELOG.md generated")
 
 
-def bump(v: str):
+def bump(v: str) -> None:
     """
     Bump the version in pyproject.toml and add a new release to the changelog.
     """
@@ -276,7 +277,7 @@ def bump(v: str):
     print(f"=> Version {version} bumped and added to the changelog.")
 
 
-def change(change_type: ChangeType, change: str):
+def change(change_type: ChangeType, change: str) -> None:
     """
     Add a new change to the changelog in the unreleased section.
     """
@@ -299,6 +300,11 @@ def change(change_type: ChangeType, change: str):
 
 
 def release() -> None:
+    git = shutil.which("git")
+    if git is None:
+        print("Git is not installed or not found in PATH.")
+        sys.exit(1)
+
     changelog: Changelog = Changelog.load()
     if changelog.unreleased_changes:
         print("There are still unreleased changes in the changelog. Please run 'bump' first.")
@@ -314,14 +320,14 @@ def release() -> None:
     git_tag = f"v{last_release.version}"
     # check if the tag already exists
     try:
-        subprocess.run(["git", "rev-parse", git_tag], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([git, "rev-parse", git_tag], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
         print(f"Git tag {git_tag} already exists.")
         sys.exit(1)
     except subprocess.CalledProcessError:
         pass
     # check if there are any untracked file with `git ls-files -o --exclude-standard`
     untracked_files = (
-        subprocess.run(["git", "ls-files", "-o", "--exclude-standard"], check=True, capture_output=True, text=True)
+        subprocess.run([git, "ls-files", "-o", "--exclude-standard"], check=True, capture_output=True, text=True)  # noqa: S603
         .stdout.strip()
         .splitlines()
     )
@@ -335,26 +341,26 @@ def release() -> None:
             print("Aborting release.")
             sys.exit(1)
     # list all modified files with `git diff --name-only`
-    modified = subprocess.run(["git", "diff", "--name-only"], check=True, capture_output=True, text=True).stdout.strip().splitlines()
+    modified = subprocess.run([git, "diff", "--name-only"], check=True, capture_output=True, text=True).stdout.strip().splitlines()  # noqa: S603
     if modified:
         print("There are modified files in the repository\n")
-        subprocess.run(["git", "--no-pager", "diff", "--minimal"], check=True)
+        subprocess.run([git, "--no-pager", "diff", "--minimal"], check=True)  # noqa: S603
         # ask user to confirm
         confirm = input("Do you want to continue? (y/N): ").strip().lower()
         if confirm != "y":
             print("Aborting release.")
             sys.exit(1)
     if modified or untracked_files:
-        subprocess.run(["git", "add", "--verbose", "."], check=True)
-        subprocess.run(["git", "commit", "-m", f"chore: bump version to {last_release.version}"], check=True)
+        subprocess.run([git, "add", "--verbose", "."], check=True)  # noqa: S603
+        subprocess.run([git, "commit", "-m", f"chore: bump version to {last_release.version}"], check=True)  # noqa: S603
     # apply the tag
-    subprocess.run(["git", "tag", "-a", git_tag, "-m", f"Release {last_release.version}"], check=True)
+    subprocess.run([git, "tag", "-a", git_tag, "-m", f"Release {last_release.version}"], check=True)  # noqa: S603
     # push the changes
-    subprocess.run(["git", "push"], check=True)
-    subprocess.run(["git", "push", "--tags"], check=True)
+    subprocess.run([git, "push"], check=True)  # noqa: S603
+    subprocess.run([git, "push", "--tags"], check=True)  # noqa: S603
 
 
-def get_parser():
+def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="tools to manage the changelog.")
     subs = parser.add_subparsers(dest="command", title="commands", description="available commands")
     _ = subs.add_parser("sync", help="Generate CHANGELOG.md from CHANGELOG.json")
@@ -372,7 +378,7 @@ def get_parser():
     return parser
 
 
-def main():
+def main() -> None:
     parser = get_parser()
     args = parser.parse_args()
     if args.command == "sync":

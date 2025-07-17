@@ -1,41 +1,46 @@
 #!/usr/bin/env python
 
 import argparse
-import os
+import pathlib
 import sys
-from glob import iglob
 from itertools import chain
-from os.path import dirname
 
-latin1_letters = set(chr(cp) for cp in range(192, 256))
+latin1_letters = {chr(cp) for cp in range(192, 256)}
 greek_letters = set("αβγδεζηθικλμνξoπρστυϕχψω" + "ΓΔΘΛΞΠΣϒΦΨΩ")
-box_drawing_chars = set(chr(cp) for cp in range(0x2500, 0x2580))
+box_drawing_chars = {chr(cp) for cp in range(0x2500, 0x2580)}
 allowed = latin1_letters | greek_letters | box_drawing_chars
 
 
-def check_unicode():
+def check_unicode() -> int:
     # File encoding regular expression from PEP-263.
-    root_dir = dirname(dirname(__file__))
+    root_dir = pathlib.Path(__file__).resolve().parent.parent
 
     nbad = 0
-    for name in chain(
-        iglob(os.path.join(root_dir, "cydrogen/**/*.py"), recursive=True),
-        iglob(os.path.join(root_dir, "tools/**/*.py"), recursive=True),
-        iglob(os.path.join(root_dir, "cydrogen/**/*.pyx"), recursive=True),
-        iglob(os.path.join(root_dir, "cydrogen/**/*.px[di]"), recursive=True),
-        ["pyproject.toml", "noxfile.py"],
-    ):
-        # print(f"- {name}")
+
+    globs = [
+        "cydrogen/**/*.py",
+        "tools/**/*.py",
+        "cydrogen/**/*.pyx",
+        "cydrogen/**/*.px[di]",
+    ]
+
+    res = [list(root_dir.glob(g)) for g in globs]
+    names = list(chain(*res))
+    names = [name.resolve() for name in names]
+    names.append(root_dir / "pyproject.toml")
+    names.append(root_dir / "noxfile.py")
+
+    for name in names:
         # Read the file as bytes, and check for any bytes greater than 127.
-        with open(name, "rb") as f:
+        with name.open("rb") as f:
             content = f.read()
         if len(content) == 0:
             continue
         if max(content) > 127:
-            content = content.decode(encoding="utf-8")
+            bcontent = content.decode(encoding="utf-8")
 
             out = []
-            for n, line in enumerate(content.splitlines()):
+            for n, line in enumerate(bcontent.splitlines()):
                 for pos, char in enumerate(line):
                     cp = ord(char)
                     if cp > 127:
