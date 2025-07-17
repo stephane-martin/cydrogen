@@ -2,29 +2,35 @@
 import argparse
 import os
 import os.path
+import pathlib
+import shutil
 import subprocess
 import textwrap
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-def init_version():
-    init = os.path.join(os.path.dirname(__file__), "../pyproject.toml")
-    with open(init) as fid:
+
+def init_version() -> str:
+    init = ROOT / "pyproject.toml"
+    with init.open(mode="rt", encoding="utf-8") as fid:
         data = fid.readlines()
     version_line = next(line for line in data if line.startswith("version ="))
     version = version_line.strip().split(" = ")[1]
-    version = version.replace('"', "").replace("'", "")
-    return version
+    return version.replace('"', "").replace("'", "")
 
 
-def git_version(version):
+def git_version(version: str) -> tuple[str, str]:
     # Append last commit date and hash to dev version information if available
     git_hash = ""
+    git = shutil.which("git")
+    if git is None:
+        raise RuntimeError("git command not found. Please install git to use this script.")
     try:
-        p = subprocess.Popen(
-            ["git", "log", "-1", '--format="%H %aI"'],
+        p = subprocess.Popen(  # noqa: S603
+            [git, "log", "-1", '--format="%H %aI"'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=os.path.dirname(__file__),
+            cwd=str(ROOT),
         )
     except FileNotFoundError:
         pass
@@ -53,25 +59,21 @@ if __name__ == "__main__":
         """
         version = "{version}"
         full_version = version
-        short_version = version.split('-dev')[0]
+        short_version = version.split("-dev")[0]
         git_revision = "{git_hash}"
-        release = '-dev' not in version and '+' not in version
+        release = "-dev" not in version and "+" not in version
 
         if not release:
-            version = full_version
-    ''').strip()
+            version = full_version''').strip()
+    template += "\n"
 
     if args.write:
-        outfile = args.write
+        outfile = pathlib.Path(args.write).resolve()
         if args.meson_dist:
-            outfile = os.path.join(os.environ.get("MESON_DIST_ROOT", ""), outfile)
+            meson_dist_root = os.environ.get("MESON_DIST_ROOT", "")
+            outfile = pathlib.Path(meson_dist_root) / outfile if meson_dist_root else outfile
 
-        # Print human readable output path
-        relpath = os.path.relpath(outfile)
-        if relpath.startswith("."):
-            relpath = outfile
-
-        with open(outfile, "w") as f:
+        with outfile.open("wt", encoding="utf-8") as f:
             f.write(template)
     else:
         print(version)
