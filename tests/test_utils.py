@@ -236,7 +236,7 @@ _READERS: list[Reader | bytes] = [
 
 
 @pytest.fixture(params=_READERS)
-def reader(request: pytest.FixtureRequest) -> Reader:
+def reader(request: pytest.FixtureRequest):
     if not isinstance(request.param, bytes):
         yield request.param
         return
