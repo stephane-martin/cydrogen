@@ -2,7 +2,9 @@ import asyncio
 import time
 
 import pytest
+from cydrogen import KxPair, Psk
 from cydrogen._networking import MsgQueue
+from cydrogen.networking import RequestResponseHandler, make_kx_xx_client, start_kx_xx_server
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -46,3 +48,45 @@ async def test_msg_queue_waiting() -> None:
     assert elapsed >= 1.0
     assert msg == b"12345678"
     assert msg_id == 3
+
+
+class H(RequestResponseHandler):
+    async def response(self, msg: bytes, msg_id: int):  # noqa: ARG002
+        return msg.upper()
+
+
+CLIENT_PAIR = KxPair("PRd15/pwWvuRunBq5pv8jP1Y10gekV7ld8oH0vcYVC/GWd8Wi87qwB9CV76awCqiicaZAGVhEQvQSgZbPK9g6w==0")
+SERVER_PAIR = KxPair("I4k9+3iOp9BLi5n8HIrYDvoMiJ3MZzkQbE3UU0XWmQIN7g2CCry+J5HqoNe8AzDWwB78nlsRkIwMm5X0VhSZRA==")
+PSK = Psk("viHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
+HOST = "127.0.0.1"
+PORT = 8888
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_kx_xx() -> None:
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+
+    client = await make_kx_xx_client(HOST, PORT, CLIENT_PAIR, psk=PSK)
+    messages = [
+        b"one",
+        b"two",
+        b"three",
+        b"four",
+        b"five",
+        b"six",
+        b"seven",
+        b"eight",
+        b"nine",
+        b"ten",
+    ]
+    expected_responses = [msg.upper() for msg in messages]
+
+    async with client:
+        for msg, expected in zip(messages, expected_responses, strict=True):
+            response = await client.request(msg)
+            assert response == expected
+
+    # client is closed, server should still be running
+    server.close()
+    await server.wait_closed()
