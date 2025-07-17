@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import io
+import pathlib
 import tempfile
 import threading
 from collections.abc import Buffer
@@ -185,7 +187,7 @@ def test_safe_memory_build() -> None:
     assert bytes(sm2) == b"foobar\x00"
 
 
-def test_file_opener():
+def test_file_opener() -> None:
     b = io.BytesIO(b"foobar")
     b.seek(0)
     with FileOpener(b) as f:
@@ -198,15 +200,21 @@ def test_file_opener():
         with FileOpener(f) as opener:
             assert opener.read() == b"test data"
 
-    with tempfile.NamedTemporaryFile() as f:
-        f.write(b"temporary file data")
-        f.flush()
-        f.seek(0)
-        with FileOpener(f) as opener:
+    fname: pathlib.Path
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            fname = pathlib.Path(f.name)
+            f.write(b"temporary file data")
+            f.flush()
+            f.seek(0)
+            with FileOpener(f) as opener:
+                assert opener.read() == b"temporary file data"
+        # let the temp file be closed before we try to open it again (because windows, sigh)
+        with FileOpener(fname) as opener:
             assert opener.read() == b"temporary file data"
-        f.seek(0)
-        with FileOpener(f.name) as opener:
-            assert opener.read() == b"temporary file data"
+    finally:
+        with contextlib.suppress(OSError):
+            fname.unlink()  # Clean up the temporary file
 
 
 def test_file_opener_safe_reader(slow_reader: Reader) -> None:
