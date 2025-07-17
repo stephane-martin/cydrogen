@@ -171,7 +171,7 @@ jobs:
           check-latest: true
       - name: install nox and pytest
         run: |
-          python -m pip install --upgrade pip && pip install nox pytest
+          python -m pip install --upgrade pip && pip install nox && pip install --group test
       - name: download wheel from artifacts
         uses: actions/download-artifact@v4
         with:
@@ -204,7 +204,7 @@ jobs:
           check-latest: true
       - name: install nox and pytest
         run: |
-          python -m pip install --upgrade pip && pip install nox pytest
+          python -m pip install --upgrade pip && pip install nox && pip install --group test
       - name: download wheel from artifacts
         uses: actions/download-artifact@v4
         with:
