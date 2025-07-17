@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import logging
+import sys
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Buffer, Callable
@@ -1380,6 +1381,14 @@ def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHand
     raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
 
 
+async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port: int) -> asyncio.Server:
+    loop = asyncio.get_running_loop()
+    if sys.version_info < (3, 13):
+        # python 3.12 does not support keep_alive here
+        return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False)
+    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+
+
 async def start_kx_n_server(
     handler: StreamHandlerFunction | type[BaseServerHandler],
     host: str,
@@ -1398,7 +1407,7 @@ async def start_kx_n_server(
         # kxprotocol will wait for the kx_completed future before triggering the handler
         return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
 
-    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+    return await _loop_create_server(factory, host, port)
 
 
 async def start_kx_kk_server(
@@ -1417,7 +1426,7 @@ async def start_kx_kk_server(
         machine = KX_KK_ServerStateMachine(server_pair, client_public_key, kx_completed)
         return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
 
-    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+    return await _loop_create_server(factory, host, port)
 
 
 async def start_kx_xx_server(
@@ -1437,4 +1446,4 @@ async def start_kx_xx_server(
         machine = KX_XX_ServerStateMachine(server_pair, kx_completed, psk=psk)
         return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key)
 
-    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+    return await _loop_create_server(factory, host, port)
