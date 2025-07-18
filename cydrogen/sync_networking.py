@@ -21,7 +21,7 @@ OK_MESSAGE = b"OK"
 
 class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
     """
-    KX_N_TCPHandler provides a handler to build a TCP server.
+    KX_N_TCPHandler provides a handler to build a TCP server with key exchange variant N.
 
     Subclasses must implement the handle_message() method to define how to process incoming messages.
     """
@@ -35,6 +35,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
         self.peer = request.getpeername()
         self.finishing_ev = threading.Event()  # to signal when the thread is finishing
         self.tbox: SecretBox
+        self.local = threading.local()
         super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
 
     def setup(self) -> None:
@@ -51,10 +52,18 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
         # for this thread by calling its shutdown_request(socket) method.
 
     def post_connected(self) -> None:
+        """
+        This method is called after the connection is established and session keys are generated.
+
+        It can be overridden by subclasses to perform additional actions after the connection is established, and
+        before the first message is handled.
+
+        The base implementation just logs that the connection is established and session keys are generated.
+        """
         logger.info("Connection established with %s, session keys generated", self.peer)
 
     def handle(self) -> None:
-        # called by __init__
+        # called by __init__ for each accepted connection
         set_keepalive(self.request)
         # receive packet1 from the client
         packet1 = self.rfile.read(KX_N_PACKET1BYTES)
@@ -92,6 +101,8 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
         except DecryptException as ex:
             logger.warning("Decryption failed for client %s, closing connection: %s", self.peer, ex)
             return False
+        # store the current message ID in the local thread storage so that it's available in handle_message()
+        self.local.msg_id = emsg.msg_id
         try:
             if not self.handle_message(msg, emsg.msg_id):
                 logger.info("Stopping message handling for %s", self.peer)
@@ -99,13 +110,43 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
         except Exception:
             logger.exception("Handling message from %s", self.peer)
             return False
+        finally:
+            del self.local.msg_id  # clean up the local thread storage
         return True  # continue handling messages
 
     @abstractmethod
     def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        """
+        Handle a message received from the client.
+
+        This method must be implemented by subclasses to define how to process incoming messages.
+
+        For a given client, this method will be called in order of the messages received, one at a time. The next message
+        will not be read until this method returns.
+
+        Implementers should call `self.write` to send a response back to the client.
+
+        Args:
+            msg: The decrypted message received from the client.
+            msg_id: The message ID of the received message.
+
+        Returns:
+            True if the server should continue handling messages from this client, False if it should stop.
+        """
         raise NotImplementedError
 
-    def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
+    def write(self, msg: Buffer, *, msg_id: int | None = None) -> None:
+        """
+        Write a message to the client. The message will be encrypted using the session keys.
+
+        This method would be used when implementing handle_message() in a subclass.
+
+        Args:
+            msg: The message to write to the client.
+            msg_id: Optional message ID. If not provided, it defaults to the current incoming message ID.
+        """
+        if msg_id is None:
+            msg_id = self.local.msg_id
         with self._write_lock:
             self.tbox.encrypt(msg, msg_id=msg_id, out=self.wfile)
             self.wfile.flush()
@@ -114,12 +155,27 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
 class KX_N_TCPServer(socketserver.ThreadingTCPServer):
     """
     KX_N_TCPServer provides a threading TCP server with key exchange variant N.
+
+    Implementers must provide a handler class that inherits from KX_N_TCPHandler.
+
+    The clients will authenticate the server using the server's public key, and the server will not authenticate the clients. To
+    restrict which clients can connect, use the optional pre-shared key (PSK) mechanism.
     """
 
-    def __init__(self, addr: tuple[str, int], server_keys: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None) -> None:
-        super().__init__(addr, handler, bind_and_activate=False)
+    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None) -> None:
+        """
+        Initialize the KX_N_TCPServer.
+
+        Args:
+            host: the IP address to bind the server to.
+            port: the port number to bind the server to.
+            server_keypair: the server key pair used for key exchange.
+            handler: the handler class that will handle incoming connections.
+            psk: optional pre-shared key.
+        """
+        super().__init__((host, port), handler, bind_and_activate=False)
         self.allow_reuse_address = True
-        self.kx_pair = server_keys
+        self.kx_pair = server_keypair
         self.psk = psk
         self.running = False
         self.thread: threading.Thread | None = None
@@ -149,6 +205,15 @@ class KX_N_TCPServer(socketserver.ThreadingTCPServer):
             self.sockets.clear()
 
     def run(self, *, background: bool = False) -> None:
+        """
+        Start the server. If background is True, the server will run in a separate thread and the method will return immediately.
+
+        Args:
+            background: If True, the server will run in a background thread. If False, it will run in the current thread.
+
+        Raises:
+            RuntimeError: If the server is already running.
+        """
         if self.running:
             raise RuntimeError("Server is already running")
         self.running = True
@@ -183,6 +248,13 @@ class KX_N_TCPServer(socketserver.ThreadingTCPServer):
         super().server_close()  # close the main server socket and wait for threads to finish
 
     def shutdown(self) -> None:
+        """
+        Shutdown the server.
+
+        `shutdown` makes `run` exit and closes all accepted sockets.
+
+        `shutdown` does not wait for clients to go away and closes the channels with them immediately.
+        """
         if not self.running:
             logger.warning("Server is not running, nothing to shutdown")
             return
@@ -195,13 +267,16 @@ class KX_N_TCPServer(socketserver.ThreadingTCPServer):
 
 class KX_N_TCPClient:
     """
-    EncryptedTCPClient provides a client to connect to a TCP server using key exchange variant N.
+    KX_N_TCPClient provides a client to connect to a TCP server using key exchange variant N.
 
-    The client uses the server's public key to authenticate the server and generate session keys.
+    The client uses the server's public key to authenticate the server and generate session keys. The server does not
+    authenticate the clients.
+
+    `KX_N_TCPClient` can be used in a context manager to automatically connect and close the client.
     """
 
-    def __init__(self, server_address: tuple[str, int], server_public_key: KxPublicKey, *, psk: Psk | None = None) -> None:
-        self.server_address: tuple[str, int] = server_address
+    def __init__(self, host: str, port: int, server_public_key: KxPublicKey, *, psk: Psk | None = None) -> None:
+        self.server_address: tuple[str, int] = (host, port)
         self.server_public_key: KxPublicKey = server_public_key
         self.psk: Psk | None = psk
 
@@ -217,14 +292,25 @@ class KX_N_TCPClient:
         self.read_lock = threading.Lock()
         self.write_lock = threading.Lock()
 
-    def connect(self, *, retry: int = -1) -> None:
-        if self.connected:
-            raise RuntimeError("Client is already connected")
-        if not self.closed:
-            raise RuntimeError("Client is already connecting")
+    def connect(self, *, retry: int = 3, retry_wait: int = 30) -> None:
+        """
+        Connect to the server and establish session keys.
+
+        Args:
+            retry: Number of times to retry connecting if the initial connection fails.
+                   Set to 0 to disable retries and -1 to retry indefinitely.
+            retry_wait: Number of seconds to wait between retries.
+
+        Raises:
+            KeyExchangeException: If the key exchange fails or the server does not respond with OK.
+            ConnectionRefusedError: If the server is not reachable after the specified retries.
+        """
+        if self.connected or not self.closed:
+            logger.info("Client is already connected or connecting, skipping connect")
+            return
         self.closed = False
         try:
-            self._connect(retry=retry)
+            self._connect(retry=retry, retry_wait=retry_wait)
         except:
             self.close()
             raise
@@ -232,19 +318,22 @@ class KX_N_TCPClient:
             self.connected = True
             logger.info("Server acknowledged, session keys established")
 
-    def _connect(self, retry: int) -> None:
+    def _connect(self, retry: int, retry_wait: int) -> None:
         while True:
             try:
                 self.socket = socket.create_connection(self.server_address, timeout=30)
             except ConnectionRefusedError:
-                if retry == 0:
-                    raise
                 if retry > 0:
                     retry -= 1
+                elif retry < 0:
+                    pass  # retry indefinitely
+                else:
+                    raise
             else:
                 break
-            logger.warning("Connection to %s failed, retrying in 1 second...", self.server_address)
-            time.sleep(1)
+            logger.warning("Connection to %s failed, retrying...", self.server_address)
+            if retry_wait > 0:
+                time.sleep(retry_wait)
 
         self.socket.settimeout(None)  # timeout does not play nice with makefile
         set_keepalive(self.socket)
@@ -260,15 +349,29 @@ class KX_N_TCPClient:
             raise KeyExchangeException("Server did not respond with OK")
 
     def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
+        """
+        Write a message to the server. The message will be encrypted using the session keys.
+
+        Args:
+            msg: The message to write to the server.
+            msg_id: The message ID to use for this message. Defaults to 1.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            ValueError: If the message ID is not a positive integer.
+            OSError: If there is an error writing to the server. The client will be closed in this case.
+        """
         if not self.connected or self.wfile is None or self.closed or self.session_pair is None:
             raise RuntimeError("Client is not connected")
         if not msg:
             logger.warning("Attempted to write an empty message, skipping")
             return
-        tx, wfile = self.session_pair.tx, self.wfile
+        if msg_id < 1:
+            raise ValueError("Message ID must be a positive integer")
+        tbox, wfile = SecretBox(self.session_pair.tx), self.wfile
         try:
             with self.write_lock:
-                SecretBox(tx).encrypt(msg, msg_id=msg_id, out=wfile)
+                tbox.encrypt(msg, msg_id=msg_id, out=wfile)
                 wfile.flush()
         except OSError:
             logger.exception("Failed to write to server")
@@ -276,6 +379,18 @@ class KX_N_TCPClient:
             raise
 
     def read(self) -> tuple[bytes, int]:
+        """
+        Read a message from the server. The message will be decrypted using the session keys.
+
+        Returns:
+            The decrypted message as bytes.
+            The message ID of the received message.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+            OSError: If there is an error reading from the server. The client will be closed.
+            DecryptException: If decryption fails, indicating a possible key mismatch or tampered message. The client will be closed.
+        """
         if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
             raise RuntimeError("Client is not connected")
         return self.doread(self.rfile, self.session_pair.rx)
@@ -297,11 +412,17 @@ class KX_N_TCPClient:
             raise
 
     def __iter__(self) -> Iterator[tuple[bytes, int]]:
+        """
+        Return an iterator that reads messages from the server.
+        """
         if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
             raise RuntimeError("Client is not connected")
         return _ClientIterator(self)
 
     def close(self) -> None:
+        """
+        Close the client connection.
+        """
         if self.closed:
             return
         self.closed = True

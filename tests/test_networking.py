@@ -13,6 +13,7 @@ from cydrogen.networking import (
     start_kx_n_server,
     start_kx_xx_server,
 )
+from cydrogen.sync_networking import KX_N_TCPClient
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -143,5 +144,25 @@ async def test_client_server_kx_n() -> None:
         assert await t == expected_responses[msg]
 
     # clients are closed, server should still be running
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_sync_client_async_server_kx_n() -> None:
+    """
+    Test that a synchronous client KX_N client can communicate with an asynchronous KX_N server.
+    """
+    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+
+    with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client:
+        for idx, msg in enumerate(MESSAGES):
+            client.write(msg, msg_id=idx + 1)
+            resp, msg_id = client.read()
+            assert resp == msg.upper()
+            assert msg_id == idx + 1
+
+    # client is closed, server should still be running
     server.close()
     await server.wait_closed()
