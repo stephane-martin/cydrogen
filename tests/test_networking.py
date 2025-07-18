@@ -172,18 +172,16 @@ async def test_sync_client_async_server_kx_n() -> None:
     q: queue.Queue = queue.Queue()
 
     def sync_client() -> None:
-        try:
-            with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client:
-                for idx, msg in enumerate(MESSAGES):
-                    client.write(msg, msg_id=idx + 1)
-                    try:
-                        resp, msg_id = client.read()
-                        q.put((msg, idx + 1, resp, msg_id))
-                    except Exception as ex:  # noqa: BLE001
-                        q.put(ex)
-                        return
-        finally:
-            q.shutdown()
+        with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client:
+            for idx, msg in enumerate(MESSAGES):
+                client.write(msg, msg_id=idx + 1)
+                try:
+                    resp, msg_id = client.read()
+                    q.put((msg, idx + 1, resp, msg_id))
+                except Exception as ex:  # noqa: BLE001
+                    q.put(ex)
+                    return
+        q.put(StopIteration("Client finished sending messages."))
 
     await asyncio.to_thread(sync_client)
 
@@ -191,13 +189,16 @@ async def test_sync_client_async_server_kx_n() -> None:
     nb_received = 0
     try:
         while not shutdown:
-            try:
-                msg, msg_id, resp, resp_msg_id = q.get()
+            r = q.get()
+            if isinstance(r, StopIteration):
+                shutdown = True
+            elif isinstance(r, Exception):
+                raise r
+            else:
+                msg, msg_id, resp, resp_msg_id = r
                 nb_received += 1
                 assert resp == msg.upper(), "Response does not match expected"
                 assert resp_msg_id == msg_id, "Response message ID does not match request message ID"
-            except queue.ShutDown:
-                shutdown = True
     finally:
         server.close()
         await server.wait_closed()
