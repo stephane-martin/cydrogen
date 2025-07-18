@@ -131,6 +131,7 @@ python_sources = [
   '_decls.pxd',
   '_decls.pyi',
   'networking.py',
+  'sync_networking.py',
   '_protocols.py',
   'py.typed',
 ]
