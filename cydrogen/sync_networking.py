@@ -77,7 +77,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
             logger.exception("Key exchange failed with %s", self.peer)
             return
         self.tbox = SecretBox(self.session_pair.tx)
-        self.write(OK_MESSAGE)
+        self.write(OK_MESSAGE, msg_id=0)
 
         self.post_connected()  # allow subclasses to do something after the connection is established
 
