@@ -167,12 +167,15 @@ ignore = [
   "PLR0912", # too many branches
 ]
 
+
 [tool.pytest.ini_options]
 console_output_style = "classic"
 testpaths = "tests"
 addopts = "--import-mode=importlib"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
+#log_cli = true
+#log_cli_level = "INFO"
 
 [tool.meson-python.args]
 setup = ["-Dbuildtype=minsize", "-Ddebug=false", "-Db_ndebug=true"]

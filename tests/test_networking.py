@@ -14,7 +14,17 @@ from cydrogen.networking import (
     start_kx_n_server,
     start_kx_xx_server,
 )
-from cydrogen.sync_networking import KX_N_TCPClient, KX_N_TCPHandler, KX_N_TCPServer
+from cydrogen.sync_networking import (
+    KX_KK_TCPClient,
+    KX_KK_TCPHandler,
+    KX_KK_TCPServer,
+    KX_N_TCPClient,
+    KX_N_TCPHandler,
+    KX_N_TCPServer,
+    KX_XX_TCPClient,
+    KX_XX_TCPHandler,
+    KX_XX_TCPServer,
+)
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -66,7 +76,6 @@ CLIENT_PUBKEY = CLIENT_PAIR.public_key()
 SERVER_PUBKEY = SERVER_PAIR.public_key()
 PSK = Psk("viHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
 HOST = "127.0.0.1"
-PORT = 8888
 
 MESSAGES = [
     b"one",
@@ -88,10 +97,11 @@ async def test_async_client_async_server_kx_xx() -> None:
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
 
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    port = 8896
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, port, SERVER_PAIR, psk=PSK)
     await server.start_serving()
 
-    client = await make_kx_xx_client(HOST, PORT, CLIENT_PAIR, psk=PSK)
+    client = await make_kx_xx_client(HOST, port, CLIENT_PAIR, psk=PSK)
 
     expected_responses = [msg.upper() for msg in MESSAGES]
     async with client:
@@ -110,10 +120,11 @@ async def test_async_client_async_server_kx_kk() -> None:
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
 
-    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
+    port = 8889
+    server: asyncio.Server = await start_kx_kk_server(H, HOST, port, SERVER_PAIR, CLIENT_PUBKEY)
     await server.start_serving()
 
-    client = await make_kx_kk_client(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY)
+    client = await make_kx_kk_client(HOST, port, CLIENT_PAIR, SERVER_PUBKEY)
 
     expected_responses = [msg.upper() for msg in MESSAGES]
     async with client:
@@ -132,11 +143,12 @@ async def test_async_client_async_server_kx_n() -> None:
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
 
-    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    port = 8890
+    server: asyncio.Server = await start_kx_n_server(H, HOST, port, SERVER_PAIR, psk=PSK)
     await server.start_serving()
 
-    client = await make_kx_n_client(HOST, PORT, SERVER_PUBKEY, psk=PSK)
-    client2 = await make_kx_n_client(HOST, PORT, SERVER_PUBKEY, psk=PSK)
+    client = await make_kx_n_client(HOST, port, SERVER_PUBKEY, psk=PSK)
+    client2 = await make_kx_n_client(HOST, port, SERVER_PUBKEY, psk=PSK)
 
     expected_responses = {msg: msg.upper() for msg in MESSAGES}
     responses_client1 = {}
@@ -166,13 +178,14 @@ async def test_sync_client_async_server_kx_n() -> None:
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
 
-    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    port = 8891
+    server: asyncio.Server = await start_kx_n_server(H, HOST, port, SERVER_PAIR, psk=PSK)
     await server.start_serving()
 
     q: queue.Queue = queue.Queue()
 
     def sync_client() -> None:
-        with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client:
+        with KX_N_TCPClient(HOST, port, SERVER_PUBKEY, psk=PSK) as client:
             for idx, msg in enumerate(MESSAGES):
                 client.write(msg, msg_id=idx + 1)
                 try:
@@ -217,13 +230,14 @@ async def test_async_client_sync_server_kx_n() -> None:
             self.write(msg.upper())
             return True
 
-    server: KX_N_TCPServer = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+    port = 8892
+    server: KX_N_TCPServer = KX_N_TCPServer(HOST, port, SERVER_PAIR, H, psk=PSK)
     server.run(background=True)  # run the server in a background thread to avoid to block the event loop
 
     # give a bit of time for the server to start to listen
     await asyncio.sleep(1)
 
-    client = await make_kx_n_client(HOST, PORT, SERVER_PUBKEY, psk=PSK)
+    client = await make_kx_n_client(HOST, port, SERVER_PUBKEY, psk=PSK)
     try:
         for msg in MESSAGES:
             resp: bytes = await client.request(msg)
@@ -233,3 +247,87 @@ async def test_async_client_sync_server_kx_n() -> None:
         client.close()
         await client.wait_closed()
         server.shutdown()
+
+
+def test_sync_client_sync_server_kx_n() -> None:
+    class H(KX_N_TCPHandler):
+        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
+            self.write(msg.upper())
+            return True
+
+    port = 8893
+    # spawn the server in a background thread
+    server: KX_N_TCPServer = KX_N_TCPServer(HOST, port, SERVER_PAIR, H, psk=PSK)
+    server.run(background=True)
+
+    nb_received = 0
+
+    try:
+        # start the client in the main thread
+        with KX_N_TCPClient(HOST, port, SERVER_PUBKEY, psk=PSK) as client:
+            for idx, msg in enumerate(MESSAGES):
+                client.write(msg, msg_id=idx + 1)
+                resp, msg_id = client.read()
+                nb_received += 1
+                assert resp == msg.upper(), "Response does not match expected"
+                assert msg_id == idx + 1, "Response message ID does not match request message ID"
+    finally:
+        server.shutdown()
+
+    assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
+
+
+def test_sync_client_sync_server_kx_kk() -> None:
+    class H(KX_KK_TCPHandler):
+        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
+            self.write(msg.upper())
+            return True
+
+    port = 8894
+    # spawn the server in a background thread
+    server: KX_KK_TCPServer = KX_KK_TCPServer(HOST, port, SERVER_PAIR, H, CLIENT_PUBKEY)
+    server.run(background=True)
+
+    nb_received = 0
+
+    try:
+        # start the client in the main thread
+        with KX_KK_TCPClient(HOST, port, CLIENT_PAIR, SERVER_PUBKEY) as client:
+            for idx, msg in enumerate(MESSAGES):
+                client.write(msg, msg_id=idx + 1)
+                resp, msg_id = client.read()
+                nb_received += 1
+                assert resp == msg.upper(), "Response does not match expected"
+                assert msg_id == idx + 1, "Response message ID does not match request message ID"
+    finally:
+        server.shutdown()
+
+    assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
+
+
+def test_sync_client_sync_server_kx_xx() -> None:
+    class H(KX_XX_TCPHandler):
+        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
+            self.write(msg.upper())
+            return True
+
+    port = 8895
+    # spawn the server in a background thread
+    server: KX_XX_TCPServer = KX_XX_TCPServer(HOST, port, SERVER_PAIR, H, psk=PSK)
+    server.run(background=True)
+
+    nb_received = 0
+
+    try:
+        # start the client in the main thread
+        with KX_XX_TCPClient(HOST, port, CLIENT_PAIR, psk=PSK) as client:
+            for idx, msg in enumerate(MESSAGES):
+                client.write(msg, msg_id=idx + 1)
+                resp, msg_id = client.read()
+                nb_received += 1
+                assert resp == msg.upper(), "Response does not match expected"
+                assert msg_id == idx + 1, "Response message ID does not match request message ID"
+    finally:
+        server.shutdown()
+
+    assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
