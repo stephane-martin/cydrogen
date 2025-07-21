@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - key exchange using the KK variant.
 - key exchange using the XX variant.
 - TCP clients and servers supporting the different N/KK/XX key exchange protocols.
+- synchronous TCP clients for KX variants KK and XX.
+- synchronous TCP servers for KX variants KK and XX.
 
 ## v0.0.10 - 2025-06-12
 

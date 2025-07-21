@@ -83,7 +83,7 @@ MESSAGES = [
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_client_server_kx_xx() -> None:
+async def test_async_client_async_server_kx_xx() -> None:
     class H(RequestResponseHandler):
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
@@ -105,7 +105,7 @@ async def test_client_server_kx_xx() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_client_server_kx_kk() -> None:
+async def test_async_client_async_server_kx_kk() -> None:
     class H(RequestResponseHandler):
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()
@@ -127,7 +127,7 @@ async def test_client_server_kx_kk() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_client_server_kx_n() -> None:
+async def test_async_client_async_server_kx_n() -> None:
     class H(RequestResponseHandler):
         async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
             return msg.upper()

@@ -10,7 +10,19 @@ from contextlib import suppress
 from typing import Any, BinaryIO, Self
 
 from ._exceptions import DecryptException, KeyExchangeException
-from ._kx_n import KX_N_PACKET1BYTES, KxPair, KxPublicKey, Psk, SessionPair, client_init_kx_n
+from ._kx_n import (
+    KX_KK_PACKET1BYTES,
+    KX_KK_PACKET2BYTES,
+    KX_N_PACKET1BYTES,
+    KX_XX_PACKET1BYTES,
+    KX_XX_PACKET2BYTES,
+    KX_XX_PACKET3BYTES,
+    KxPair,
+    KxPublicKey,
+    Psk,
+    SessionPair,
+    client_init_kx_n,
+)
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
 
 logger = logging.getLogger("cydrogen")
@@ -19,23 +31,22 @@ PLATFORM = platform.system().lower()
 OK_MESSAGE = b"OK"
 
 
-class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
+class BaseTCPHandler(socketserver.StreamRequestHandler, ABC):
     """
     KX_N_TCPHandler provides a handler to build a TCP server with key exchange variant N.
 
     Subclasses must implement the handle_message() method to define how to process incoming messages.
     """
 
-    def __init__(self, request: socket.socket, client_address: Any, server: "KX_N_TCPServer") -> None:  # noqa: ANN401
-        self.kx_pair: KxPair = server.kx_pair
-        self.psk: Psk | None = server.psk
+    def __init__(self, request: socket.socket, client_address: Any, server: "BaseTCPServer") -> None:  # noqa: ANN401
+        self.server_keypair: KxPair = server.server_keypair
         self.session_pair: SessionPair
         self._write_lock = threading.Lock()
-        self.server: KX_N_TCPServer = server  # to make type checker happy
+        self.server: BaseTCPServer = server  # to make type checker happy
         self.peer = request.getpeername()
         self.finishing_ev = threading.Event()  # to signal when the thread is finishing
         self.tbox: SecretBox
-        self.local = threading.local()
+        self.current_msg_id: int = 0
         super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
 
     def setup(self) -> None:
@@ -65,19 +76,12 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
     def handle(self) -> None:
         # called by __init__ for each accepted connection
         set_keepalive(self.request)
-        # receive packet1 from the client
-        packet1 = self.rfile.read(KX_N_PACKET1BYTES)
-        if len(packet1) != KX_N_PACKET1BYTES:
-            logger.error("Received packet1 from %s is not the expected length: %s", self.peer, len(packet1))
-            return
-        # calculate the session keys
+
         try:
-            self.session_pair = self.kx_pair.server_finish_kx_n(packet1, self.psk)
+            self.key_exchange()  # perform key exchange and establish session keys
         except KeyExchangeException:
             logger.exception("Key exchange failed with %s", self.peer)
             return
-        self.tbox = SecretBox(self.session_pair.tx)
-        self.write(OK_MESSAGE, msg_id=0)
 
         self.post_connected()  # allow subclasses to do something after the connection is established
 
@@ -86,8 +90,17 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
             # contrary to the async handler, processing a message happens after reading it, not concurrently.
             # this means that the non-async server can only handle one message at a time per client connection.
             if not self._handle_message():
-                logger.info("Stopping message handling for {self.peer}")
+                logger.info("Stopping message handling for %s", self.peer)
                 return
+
+    @abstractmethod
+    def key_exchange(self) -> None:
+        """
+        Perform the key exchange with the client to establish session keys.
+
+        Implementers must raise KeyExchangeException if the key exchange fails.
+        """
+        raise NotImplementedError
 
     def _handle_message(self) -> bool:
         # basically, this method reads a message from the client, decrypts it, and calls handle_message()
@@ -102,7 +115,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
             logger.warning("Decryption failed for client %s, closing connection: %s", self.peer, ex)
             return False
         # store the current message ID in the local thread storage so that it's available in handle_message()
-        self.local.msg_id = emsg.msg_id
+        self.current_msg_id = emsg.msg_id
         try:
             if not self.handle_message(msg, emsg.msg_id):
                 logger.info("Stopping message handling for %s", self.peer)
@@ -111,7 +124,7 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
             logger.exception("Handling message from %s", self.peer)
             return False
         finally:
-            del self.local.msg_id  # clean up the local thread storage
+            self.current_msg_id = 0  # clean up the local thread storage
         return True  # continue handling messages
 
     @abstractmethod
@@ -146,37 +159,83 @@ class KX_N_TCPHandler(socketserver.StreamRequestHandler, ABC):
             msg_id: Optional message ID. If not provided, it defaults to the current incoming message ID.
         """
         if msg_id is None:
-            msg_id = self.local.msg_id
+            msg_id = self.current_msg_id
         with self._write_lock:
             self.tbox.encrypt(msg, msg_id=msg_id, out=self.wfile)
             self.wfile.flush()
 
 
-class KX_N_TCPServer(socketserver.ThreadingTCPServer):
-    """
-    KX_N_TCPServer provides a threading TCP server with key exchange variant N.
+class KX_N_TCPHandler(BaseTCPHandler):
+    def __init__(self, request: socket.socket, client_address: Any, server: "KX_N_TCPServer") -> None:  # noqa: ANN401
+        self.psk = server.psk
+        super().__init__(request, client_address, server)
 
-    Implementers must provide a handler class that inherits from KX_N_TCPHandler.
+    def key_exchange(self) -> None:
+        # receive packet1 from the client
+        packet1 = self.rfile.read(KX_N_PACKET1BYTES)
+        if len(packet1) != KX_N_PACKET1BYTES:
+            raise KeyExchangeException("Received packet1 is not of the expected length")
+        # calculate the session keys
+        self.session_pair = self.server_keypair.server_finish_kx_n(packet1, self.psk)
+        self.tbox = SecretBox(self.session_pair.tx)
+        self.write(OK_MESSAGE, msg_id=0)
 
-    The clients will authenticate the server using the server's public key, and the server will not authenticate the clients. To
-    restrict which clients can connect, use the optional pre-shared key (PSK) mechanism.
-    """
 
-    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None) -> None:
-        """
-        Initialize the KX_N_TCPServer.
+class KX_KK_TCPHandler(BaseTCPHandler):
+    def __init__(self, request: socket.socket, client_address: Any, server: "KX_KK_TCPServer") -> None:  # noqa: ANN401
+        self.client_public_key: KxPublicKey = server.client_public_key
+        super().__init__(request, client_address, server)
 
-        Args:
-            host: the IP address to bind the server to.
-            port: the port number to bind the server to.
-            server_keypair: the server key pair used for key exchange.
-            handler: the handler class that will handle incoming connections.
-            psk: optional pre-shared key.
-        """
+    def key_exchange(self) -> None:
+        # receive packet1 from the client
+        packet1 = self.rfile.read(KX_KK_PACKET1BYTES)
+        if len(packet1) != KX_KK_PACKET1BYTES:
+            raise KeyExchangeException("Received packet1 is not of the expected length")
+        # calculate packet2 and session keys
+        self.session_pair, packet2 = self.server_keypair.server_process_kx_kk(self.client_public_key, packet1)
+        self.tbox = SecretBox(self.session_pair.tx)
+        # send packet2 to the client
+        self.wfile.write(packet2)
+        self.wfile.flush()
+
+
+class KX_XX_TCPHandler(BaseTCPHandler):
+    def __init__(self, request: socket.socket, client_address: Any, server: "KX_XX_TCPServer") -> None:  # noqa: ANN401
+        self.psk = server.psk
+        super().__init__(request, client_address, server)
+
+    def key_exchange(self) -> None:
+        # receive packet1 from the client
+        packet1 = self.rfile.read(KX_XX_PACKET1BYTES)
+        if len(packet1) != KX_XX_PACKET1BYTES:
+            raise KeyExchangeException("Received packet1 is not of the expected length")
+        # calculate packet2
+        state = self.server_keypair.server_process_kx_xx(packet1, self.psk)
+        # send packet2 to the client
+        self.wfile.write(state.packet2)
+        self.wfile.flush()
+        # receive packet3 from the client
+        packet3 = self.rfile.read(KX_XX_PACKET3BYTES)
+        if len(packet3) != KX_XX_PACKET3BYTES:
+            raise KeyExchangeException("Received packet3 is not of the expected length")
+        state.server_finish_kx_xx(packet3)
+        assert state.client_public_key is not None
+        self.client_public_key = state.client_public_key
+        self.validate_client_public_key()  # validate the client's public key
+        assert state.session_pair is not None
+        self.session_pair = state.session_pair
+        self.tbox = SecretBox(self.session_pair.tx)
+        self.write(OK_MESSAGE, msg_id=0)
+
+    def validate_client_public_key(self) -> None:
+        logger.info("Discovered client public key: %s", self.client_public_key)
+
+
+class BaseTCPServer(socketserver.ThreadingTCPServer):
+    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[BaseTCPHandler]) -> None:
         super().__init__((host, port), handler, bind_and_activate=False)
         self.allow_reuse_address = True
-        self.kx_pair = server_keypair
-        self.psk = psk
+        self.server_keypair = server_keypair
         self.running = False
         self.thread: threading.Thread | None = None
         self.sockets: dict[int, socket.socket] = {}  # to keep track of accepted sockets
@@ -265,20 +324,27 @@ class KX_N_TCPServer(socketserver.ThreadingTCPServer):
             self.thread = None
 
 
-class KX_N_TCPClient:
-    """
-    KX_N_TCPClient provides a client to connect to a TCP server using key exchange variant N.
+class KX_N_TCPServer(BaseTCPServer):
+    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_N_TCPHandler], *, psk: Psk | None = None) -> None:
+        super().__init__(host, port, server_keypair, handler)
+        self.psk = psk
 
-    The client uses the server's public key to authenticate the server and generate session keys. The server does not
-    authenticate the clients.
 
-    `KX_N_TCPClient` can be used in a context manager to automatically connect and close the client.
-    """
+class KX_KK_TCPServer(BaseTCPServer):
+    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_KK_TCPHandler], client_pubkey: KxPublicKey) -> None:
+        super().__init__(host, port, server_keypair, handler)
+        self.client_public_key: KxPublicKey = client_pubkey
 
-    def __init__(self, host: str, port: int, server_public_key: KxPublicKey, *, psk: Psk | None = None) -> None:
+
+class KX_XX_TCPServer(BaseTCPServer):
+    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_XX_TCPHandler], *, psk: Psk | None = None) -> None:
+        super().__init__(host, port, server_keypair, handler)
+        self.psk = psk
+
+
+class BaseTCPClient(ABC):
+    def __init__(self, host: str, port: int) -> None:
         self.server_address: tuple[str, int] = (host, port)
-        self.server_public_key: KxPublicKey = server_public_key
-        self.psk: Psk | None = psk
 
         self.connected: bool = False
         self.closed: bool = True
@@ -340,13 +406,11 @@ class KX_N_TCPClient:
         logger.info("Connected to server at %s", self.server_address)
         self.rfile = self.socket.makefile("rb")
         self.wfile = self.socket.makefile("wb")
+        self.key_exchange()
 
-        self.session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
-        self.wfile.write(packet1)
-        self.wfile.flush()
-        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with OK")
+    @abstractmethod
+    def key_exchange(self) -> None:
+        raise NotImplementedError
 
     def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
         """
@@ -448,8 +512,77 @@ class KX_N_TCPClient:
         self.close()
 
 
+class KX_N_TCPClient(BaseTCPClient):
+    def __init__(self, host: str, port: int, server_public_key: KxPublicKey, *, psk: Psk | None = None) -> None:
+        super().__init__(host, port)
+        self.server_public_key: KxPublicKey = server_public_key
+        self.psk: Psk | None = psk
+
+    def key_exchange(self) -> None:
+        assert self.rfile is not None
+        assert self.wfile is not None
+        self.session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
+        self.wfile.write(packet1)
+        self.wfile.flush()
+        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
+        if ack != OK_MESSAGE:
+            raise KeyExchangeException("Server did not respond with OK")
+
+
+class KX_KK_TCPClient(BaseTCPClient):
+    def __init__(self, host: str, port: int, client_keypair: KxPair, server_public_key: KxPublicKey) -> None:
+        super().__init__(host, port)
+        self.client_keypair: KxPair = client_keypair
+        self.server_public_key: KxPublicKey = server_public_key
+
+    def key_exchange(self) -> None:
+        assert self.rfile is not None
+        assert self.wfile is not None
+        # calculate packet1
+        state = self.client_keypair.client_init_kx_kk(self.server_public_key)
+        # send packet1 to the server
+        self.wfile.write(state.packet1)
+        self.wfile.flush()
+        # receive packet2 from the server
+        packet2 = self.rfile.read(KX_KK_PACKET2BYTES)
+        if len(packet2) != KX_KK_PACKET2BYTES:
+            raise KeyExchangeException("Received packet2 is not of the expected length")
+        # calculate session keys
+        state.client_finish_kx_kk(packet2)
+        assert state.session_pair is not None
+        self.session_pair = state.session_pair
+
+
+class KX_XX_TCPClient(BaseTCPClient):
+    def __init__(self, host: str, port: int, client_keypair: KxPair, *, psk: Psk | None = None) -> None:
+        super().__init__(host, port)
+        self.client_keypair: KxPair = client_keypair
+        self.psk: Psk | None = psk
+
+    def key_exchange(self) -> None:
+        assert self.rfile is not None
+        assert self.wfile is not None
+        state = self.client_keypair.client_init_kx_xx(self.psk)
+        self.wfile.write(state.packet1)
+        self.wfile.flush()
+        packet2 = self.rfile.read(KX_XX_PACKET2BYTES)
+        if len(packet2) != KX_XX_PACKET2BYTES:
+            raise KeyExchangeException("Received packet2 is not of the expected length")
+        state.client_process_kx_xx(packet2)
+        assert state.server_public_key is not None
+        self.server_public_key = state.server_public_key
+        self.validate_server_public_key()
+        assert state.session_pair is not None
+        self.session_pair = state.session_pair
+        self.wfile.write(state.packet3)
+        self.wfile.flush()
+
+    def validate_server_public_key(self) -> None:
+        logger.info("Discovered server public key: %s", self.server_public_key)
+
+
 class _ClientIterator:
-    def __init__(self, client: KX_N_TCPClient) -> None:
+    def __init__(self, client: BaseTCPClient) -> None:
         if client.session_pair is None or client.rfile is None:
             raise RuntimeError("Client is not connected")
         self.client = client
