@@ -576,6 +576,9 @@ class KX_XX_TCPClient(BaseTCPClient):
         self.session_pair = state.session_pair
         self.wfile.write(state.packet3)
         self.wfile.flush()
+        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
+        if ack != OK_MESSAGE:
+            raise KeyExchangeException("Server did not respond with OK")
 
     def validate_server_public_key(self) -> None:
         logger.info("Discovered server public key: %s", self.server_public_key)
