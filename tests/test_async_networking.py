@@ -19,6 +19,7 @@ SERVER_PAIR = KxPair("I4k9+3iOp9BLi5n8HIrYDvoMiJ3MZzkQbE3UU0XWmQIN7g2CCry+J5HqoN
 CLIENT_PUBKEY = CLIENT_PAIR.public_key()
 SERVER_PUBKEY = SERVER_PAIR.public_key()
 PSK = Psk("viHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
+WRONG_PSK = Psk("wiHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
 HOST = "127.0.0.1"
 PORT = 8888
 
@@ -185,7 +186,7 @@ async def test_client_too_late_server() -> None:
             return msg.upper()
 
     async def delayed_server() -> asyncio.Server:
-        await asyncio.sleep(6)
+        await asyncio.sleep(4)
         server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
         await server.start_serving()
         return server
@@ -194,9 +195,26 @@ async def test_client_too_late_server() -> None:
 
     try:
         with pytest.raises(ConnectionRefusedError):
-            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=3, connect_retry_wait=1):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=2, connect_retry_wait=1):
                 pass
     finally:
         server = await server_task
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_with_different_psk() -> None:
+    class H(RequestResponseHandler):
+        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+            return msg.upper()
+
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=WRONG_PSK):
+                pass
+    finally:
         server.close()
         await server.wait_closed()
