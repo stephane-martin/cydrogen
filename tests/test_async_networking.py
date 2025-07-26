@@ -172,7 +172,7 @@ async def test_client_delayed_server() -> None:
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_too_late_server() -> None:
     async def delayed_server() -> asyncio.Server:
-        await asyncio.sleep(6)
+        await asyncio.sleep(10)
         server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
         await server.start_serving()
         return server
@@ -181,7 +181,7 @@ async def test_client_too_late_server() -> None:
 
     try:
         with pytest.raises(ConnectionRefusedError):
-            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=2, connect_retry_wait=1):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=1, connect_retry_wait=1):
                 pass
     finally:
         server = await server_task
