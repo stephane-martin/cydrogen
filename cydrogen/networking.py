@@ -75,6 +75,13 @@ type ValidatePeerKeyFunc = Callable[[KxPublicKey], Awaitable[None]]
 ALL_STATES: set[MState] = set(MState)
 
 
+class InvalidTransitionError(RuntimeError):
+    def __init__(self, event: TransitionEvent, orig_state: MState) -> None:
+        super().__init__(f"Invalid transition {orig_state} => {event}")
+        self.event = event
+        self.orig_state = orig_state
+
+
 class Transitions:
     def __init__(self) -> None:
         self._t: TransitionsByEvent = {}
@@ -101,7 +108,7 @@ class Transitions:
         try:
             return self._t[event][orig_state]
         except KeyError as ex:
-            raise RuntimeError(f"Invalid transition for {event} from {orig_state}") from ex
+            raise InvalidTransitionError(event, orig_state) from ex
 
     def keep_only_valid_states(self, valid_states: frozenset[MState]) -> None:
         # remove all transitions that are referencing states not in valid_states
@@ -935,7 +942,12 @@ class KXProtocol(asyncio.BufferedProtocol):
         except Exception as ex:
             self._transport.abort()
             logger.exception("Peer public key validation for %s failed", self.peername)
-            self._validation_fut.set_exception(ex)
+            if self._client_handler is None:
+                # we are client side, we need to set the exception so that the client will fail
+                self._validation_fut.set_exception(ex)
+            else:
+                # we are server side, there is nothing to await the validation future
+                self._validation_fut.set_result(None)
             return
         logger.info("Peer public key validation for %s passed", self.peername)
 
@@ -960,7 +972,10 @@ class KXProtocol(asyncio.BufferedProtocol):
             logger.debug("No peer public key to validate")
             return
         logger.debug("Validating peer public key")
-        await self._validate_peer_key(peer_key)
+        try:
+            await self._validate_peer_key(peer_key)
+        except Exception as ex:
+            raise KeyExchangeException("Failed to validate peer public key") from ex
 
     async def wait_for_validation(self) -> None:
         await self._validation_fut
@@ -1146,6 +1161,13 @@ async def open_kx_xx_connection(
     return await _open_connection(host, port, machine, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
 
 
+class AsyncRequestResponseClientClosedError(RuntimeError):
+    """Raised when an attempt is made to send a request after the client has been closed."""
+
+    def __init__(self, message: str = "RequestResponseClient is closed") -> None:
+        super().__init__(message)
+
+
 class BaseAsyncRequestResponseClient:
     def __init__(self, request_timeout_secs: int | None = 30) -> None:
         self._counter = Counter()
@@ -1186,8 +1208,8 @@ class BaseAsyncRequestResponseClient:
         await self.wait_closed()
 
     async def request(self, msg: Buffer, *, timeout_secs: int | None = None) -> bytes:
-        if self._read_task.done():
-            raise RuntimeError("RequestResponseClient is closed")
+        if self._read_task.done() or self._rw.is_closing():
+            raise AsyncRequestResponseClientClosedError
         timeout_secs = timeout_secs if timeout_secs is not None else self._request_timeout_secs
         # ensure we get a unique message ID for this request
         msg_id: int = self._counter()
@@ -1197,6 +1219,13 @@ class BaseAsyncRequestResponseClient:
         self._pending_requests[msg_id] = fut
         try:
             await self._rw.write_msg(msg, msg_id=msg_id)
+        except InvalidTransitionError as ex:
+            # a response will never come, so clean up the future
+            del self._pending_requests[msg_id]
+            self.close(ex)
+            if ex.orig_state in (MState.WRITER_CLOSED, MState.READER_WRITER_CLOSED):
+                raise AsyncRequestResponseClientClosedError from ex
+            raise
         except:
             # a response will never come, so clean up the future
             del self._pending_requests[msg_id]
@@ -1537,7 +1566,7 @@ async def start_kx_xx_server(
     port: int,
     server_pair: KxPair,
     *,
-    psk: Psk | None,
+    psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
     validate_client_key: ValidatePeerKeyFunc | None = None,
 ) -> asyncio.Server:
