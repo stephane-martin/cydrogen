@@ -343,8 +343,10 @@ class KX_XX_TCPServer(BaseTCPServer):
 
 
 class BaseTCPClient(ABC):
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, *, connect_retry: int = 3, connect_retry_wait: int = 30) -> None:
         self.server_address: tuple[str, int] = (host, port)
+        self.retry = connect_retry
+        self.retry_wait = connect_retry_wait
 
         self.connected: bool = False
         self.closed: bool = True
@@ -358,7 +360,7 @@ class BaseTCPClient(ABC):
         self.read_lock = threading.Lock()
         self.write_lock = threading.Lock()
 
-    def connect(self, *, retry: int = 3, retry_wait: int = 30) -> None:
+    def connect(self) -> None:
         """
         Connect to the server and establish session keys.
 
@@ -376,7 +378,7 @@ class BaseTCPClient(ABC):
             return
         self.closed = False
         try:
-            self._connect(retry=retry, retry_wait=retry_wait)
+            self._connect()
         except:
             self.close()
             raise
@@ -384,23 +386,23 @@ class BaseTCPClient(ABC):
             self.connected = True
             logger.info("Server acknowledged, session keys established")
 
-    def _connect(self, retry: int, retry_wait: int) -> None:
+    def _create_connection(self) -> None:
+        retry = self.retry
         while True:
             try:
                 self.socket = socket.create_connection(self.server_address, timeout=30)
+                return
             except ConnectionRefusedError:
-                if retry > 0:
-                    retry -= 1
-                elif retry < 0:
-                    pass  # retry indefinitely
-                else:
+                if retry == 0:
                     raise
-            else:
-                break
+            retry -= 1
             logger.warning("Connection to %s failed, retrying...", self.server_address)
-            if retry_wait > 0:
-                time.sleep(retry_wait)
+            if self.retry_wait > 0:
+                time.sleep(self.retry_wait)
 
+    def _connect(self) -> None:
+        self._create_connection()
+        assert self.socket is not None
         self.socket.settimeout(None)  # timeout does not play nice with makefile
         set_keepalive(self.socket)
         logger.info("Connected to server at %s", self.server_address)
@@ -513,8 +515,17 @@ class BaseTCPClient(ABC):
 
 
 class KX_N_TCPClient(BaseTCPClient):
-    def __init__(self, host: str, port: int, server_public_key: KxPublicKey, *, psk: Psk | None = None) -> None:
-        super().__init__(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        server_public_key: KxPublicKey,
+        *,
+        psk: Psk | None = None,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
         self.server_public_key: KxPublicKey = server_public_key
         self.psk: Psk | None = psk
 
@@ -530,8 +541,16 @@ class KX_N_TCPClient(BaseTCPClient):
 
 
 class KX_KK_TCPClient(BaseTCPClient):
-    def __init__(self, host: str, port: int, client_keypair: KxPair, server_public_key: KxPublicKey) -> None:
-        super().__init__(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        client_keypair: KxPair,
+        server_public_key: KxPublicKey,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
         self.client_keypair: KxPair = client_keypair
         self.server_public_key: KxPublicKey = server_public_key
 
@@ -554,8 +573,17 @@ class KX_KK_TCPClient(BaseTCPClient):
 
 
 class KX_XX_TCPClient(BaseTCPClient):
-    def __init__(self, host: str, port: int, client_keypair: KxPair, *, psk: Psk | None = None) -> None:
-        super().__init__(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        client_keypair: KxPair,
+        *,
+        psk: Psk | None = None,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
         self.client_keypair: KxPair = client_keypair
         self.psk: Psk | None = psk
 

@@ -166,7 +166,7 @@ class BaseMachine:
     _valid_states: frozenset[MState] = frozenset()
     eof_exception = EOFError("Connection closed by peer")
 
-    def __init__(self, kx_completed: asyncio.Future) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._transitions = Transitions()
 
         self._transitions.add_many(
@@ -230,7 +230,7 @@ class BaseMachine:
             },
         )
 
-        self._kx_completed: asyncio.Future = kx_completed
+        self._kx_completed: asyncio.Future = loop.create_future()
         self._invalid_states: set[MState] = ALL_STATES - self._valid_states
         self._state: MState = MState.INITIAL
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
@@ -243,6 +243,10 @@ class BaseMachine:
         self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
         self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
         self._exception: Exception | None = None
+
+    @property
+    def kx_completed(self) -> asyncio.Future:
+        return self._kx_completed
 
     def get_buffer(self) -> memoryview:
         return self._read_buffers.get_buffer()
@@ -425,8 +429,8 @@ class KX_N_ClientStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, server_public_key: KxPublicKey, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, server_public_key: KxPublicKey, loop: asyncio.AbstractEventLoop, *, psk: Psk | None = None) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -477,8 +481,8 @@ class KX_N_ServerStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, server_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, server_pair: KxPair, loop: asyncio.AbstractEventLoop, *, psk: Psk | None = None) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -525,8 +529,8 @@ class KX_KK_ClientStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, client_pair: KxPair, server_public_key: KxPublicKey, kx_completed: asyncio.Future) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, client_pair: KxPair, server_public_key: KxPublicKey, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -580,8 +584,8 @@ class KX_KK_ServerStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, server_pair: KxPair, client_public_key: KxPublicKey, kx_completed: asyncio.Future) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, server_pair: KxPair, client_public_key: KxPublicKey, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -632,8 +636,8 @@ class KX_XX_ClientStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, client_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, client_pair: KxPair, loop: asyncio.AbstractEventLoop, *, psk: Psk | None = None) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -706,8 +710,8 @@ class KX_XX_ServerStateMachine(BaseMachine):
         },
     )
 
-    def __init__(self, server_pair: KxPair, kx_completed: asyncio.Future, *, psk: Psk | None = None) -> None:
-        super().__init__(kx_completed)
+    def __init__(self, server_pair: KxPair, loop: asyncio.AbstractEventLoop, *, psk: Psk | None = None) -> None:
+        super().__init__(loop)
 
         self._transitions.add_many(
             {
@@ -797,40 +801,47 @@ class StreamReaderWriter:
         return self._protocol.get_extra_info(name, default)
 
 
+async def dummy_validate_peer_key(key: KxPublicKey) -> None:
+    logger.debug("Dummy validate peer key called for %s", key)
+
+
 class KXProtocol(asyncio.BufferedProtocol):
     eof_exception = EOFError("Connection closed by peer")
 
     def __init__(
         self,
         machine: BaseMachine,
-        kx_completed: asyncio.Future,
+        loop: asyncio.AbstractEventLoop,
         *,
-        loop: asyncio.AbstractEventLoop | None = None,
         client_handler: StreamHandlerFunction | None = None,
         limit: int = _DEFAULT_LIMIT,
         validate_peer_key: ValidatePeerKeyFunc | None = None,
     ) -> None:
-        if loop is None:
-            self._loop = asyncio.get_event_loop()
-        else:
-            self._loop = loop
+        self._loop = loop
         self._reading_paused = False
         self._writing_paused = False
         self._drain_futures: deque[asyncio.Future] = deque()
         self._connection_lost = False
         self._machine = machine
-        self._closed_fut = self._loop.create_future()
+        self._closed_fut = loop.create_future()
         self._limit = limit
         self._client_handler: StreamHandlerFunction | None = client_handler
-        self._kx_completed: asyncio.Future = kx_completed
-        self._validate_peer_key: ValidatePeerKeyFunc | None = validate_peer_key
+        self._kx_completed = machine.kx_completed
+        self._validate_peer_key: ValidatePeerKeyFunc = validate_peer_key or dummy_validate_peer_key
         self._task: asyncio.Task | None = None
-        self._validation_fut: asyncio.Future | None = None
-        if self._client_handler is None:
-            self._validation_fut = self._loop.create_future()
+        self._validation_fut: asyncio.Future = self._loop.create_future()
+
         self.peername: str = ""
 
         self._transport: asyncio.Transport
+
+    @property
+    def machine(self) -> BaseMachine:
+        return self._machine
+
+    @property
+    def kx_completed(self) -> asyncio.Future:
+        return self._kx_completed
 
     def close(self) -> None:
         self._transport.close()
@@ -915,19 +926,16 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def validate_and_handle(self) -> None:
         try:
             await self.validate_peer_key()
-            if self._validation_fut is not None:
-                self._validation_fut.set_result(None)
+            self._validation_fut.set_result(None)
         except asyncio.CancelledError:
             self._transport.abort()
             logger.warning("Peer public key validation for %s cancelled", self.peername)
-            if self._validation_fut is not None:
-                self._validation_fut.cancel()
+            self._validation_fut.cancel()
             return
         except Exception as ex:
             self._transport.abort()
             logger.exception("Peer public key validation for %s failed", self.peername)
-            if self._validation_fut is not None:
-                self._validation_fut.set_exception(ex)
+            self._validation_fut.set_exception(ex)
             return
         logger.info("Peer public key validation for %s passed", self.peername)
 
@@ -951,16 +959,14 @@ class KXProtocol(asyncio.BufferedProtocol):
         if peer_key is None:
             logger.debug("No peer public key to validate")
             return
-        if self._validate_peer_key is None:
-            logger.debug("No peer public key validation function provided")
-            return
         logger.debug("Validating peer public key")
         await self._validate_peer_key(peer_key)
 
     async def wait_for_validation(self) -> None:
-        if self._validation_fut is None:
-            return
         await self._validation_fut
+
+    async def wait_for_key_exchange(self) -> None:
+        await self._kx_completed
 
     def get_buffer(self, sizehint: int) -> memoryview:  # noqa: ARG002
         return self._machine.get_buffer()
@@ -1062,6 +1068,38 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.get_extra_info(name, default)
 
 
+async def _connect(host: str, port: int, protocol: KXProtocol, retry: int, retry_wait: int) -> None:
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            await loop.create_connection(lambda: protocol, host, port)
+            return
+        except ConnectionRefusedError:
+            if retry == 0:
+                raise
+        retry -= 1
+        logger.warning("Connection to %s:%d failed, retrying...", host, port)
+        if retry_wait > 0:
+            await asyncio.sleep(retry_wait)
+
+
+async def _open_connection(
+    host: str,
+    port: int,
+    machine: BaseMachine,
+    limit: int,
+    validate_server_key: ValidatePeerKeyFunc | None,
+    retry: int,
+    retry_wait: int,
+    loop: asyncio.AbstractEventLoop,
+) -> StreamReaderWriter:
+    protocol = KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
+    await _connect(host, port, protocol, retry, retry_wait)
+    await protocol.wait_for_key_exchange()
+    await protocol.wait_for_validation()
+    return StreamReaderWriter(protocol)
+
+
 async def open_kx_n_connection(
     host: str,
     port: int,
@@ -1069,14 +1107,12 @@ async def open_kx_n_connection(
     *,
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    kx_completed = loop.create_future()
-    machine = KX_N_ClientStateMachine(server_public_key, kx_completed, psk=psk)
-    protocol = KXProtocol(machine, kx_completed, limit=limit)
-    await loop.create_connection(lambda: protocol, host, port)
-    await kx_completed  # wait for the key exchange to complete
-    return StreamReaderWriter(protocol)
+    machine = KX_N_ClientStateMachine(server_public_key, loop, psk=psk)
+    return await _open_connection(host, port, machine, limit, None, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_kk_connection(
@@ -1086,14 +1122,12 @@ async def open_kx_kk_connection(
     server_public_key: KxPublicKey,
     *,
     limit: int = _DEFAULT_LIMIT,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    kx_completed = loop.create_future()
-    machine = KX_KK_ClientStateMachine(client_pair, server_public_key, kx_completed)
-    protocol = KXProtocol(machine, kx_completed, limit=limit)
-    await loop.create_connection(lambda: protocol, host, port)
-    await kx_completed  # wait for the key exchange to complete
-    return StreamReaderWriter(protocol)
+    machine = KX_KK_ClientStateMachine(client_pair, server_public_key, loop)
+    return await _open_connection(host, port, machine, limit, None, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_xx_connection(
@@ -1104,15 +1138,12 @@ async def open_kx_xx_connection(
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
     validate_server_key: ValidatePeerKeyFunc | None = None,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    kx_completed = loop.create_future()
-    machine = KX_XX_ClientStateMachine(client_pair, kx_completed, psk=psk)
-    protocol = KXProtocol(machine, kx_completed, limit=limit, validate_peer_key=validate_server_key)
-    await loop.create_connection(lambda: protocol, host, port)
-    await kx_completed  # wait for the key exchange to complete
-    await protocol.wait_for_validation()  # will raise an exception if the validation fails
-    return StreamReaderWriter(protocol)
+    machine = KX_XX_ClientStateMachine(client_pair, loop, psk=psk)
+    return await _open_connection(host, port, machine, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
 
 
 class AsyncRequestResponseClient:
@@ -1220,8 +1251,12 @@ async def make_kx_n_client(
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
     request_timeout_secs: int | None = 30,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> AsyncRequestResponseClient:
-    rw = await open_kx_n_connection(host, port, server_public_key, psk=psk, limit=limit)
+    rw = await open_kx_n_connection(
+        host, port, server_public_key, psk=psk, limit=limit, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait
+    )
     return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
@@ -1233,8 +1268,12 @@ async def make_kx_kk_client(
     *,
     limit: int = _DEFAULT_LIMIT,
     request_timeout_secs: int | None = 30,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> AsyncRequestResponseClient:
-    rw = await open_kx_kk_connection(host, port, client_pair, server_public_key, limit=limit)
+    rw = await open_kx_kk_connection(
+        host, port, client_pair, server_public_key, limit=limit, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait
+    )
     return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
@@ -1247,8 +1286,19 @@ async def make_kx_xx_client(
     limit: int = _DEFAULT_LIMIT,
     validate_server_key: ValidatePeerKeyFunc | None = None,
     request_timeout_secs: int | None = 30,
+    connect_retry: int = 3,
+    connect_retry_wait: int = 30,
 ) -> AsyncRequestResponseClient:
-    rw = await open_kx_xx_connection(host, port, client_pair, psk=psk, limit=limit, validate_server_key=validate_server_key)
+    rw = await open_kx_xx_connection(
+        host,
+        port,
+        client_pair,
+        psk=psk,
+        limit=limit,
+        validate_server_key=validate_server_key,
+        connect_retry=connect_retry,
+        connect_retry_wait=connect_retry_wait,
+    )
     return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
 
 
@@ -1401,11 +1451,10 @@ async def start_kx_n_server(
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
-        kx_completed = loop.create_future()
         # the machine will close the kx_completed future when the key exchange is done
-        machine = KX_N_ServerStateMachine(server_pair, kx_completed, psk=psk)
+        machine = KX_N_ServerStateMachine(server_pair, loop, psk=psk)
         # kxprotocol will wait for the kx_completed future before triggering the handler
-        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit)
 
     return await _loop_create_server(factory, host, port)
 
@@ -1422,9 +1471,8 @@ async def start_kx_kk_server(
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
-        kx_completed = loop.create_future()
-        machine = KX_KK_ServerStateMachine(server_pair, client_public_key, kx_completed)
-        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit)
+        machine = KX_KK_ServerStateMachine(server_pair, client_public_key, loop)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit)
 
     return await _loop_create_server(factory, host, port)
 
@@ -1442,8 +1490,7 @@ async def start_kx_xx_server(
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
-        kx_completed = loop.create_future()
-        machine = KX_XX_ServerStateMachine(server_pair, kx_completed, psk=psk)
-        return KXProtocol(machine, kx_completed, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key)
+        machine = KX_XX_ServerStateMachine(server_pair, loop, psk=psk)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key)
 
     return await _loop_create_server(factory, host, port)
