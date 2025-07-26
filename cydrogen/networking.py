@@ -1083,13 +1083,14 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.get_extra_info(name, default)
 
 
-async def _connect(host: str, port: int, protocol: KXProtocol, retry: int, retry_wait: int) -> None:
+async def _connect(host: str, port: int, protocol_factory: Callable[[], KXProtocol], retry: int, retry_wait: int) -> KXProtocol:
     loop = asyncio.get_running_loop()
     while True:
         try:
-            logger.info("Connecting to %s:%d...", host, port)
-            await loop.create_connection(lambda: protocol, host, port)
-            return
+            logger.debug("Connecting to %s:%d...", host, port)
+            _, protocol = await loop.create_connection(protocol_factory, host, port)
+            logger.debug("Connected to %s:%d", host, port)
+            return protocol
         except ConnectionRefusedError:
             if retry == 0:
                 raise
@@ -1103,15 +1104,18 @@ async def _connect(host: str, port: int, protocol: KXProtocol, retry: int, retry
 async def _open_connection(
     host: str,
     port: int,
-    machine: BaseMachine,
+    machine_factory: Callable[[], BaseMachine],
     limit: int,
     validate_server_key: ValidatePeerKeyFunc | None,
     retry: int,
     retry_wait: int,
     loop: asyncio.AbstractEventLoop,
 ) -> StreamReaderWriter:
-    protocol = KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
-    await _connect(host, port, protocol, retry, retry_wait)
+    def protocol_factory() -> KXProtocol:
+        machine = machine_factory()
+        return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
+
+    protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
     await protocol.wait_for_key_exchange()
     await protocol.wait_for_validation()
     return StreamReaderWriter(protocol)
@@ -1128,8 +1132,11 @@ async def open_kx_n_connection(
     connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    machine = KX_N_ClientStateMachine(server_public_key, loop, psk=psk)
-    return await _open_connection(host, port, machine, limit, None, connect_retry, connect_retry_wait, loop)
+
+    def machine_factory() -> BaseMachine:
+        return KX_N_ClientStateMachine(server_public_key, loop, psk=psk)
+
+    return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_kk_connection(
@@ -1143,8 +1150,11 @@ async def open_kx_kk_connection(
     connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    machine = KX_KK_ClientStateMachine(client_pair, server_public_key, loop)
-    return await _open_connection(host, port, machine, limit, None, connect_retry, connect_retry_wait, loop)
+
+    def machine_factory() -> BaseMachine:
+        return KX_KK_ClientStateMachine(client_pair, server_public_key, loop)
+
+    return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_xx_connection(
@@ -1159,8 +1169,11 @@ async def open_kx_xx_connection(
     connect_retry_wait: int = 30,
 ) -> StreamReaderWriter:
     loop = asyncio.get_running_loop()
-    machine = KX_XX_ClientStateMachine(client_pair, loop, psk=psk)
-    return await _open_connection(host, port, machine, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
+
+    def machine_factory() -> BaseMachine:
+        return KX_XX_ClientStateMachine(client_pair, loop, psk=psk)
+
+    return await _open_connection(host, port, machine_factory, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
 
 
 class AsyncRequestResponseClientClosedError(RuntimeError):
