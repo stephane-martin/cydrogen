@@ -1146,13 +1146,17 @@ async def open_kx_xx_connection(
     return await _open_connection(host, port, machine, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
 
 
-class AsyncRequestResponseClient:
-    def __init__(self, rw: StreamReaderWriter, *, request_timeout_secs: int | None = 30) -> None:
-        self._rw: StreamReaderWriter = rw
+class BaseAsyncRequestResponseClient:
+    def __init__(self, request_timeout_secs: int | None = 30) -> None:
         self._counter = Counter()
         self._pending_requests: dict[int, asyncio.Future[bytes]] = {}
-        self._request_timeout_secs = request_timeout_secs
-        self._read_task: asyncio.Task = asyncio.create_task(self._read_responses())
+        self._request_timeout_secs: int | None = request_timeout_secs
+
+        self._rw: StreamReaderWriter
+        self._read_task: asyncio.Task
+
+    async def connect(self) -> None:
+        self._read_task = asyncio.create_task(self._read_responses())
 
     def close(self, ex: BaseException | None = None) -> None:
         self._rw.close()
@@ -1174,6 +1178,7 @@ class AsyncRequestResponseClient:
             logger.info("Read task stopped with error: %s", ex)
 
     async def __aenter__(self) -> Self:
+        await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:  # noqa: ANN001
@@ -1243,63 +1248,112 @@ class AsyncRequestResponseClient:
         logger.warning("Unexpected response received. nbytes = %s, msg_id = %s", len(msg), msg_id)
 
 
-async def make_kx_n_client(
-    host: str,
-    port: int,
-    server_public_key: KxPublicKey,
-    *,
-    psk: Psk | None = None,
-    limit: int = _DEFAULT_LIMIT,
-    request_timeout_secs: int | None = 30,
-    connect_retry: int = 3,
-    connect_retry_wait: int = 30,
-) -> AsyncRequestResponseClient:
-    rw = await open_kx_n_connection(
-        host, port, server_public_key, psk=psk, limit=limit, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait
-    )
-    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
+class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        server_public_key: KxPublicKey,
+        *,
+        psk: Psk | None = None,
+        limit: int = _DEFAULT_LIMIT,
+        request_timeout_secs: int | None = 30,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(request_timeout_secs=request_timeout_secs)
+        self._host = host
+        self._port = port
+        self._server_public_key = server_public_key
+        self._psk = psk
+        self._limit = limit
+        self._connect_retry = connect_retry
+        self._connect_retry_wait = connect_retry_wait
+
+    async def connect(self) -> None:
+        self._rw = await open_kx_n_connection(
+            self._host,
+            self._port,
+            self._server_public_key,
+            psk=self._psk,
+            limit=self._limit,
+            connect_retry=self._connect_retry,
+            connect_retry_wait=self._connect_retry_wait,
+        )
+        await super().connect()
 
 
-async def make_kx_kk_client(
-    host: str,
-    port: int,
-    client_pair: KxPair,
-    server_public_key: KxPublicKey,
-    *,
-    limit: int = _DEFAULT_LIMIT,
-    request_timeout_secs: int | None = 30,
-    connect_retry: int = 3,
-    connect_retry_wait: int = 30,
-) -> AsyncRequestResponseClient:
-    rw = await open_kx_kk_connection(
-        host, port, client_pair, server_public_key, limit=limit, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait
-    )
-    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
+class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        client_pair: KxPair,
+        server_public_key: KxPublicKey,
+        *,
+        limit: int = _DEFAULT_LIMIT,
+        request_timeout_secs: int | None = 30,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(request_timeout_secs=request_timeout_secs)
+        self._host = host
+        self._port = port
+        self._client_pair = client_pair
+        self._server_public_key = server_public_key
+        self._limit = limit
+        self._connect_retry = connect_retry
+        self._connect_retry_wait = connect_retry_wait
+
+    async def connect(self) -> None:
+        self._rw = await open_kx_kk_connection(
+            self._host,
+            self._port,
+            self._client_pair,
+            self._server_public_key,
+            limit=self._limit,
+            connect_retry=self._connect_retry,
+            connect_retry_wait=self._connect_retry_wait,
+        )
+        await super().connect()
 
 
-async def make_kx_xx_client(
-    host: str,
-    port: int,
-    client_pair: KxPair,
-    *,
-    psk: Psk | None = None,
-    limit: int = _DEFAULT_LIMIT,
-    validate_server_key: ValidatePeerKeyFunc | None = None,
-    request_timeout_secs: int | None = 30,
-    connect_retry: int = 3,
-    connect_retry_wait: int = 30,
-) -> AsyncRequestResponseClient:
-    rw = await open_kx_xx_connection(
-        host,
-        port,
-        client_pair,
-        psk=psk,
-        limit=limit,
-        validate_server_key=validate_server_key,
-        connect_retry=connect_retry,
-        connect_retry_wait=connect_retry_wait,
-    )
-    return AsyncRequestResponseClient(rw, request_timeout_secs=request_timeout_secs)
+class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        client_pair: KxPair,
+        *,
+        psk: Psk | None = None,
+        limit: int = _DEFAULT_LIMIT,
+        validate_server_key: ValidatePeerKeyFunc | None = None,
+        request_timeout_secs: int | None = 30,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+    ) -> None:
+        super().__init__(request_timeout_secs=request_timeout_secs)
+        self._host = host
+        self._port = port
+        self._client_pair = client_pair
+        self._psk = psk
+        self._limit = limit
+        self._validate_server_key = validate_server_key
+        self._connect_retry = connect_retry
+        self._connect_retry_wait = connect_retry_wait
+
+    async def connect(self) -> None:
+        self._rw = await open_kx_xx_connection(
+            self._host,
+            self._port,
+            self._client_pair,
+            psk=self._psk,
+            limit=self._limit,
+            validate_server_key=self._validate_server_key,
+            connect_retry=self._connect_retry,
+            connect_retry_wait=self._connect_retry_wait,
+        )
+        await super().connect()
 
 
 class ServerPendingProcessingTasks:
