@@ -2,9 +2,10 @@ import asyncio
 import time
 
 import pytest
-from cydrogen import KxPair, Psk
+from cydrogen import KeyExchangeException, KxPair, KxPublicKey, Psk
 from cydrogen._networking import MsgQueue
 from cydrogen.networking import (
+    AsyncRequestResponseClientClosedError,
     KX_KK_AsyncRequestResponseClient,
     KX_N_AsyncRequestResponseClient,
     KX_XX_AsyncRequestResponseClient,
@@ -35,6 +36,11 @@ MESSAGES = [
     b"nine",
     b"ten",
 ]
+
+
+class H(RequestResponseHandler):
+    async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+        return msg.upper()
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -82,10 +88,6 @@ async def test_msg_queue_waiting() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_async_client_async_server_kx_xx() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
 
@@ -101,10 +103,6 @@ async def test_async_client_async_server_kx_xx() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_async_client_async_server_kx_kk() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
     await server.start_serving()
 
@@ -120,10 +118,6 @@ async def test_async_client_async_server_kx_kk() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_two_async_clients_async_server_kx_n() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
 
@@ -156,10 +150,6 @@ async def test_client_without_server() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_delayed_server() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     async def delayed_server() -> asyncio.Server:
         await asyncio.sleep(2)
         server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
@@ -181,10 +171,6 @@ async def test_client_delayed_server() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_too_late_server() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     async def delayed_server() -> asyncio.Server:
         await asyncio.sleep(4)
         server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
@@ -205,16 +191,44 @@ async def test_client_too_late_server() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_server_with_different_psk() -> None:
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
-
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
         with pytest.raises(EOFError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=WRONG_PSK):
                 pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
+    raise RuntimeError("nope")
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_fail_validate_server_pubkey() -> None:
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR)
+    await server.start_serving()
+
+    try:
+        with pytest.raises(KeyExchangeException):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, validate_server_key=failing_validation):
+                pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_fail_validate_client_pubkey() -> None:
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, validate_client_key=failing_validation)
+    await server.start_serving()
+
+    try:
+        with pytest.raises(AsyncRequestResponseClientClosedError):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR) as client:
+                await client.request(b"test")
     finally:
         server.close()
         await server.wait_closed()
