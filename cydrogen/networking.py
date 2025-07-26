@@ -1087,14 +1087,16 @@ async def _connect(host: str, port: int, protocol: KXProtocol, retry: int, retry
     loop = asyncio.get_running_loop()
     while True:
         try:
+            logger.info("Connecting to %s:%d...", host, port)
             await loop.create_connection(lambda: protocol, host, port)
             return
         except ConnectionRefusedError:
             if retry == 0:
                 raise
         retry -= 1
-        logger.warning("Connection to %s:%d failed, retrying...", host, port)
+        logger.warning("Connection to %s:%d failed", host, port)
         if retry_wait > 0:
+            logger.info("Retrying connection in %d seconds...", retry_wait)
             await asyncio.sleep(retry_wait)
 
 
