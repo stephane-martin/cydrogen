@@ -172,7 +172,7 @@ async def test_client_delayed_server() -> None:
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_too_late_server() -> None:
     async def delayed_server() -> asyncio.Server:
-        await asyncio.sleep(4)
+        await asyncio.sleep(6)
         server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
         await server.start_serving()
         return server
