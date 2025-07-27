@@ -215,9 +215,11 @@ cdef class SecretBox:
         self.key = make_secretbox_key(key)
         self.ctx = make_context(ctx)
 
-    cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, out=None):
+    cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, out=None, max_msg_size=None):
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
+        if max_msg_size is not None and len(plaintext) > max_msg_size:
+            raise ValueError("Plaintext size exceeds maximum allowed size")
         if out is not None:
             make_safe_writer(out)  # ensure out is a file-like object
         cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
