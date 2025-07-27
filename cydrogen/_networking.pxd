@@ -38,6 +38,7 @@ cdef class ReadBuffers:
     cdef object read_buffers_freelist
     cdef object consume_bytearray_freelist
     cdef uint16_t consume_bytearray_size
+    cdef size_t received_msg_max_size
 
     cpdef get_buffer(self)
     cpdef buffer_updated(self, uint32_t nbytes)

@@ -5,6 +5,7 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
+from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._secretbox cimport parse_encrypted_message_header, _ENC_MSG_HEADER_SIZE
 
 import asyncio
@@ -117,10 +118,11 @@ cdef class MsgQueue:
 
 
 cdef class ReadBuffers:
-    def __init__(self, uint16_t nb_max_read_buffers = 16, uint32_t read_buffer_size = 65536):
+    def __init__(self, uint16_t nb_max_read_buffers = 16, uint32_t read_buffer_size = 65536, size_t received_msg_max_size = 1048576):
         self.read_buffers = deque()
         self.nb_max_read_buffers = nb_max_read_buffers
         self.read_buffer_size = read_buffer_size
+        self.received_msg_max_size = received_msg_max_size
         self.current_read_buffer = None
         self.write_pos = 0
         self.read_pos = 0
@@ -164,10 +166,13 @@ cdef class ReadBuffers:
         if header is None:
             # not enough data to read the header
             return None
-        cdef uint64_t msg_size = 0
-        msg_size, _ = parse_encrypted_message_header(header)
+        ciphertext_size, _ = parse_encrypted_message_header(header)
+        plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
+        if plaintext_size > self.received_msg_max_size:
+            # the message is too large, we cannot handle it
+            raise ValueError("Received message size exceeds maximum allowed size")
         # try to consume for real
-        b = self.consume_bytes(_ENC_MSG_HEADER_SIZE + msg_size)
+        b = self.consume_bytes(_ENC_MSG_HEADER_SIZE + ciphertext_size)
         if b is None:
             # not enough data to read the whole message
             return None

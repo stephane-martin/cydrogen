@@ -308,7 +308,7 @@ class SecretBox:
         """
         ...
 
-    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = ..., out: Writer | None = None) -> bytearray:
+    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = 0, out: Writer | None = None, max_msg_size: int | None = None) -> bytearray:
         """
         Encrypt the plaintext using the secret box key, context and message ID.
 
@@ -318,18 +318,19 @@ class SecretBox:
             plaintext: The plaintext to encrypt.
             msg_id: Optional message ID to associate with the encrypted message. Default is 0.
             out: Optional file-like object to write the framed encrypted ciphertext to.
+            max_msg_size: Optional maximum size of the plaintext. If provided, raises ValueError if the plaintext size exceeds this limit.
 
         Returns:
             The encrypted message as bytes (not framed).
 
         Raises:
-            ValueError: If the plaintext is None.
+            ValueError: If the plaintext is None, or if the plaintext is too long.
             TypeError: if the out object does not support writing.
             EncryptException: If encryption fails.
         """
         ...
 
-    def decrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = ..., out: Writer | None = None) -> bytes:
+    def decrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = 0, out: Writer | None = None) -> bytes:
         """
         Decrypt the ciphertext using the secret box key, an optional context and message ID.
 

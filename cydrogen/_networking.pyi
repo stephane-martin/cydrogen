@@ -102,13 +102,14 @@ class ReadBuffers:
     - ReadBuffers maintains a pool of bytearrays, each of size `8192` bytes, to avoid to allocate new bytearrays when data is consumed.
     - After consuming data (typically by decrypting it), the user may release the memoryview back to the ReadBuffers instance.
     """
-    def __init__(self, nb_max_read_buffers: int = 16, read_buffer_size: int = 65536) -> None:
+    def __init__(self, nb_max_read_buffers: int = 16, read_buffer_size: int = 65536, received_msg_max_size: int = 1048576) -> None:
         """
         Initialize ReadBuffers.
 
         Args:
             nb_max_read_buffers: Maximum number of read buffers that are kept in the pool.
             read_buffer_size: Size of each read buffer.
+            received_msg_max_size: Maximum size of a message that can be received.
         """
         ...
 
