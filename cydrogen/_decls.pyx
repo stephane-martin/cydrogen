@@ -7,7 +7,7 @@ from cpython.memoryview cimport PyMemoryView_FromMemory
 from ._utils cimport SafeMemory
 
 
-cdef const size_t nogil_threshold = 1024*1024   # 1 MB
+cdef const size_t nogil_threshold = 64 * 1024  # 64 KiB
 NOGIL_THRESHOLD_BYTES = nogil_threshold
 
 
