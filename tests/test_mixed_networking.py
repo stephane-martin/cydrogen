@@ -3,8 +3,29 @@ import queue
 
 import pytest
 from cydrogen import KxPair, Psk
-from cydrogen.networking import KX_N_AsyncRequestResponseClient, RequestResponseHandler, start_kx_n_server
-from cydrogen.sync_networking import KX_N_TCPClient, KX_N_TCPHandler, KX_N_TCPServer
+from cydrogen.networking import (
+    BaseAsyncRequestResponseClient,
+    KX_KK_AsyncRequestResponseClient,
+    KX_N_AsyncRequestResponseClient,
+    KX_XX_AsyncRequestResponseClient,
+    RequestResponseHandler,
+    start_kx_kk_server,
+    start_kx_n_server,
+    start_kx_xx_server,
+)
+from cydrogen.sync_networking import (
+    BaseTCPClient,
+    BaseTCPServer,
+    KX_KK_TCPClient,
+    KX_KK_TCPHandler,
+    KX_KK_TCPServer,
+    KX_N_TCPClient,
+    KX_N_TCPHandler,
+    KX_N_TCPServer,
+    KX_XX_TCPClient,
+    KX_XX_TCPHandler,
+    KX_XX_TCPServer,
+)
 
 CLIENT_PAIR = KxPair("PRd15/pwWvuRunBq5pv8jP1Y10gekV7ld8oH0vcYVC/GWd8Wi87qwB9CV76awCqiicaZAGVhEQvQSgZbPK9g6w==0")
 SERVER_PAIR = KxPair("I4k9+3iOp9BLi5n8HIrYDvoMiJ3MZzkQbE3UU0XWmQIN7g2CCry+J5HqoNe8AzDWwB78nlsRkIwMm5X0VhSZRA==")
@@ -28,23 +49,24 @@ MESSAGES = [
 ]
 
 
-@pytest.mark.asyncio(loop_scope="module")
-async def test_sync_client_async_server_kx_n() -> None:
-    """
-    Test that a synchronous client KX_N client can communicate with an asynchronous KX_N server.
-    """
+class Async_H(RequestResponseHandler):
+    async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+        return msg.upper()
 
-    class H(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return msg.upper()
 
-    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+class Sync_H_Mixin:
+    def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
+        self.write(msg.upper())  # type: ignore
+        return True
+
+
+async def sync_client_async_server(client: BaseTCPClient, server: asyncio.Server) -> None:
     await server.start_serving()
 
     q: queue.Queue = queue.Queue()
 
     def sync_client() -> None:
-        with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client:
+        with client:
             for idx, msg in enumerate(MESSAGES):
                 client.write(msg, msg_id=idx + 1)
                 try:
@@ -79,23 +101,84 @@ async def test_sync_client_async_server_kx_n() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_async_client_sync_server_kx_n() -> None:
+async def test_sync_client_async_server_kx_n() -> None:
     """
-    Test that an asynchronous client KX_N client can communicate with an synchronous KX_N server.
+    Test that a synchronous client KX_N client can communicate with an asynchronous KX_N server.
     """
+    client = KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK)
+    server = await start_kx_n_server(Async_H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await sync_client_async_server(client, server)
 
-    class H(KX_N_TCPHandler):
-        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
-            self.write(msg.upper())
-            return True
 
-    server: KX_N_TCPServer = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_sync_client_async_server_kx_kk() -> None:
+    """
+    Test that a synchronous client KX_KK client can communicate with an asynchronous KX_KK server.
+    """
+    client = KX_KK_TCPClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY)
+    server = await start_kx_kk_server(Async_H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
+    await sync_client_async_server(client, server)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_sync_client_async_server_kx_xx() -> None:
+    """
+    Test that a synchronous client KX_XX client can communicate with an asynchronous KX_XX server.
+    """
+    client = KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK)
+    server = await start_kx_xx_server(Async_H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await sync_client_async_server(client, server)
+
+
+async def async_client_sync_server(client: BaseAsyncRequestResponseClient, server: BaseTCPServer) -> None:
     server.run(background=True)  # run the server in a background thread to avoid to block the event loop
 
     try:
-        async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK, connect_retry=10, connect_retry_wait=1) as client:
+        async with client:
             for msg in MESSAGES:
                 resp: bytes = await client.request(msg)
                 assert resp == msg.upper()
     finally:
         server.shutdown()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_async_client_sync_server_kx_n() -> None:
+    """
+    Test that an asynchronous client KX_N client can communicate with an synchronous KX_N server.
+    """
+
+    class Sync_H(Sync_H_Mixin, KX_N_TCPHandler):
+        pass
+
+    server = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, Sync_H, psk=PSK)
+    client = KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    await async_client_sync_server(client, server)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_async_client_sync_server_kx_kk() -> None:
+    """
+    Test that an asynchronous client KX_KK client can communicate with an synchronous KX_KK server.
+    """
+
+    class Sync_H(Sync_H_Mixin, KX_KK_TCPHandler):
+        pass
+
+    server = KX_KK_TCPServer(HOST, PORT, SERVER_PAIR, Sync_H, CLIENT_PUBKEY)
+    client = KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY, connect_retry=10, connect_retry_wait=1)
+    await async_client_sync_server(client, server)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_async_client_sync_server_kx_xx() -> None:
+    """
+    Test that an asynchronous client KX_XX client can communicate with an synchronous KX_XX server.
+    """
+
+    class Sync_H(Sync_H_Mixin, KX_XX_TCPHandler):
+        pass
+
+    server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, Sync_H, psk=PSK)
+    client = KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    await async_client_sync_server(client, server)
