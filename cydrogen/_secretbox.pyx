@@ -8,7 +8,7 @@ from libc.string cimport memcmp
 
 from ._basekey cimport BaseKey
 from ._context cimport make_context
-from ._exceptions cimport DecryptException, EncryptException
+from ._exceptions cimport DecryptException, EncryptException, MessageTooBigException
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
@@ -219,7 +219,7 @@ cdef class SecretBox:
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
         if max_msg_size is not None and len(plaintext) > max_msg_size:
-            raise ValueError("Plaintext size exceeds maximum allowed size")
+            raise MessageTooBigException
         if out is not None:
             make_safe_writer(out)  # ensure out is a file-like object
         cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
@@ -236,7 +236,7 @@ cdef class SecretBox:
             w.write(ciphertext)
         return ciphertext
 
-    cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None):
+    cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None, max_msg_size=None):
         if ciphertext is None:
             raise ValueError("Ciphertext cannot be None")
 
@@ -249,7 +249,9 @@ cdef class SecretBox:
 
         if len(ciphertext) < hydro_secretbox_HEADERBYTES:
             raise ValueError("Ciphertext is too short")
-        cdef size_t plaintext_len = len(ciphertext) - hydro_secretbox_HEADERBYTES
+        plaintext_len = len(ciphertext) - hydro_secretbox_HEADERBYTES
+        if max_msg_size is not None and plaintext_len > max_msg_size:
+            raise MessageTooBigException
         cdef bytearray plaintext = bytearray(plaintext_len)
         try:
             secretbox_decrypt(ciphertext, msg_id, self.ctx, self.key, plaintext)

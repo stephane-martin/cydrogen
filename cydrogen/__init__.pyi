@@ -28,6 +28,7 @@ from ._exceptions import (
     DeriveException,
     EncryptException,
     KeyExchangeException,
+    MessageTooBigException,
     SignException,
     VerifyException,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "KxXxClientState",
     "KxXxServerState",
     "MasterKey",
+    "MessageTooBigException",
     "MsgQueue",
     "Psk",
     "ReadBuffers",

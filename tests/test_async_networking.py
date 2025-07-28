@@ -2,7 +2,7 @@ import asyncio
 import time
 
 import pytest
-from cydrogen import KeyExchangeException, KxPair, KxPublicKey, Psk
+from cydrogen import KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
 from cydrogen._networking import MsgQueue
 from cydrogen.networking import (
     AsyncRequestResponseClientClosedError,
@@ -229,6 +229,74 @@ async def test_fail_validate_client_pubkey() -> None:
         with pytest.raises(AsyncRequestResponseClientClosedError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR) as client:
                 await client.request(b"test")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_sends_too_big_message() -> None:
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+
+    try:
+        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, sent_msg_max_size=10000) as client:
+            await client.request(b"x" * 10000)  # This should succeed
+            with pytest.raises(MessageTooBigException):  # this should fail client side
+                await client.request(b"x" * 10001)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_server_receives_too_big_message() -> None:
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, received_msg_max_size=10000)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
+                await client.request(b"x" * 10001)  # This should fail server side
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_server_sends_too_big_message() -> None:
+    big = b"x" * 10001  # This is too big
+
+    class HSendTooBig(RequestResponseHandler):
+        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+            return big
+
+    # constrain the server to send messages of max size 10000
+    server: asyncio.Server = await start_kx_xx_server(HSendTooBig, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
+                await client.request(b"test")  # This should fail server side
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_receives_too_big_message() -> None:
+    big = b"x" * 10001  # This is too big
+
+    class HSendTooBig(RequestResponseHandler):
+        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+            return big
+
+    server: asyncio.Server = await start_kx_xx_server(HSendTooBig, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            # constrain the client to refuse to receive messages bigger than 10000 bytes
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, received_msg_max_size=10000) as client:
+                await client.request(b"test")  # This should fail server side
     finally:
         server.close()
         await server.wait_closed()

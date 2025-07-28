@@ -38,3 +38,8 @@ class KeyExchangeException(CyException):
     """
     Exception raised for errors during key exchange operations.
     """
+
+class MessageTooBigException(CyException, ValueError):
+    """
+    Raised when the message is too big to be processed.
+    """

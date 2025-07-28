@@ -26,3 +26,7 @@ cdef class VerifyException(CyException):
 
 cdef class KeyExchangeException(CyException):
     pass
+
+
+cdef class MessageTooBigException(CyException):
+    pass

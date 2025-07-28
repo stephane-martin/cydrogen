@@ -155,6 +155,9 @@ class ReadBuffers:
 
         Returns:
             A memoryview of the consumed message, or None if no complete message is available.
+
+        Raises:
+            MessageTooBigException: If the consumed message would be larger than `received_msg_max_size`.
         """
         ...
 

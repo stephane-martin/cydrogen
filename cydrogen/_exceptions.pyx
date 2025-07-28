@@ -26,3 +26,12 @@ cdef class VerifyException(CyException):
 
 cdef class KeyExchangeException(CyException):
     pass
+
+
+cdef class MessageTooBigException(CyException):
+    """
+    Raised when the message is too big to be processed.
+    """
+    def __init__(self, message: str = "Message is too big to be processed."):
+        super().__init__(message)
+        self.message = message
