@@ -7,6 +7,7 @@ from libc.stdint cimport uint64_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._secretbox cimport parse_encrypted_message_header, _ENC_MSG_HEADER_SIZE
+from ._exceptions cimport MessageTooBigException
 
 import asyncio
 import logging
@@ -170,7 +171,9 @@ cdef class ReadBuffers:
         plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
         if plaintext_size > self.received_msg_max_size:
             # the message is too large, we cannot handle it
-            raise ValueError("Received message size exceeds maximum allowed size")
+            # it's more efficient to check the message size here rather than after consuming the bytes or decrypting the message
+            # we avoid unnecessary memory allocations and decryption attempts
+            raise MessageTooBigException
         # try to consume for real
         b = self.consume_bytes(_ENC_MSG_HEADER_SIZE + ciphertext_size)
         if b is None:

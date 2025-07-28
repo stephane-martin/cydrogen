@@ -318,19 +318,22 @@ class SecretBox:
             plaintext: The plaintext to encrypt.
             msg_id: Optional message ID to associate with the encrypted message. Default is 0.
             out: Optional file-like object to write the framed encrypted ciphertext to.
-            max_msg_size: Optional maximum size of the plaintext. If provided, raises ValueError if the plaintext size exceeds this limit.
+            max_msg_size: Optional maximum size of the plaintext. If provided, raises `cydrogen.MessageTooBigException` if the plaintext size exceeds this limit.
 
         Returns:
             The encrypted message as bytes (not framed).
 
         Raises:
-            ValueError: If the plaintext is None, or if the plaintext is too long.
+            ValueError: If the plaintext is None.
+            MessageTooBigException: If the plaintext is too long.
             TypeError: if the out object does not support writing.
             EncryptException: If encryption fails.
         """
         ...
 
-    def decrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = 0, out: Writer | None = None) -> bytes:
+    def decrypt(
+        self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = 0, out: Writer | None = None, max_msg_size: int | None = None
+    ) -> bytes:
         """
         Decrypt the ciphertext using the secret box key, an optional context and message ID.
 
@@ -342,12 +345,14 @@ class SecretBox:
             ciphertext: The ciphertext to decrypt. Can be an EncryptedMessage or a bytes-like object.
             msg_id: Optional message ID to verify against the ciphertext. Default is 0.
             out: Optional file-like object to write the decrypted plaintext to.
+            max_msg_size: Optional maximum size of the plaintext. If provided, raises `cydrogen.MessageTooBigException` if the plaintext size exceeds this limit.
 
         Returns:
             The decrypted plaintext as bytes.
 
         Raises:
             ValueError: If the ciphertext is None or if the ciphertext is too short.
+            MessageTooBigException: If the decrypted plaintext is too long.
             TypeError: If the out object does not support writing.
             DecryptException: If decryption fails.
         """

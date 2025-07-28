@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Self
 
 from ._decls import NOGIL_THRESHOLD_BYTES
-from ._exceptions import DecryptException, KeyExchangeException
+from ._exceptions import DecryptException, KeyExchangeException, MessageTooBigException
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
@@ -34,6 +34,7 @@ logger = logging.getLogger("cydrogen")
 OK_MESSAGE: bytes = b"OK"
 CANCEL_MESSAGE_ID: int = 0
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB
+eof_exception = EOFError("Connection closed by peer")
 
 
 class MState(StrEnum):
@@ -171,11 +172,10 @@ class BaseMachine:
     # WRITER_CLOSED             => receive_data     => WRITER_CLOSED
 
     _valid_states: frozenset[MState] = frozenset()
-    eof_exception = EOFError("Connection closed by peer")
 
     def __init__(self, loop: asyncio.AbstractEventLoop, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20) -> None:
-        self._sent_msg_max_size: int = sent_msg_max_size
-        self._received_msg_max_size: int = received_msg_max_size
+        self.sent_msg_max_size: int = sent_msg_max_size
+        self.received_msg_max_size: int = received_msg_max_size
 
         self._transitions = Transitions()
 
@@ -298,7 +298,7 @@ class BaseMachine:
     def _connection_lost(self, exc: Exception | None) -> None:
         if self._exception is None:
             # make sure a new reader would get rejected
-            self._exception = self.eof_exception if exc is None else exc
+            self._exception = eof_exception if exc is None else exc
             self._received_encrypted_msgs.close(self._exception)
         if self._state.kx_is_pending():
             self._fail_kx(self._exception)
@@ -312,7 +312,7 @@ class BaseMachine:
     def _reader_eof(self) -> None:
         if self._exception is None:
             # make sure a new reader would get rejected
-            self._exception = self.eof_exception
+            self._exception = eof_exception
             self._received_encrypted_msgs.close(self._exception)
         if self._state.kx_is_pending():
             self._fail_kx(self._exception)
@@ -325,7 +325,7 @@ class BaseMachine:
 
     def _writer_eof(self) -> None:
         if self._state.kx_is_pending():
-            self._fail_kx(self.eof_exception)
+            self._fail_kx(eof_exception)
 
     def _fail_kx(self, exc: Exception) -> None:
         if not self._kx_completed.done():
@@ -342,7 +342,7 @@ class BaseMachine:
         # and is a constant for the lifetime of the machine.
         # So for practical purposes, it is thread-safe.
         # It makes it possible to offload the encryption to a thread if needed.
-        return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self._sent_msg_max_size)
+        return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
 
     def write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
         event = TransitionEvent.WRITE_EMESSAGE
@@ -396,7 +396,7 @@ class BaseMachine:
 
     def _receive_data_connected(self) -> bool:
         # we don't call _get_small_message here, because the message may be big and decrypting it may block the loop
-        # may raise ValueError if the received message is too big
+        # may raise MessageTooBigException if the received message is too big
         encrypted_data = self._read_buffers.consume_message()
         if encrypted_data is None:
             # not enough data to read more messages, we're finished for now
@@ -863,8 +863,6 @@ async def dummy_validate_peer_key(key: KxPublicKey) -> None:
 
 
 class KXProtocol(asyncio.BufferedProtocol):
-    eof_exception = EOFError("Connection closed by peer")
-
     def __init__(
         self,
         machine: BaseMachine,
@@ -931,15 +929,18 @@ class KXProtocol(asyncio.BufferedProtocol):
             msg_id: The message ID to use for the message.
 
         Raises:
-            ValueError: If msg_id is CANCEL_MESSAGE_ID, or if the message is too big.
+            MessageTooBigException: If the message is too big to be sent.
+            ValueError: If msg_id is CANCEL_MESSAGE_ID.
         """
         if msg_id == CANCEL_MESSAGE_ID:
             raise ValueError("Cannot write a message with msg_id CANCEL_MESSAGE_ID")
         length = len(memoryview(msg))
         if length == 0:
             return
+        if length > self._machine.sent_msg_max_size:
+            raise MessageTooBigException
         # execute encryption in a separate thread to avoid blocking the event loop
-        # may raise ValueError if the message is too big
+        # may raise MessageTooBigException if the message is too big
         ciphertext = await asyncio.to_thread(self._machine.encrypt_message, msg, msg_id)
         self._machine.write_emessage(ciphertext, msg_id)
         data = self._machine.data_to_send()
@@ -1054,7 +1055,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             logger.exception("decryption or key exchange failed: abort connection with %s", self.peername)
             self._transport.abort()
             return
-        except ValueError:
+        except MessageTooBigException:
             # when we have received a message that is too big
             logger.error("Received message is too big, abort connection with %s", self.peername)  # noqa: TRY400
             self._transport.abort()
@@ -1091,6 +1092,8 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def connection_lost(self, exc: Exception | None) -> None:
         logger.info("connection lost for %s, exc: %s", self.peername, exc)
+        if isinstance(exc, ConnectionError):
+            exc = eof_exception
         self._machine.connection_lost(exc)
 
         # make wait_closed() return
@@ -1119,11 +1122,11 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     async def drain(self) -> None:
         if self._connection_lost:
-            raise self.eof_exception
+            raise eof_exception
         if self._transport.is_closing():
             await asyncio.sleep(0)
         if self._connection_lost:
-            raise self.eof_exception
+            raise eof_exception
         if not self._writing_paused:
             return
         waiter = self._loop.create_future()
@@ -1393,8 +1396,8 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self._limit = limit
         self._connect_retry = connect_retry
         self._connect_retry_wait = connect_retry_wait
-        self._sent_msg_max_size = sent_msg_max_size
-        self._received_msg_max_size = received_msg_max_size
+        self.sent_msg_max_size = sent_msg_max_size
+        self.received_msg_max_size = received_msg_max_size
 
     async def connect(self) -> None:
         self._rw = await open_kx_n_connection(
@@ -1405,8 +1408,8 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             limit=self._limit,
             connect_retry=self._connect_retry,
             connect_retry_wait=self._connect_retry_wait,
-            sent_msg_max_size=self._sent_msg_max_size,
-            received_msg_max_size=self._received_msg_max_size,
+            sent_msg_max_size=self.sent_msg_max_size,
+            received_msg_max_size=self.received_msg_max_size,
         )
         await super().connect()
 
@@ -1434,8 +1437,8 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self._limit = limit
         self._connect_retry = connect_retry
         self._connect_retry_wait = connect_retry_wait
-        self._sent_msg_max_size = sent_msg_max_size
-        self._received_msg_max_size = received_msg_max_size
+        self.sent_msg_max_size = sent_msg_max_size
+        self.received_msg_max_size = received_msg_max_size
 
     async def connect(self) -> None:
         self._rw = await open_kx_kk_connection(
@@ -1446,8 +1449,8 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             limit=self._limit,
             connect_retry=self._connect_retry,
             connect_retry_wait=self._connect_retry_wait,
-            sent_msg_max_size=self._sent_msg_max_size,
-            received_msg_max_size=self._received_msg_max_size,
+            sent_msg_max_size=self.sent_msg_max_size,
+            received_msg_max_size=self.received_msg_max_size,
         )
         await super().connect()
 
@@ -1477,8 +1480,8 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self._validate_server_key = validate_server_key
         self._connect_retry = connect_retry
         self._connect_retry_wait = connect_retry_wait
-        self._sent_msg_max_size = sent_msg_max_size
-        self._received_msg_max_size = received_msg_max_size
+        self.sent_msg_max_size = sent_msg_max_size
+        self.received_msg_max_size = received_msg_max_size
 
     async def connect(self) -> None:
         self._rw = await open_kx_xx_connection(
@@ -1490,8 +1493,8 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             validate_server_key=self._validate_server_key,
             connect_retry=self._connect_retry,
             connect_retry_wait=self._connect_retry_wait,
-            sent_msg_max_size=self._sent_msg_max_size,
-            received_msg_max_size=self._received_msg_max_size,
+            sent_msg_max_size=self.sent_msg_max_size,
+            received_msg_max_size=self.received_msg_max_size,
         )
         await super().connect()
 
@@ -1545,6 +1548,10 @@ class BaseServerHandler(ABC):
             if not await self.handle_message(msg, msg_id):
                 self._stopping = True
                 self.rw.close()
+        except MessageTooBigException:
+            logger.error("Server response is too big (incoming msg_id: %d)", msg_id)  # noqa: TRY400
+            self._stopping = True
+            self.rw.close()
         except Exception:
             logger.exception("Error while handling message %s", msg_id)
 
