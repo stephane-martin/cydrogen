@@ -79,7 +79,7 @@ class BaseTCPHandler(socketserver.StreamRequestHandler, ABC):
 
         try:
             self.key_exchange()  # perform key exchange and establish session keys
-        except KeyExchangeException:
+        except Exception:
             logger.exception("Key exchange failed with %s", self.peer)
             return
 
@@ -408,7 +408,10 @@ class BaseTCPClient(ABC):
         logger.info("Connected to server at %s", self.server_address)
         self.rfile = self.socket.makefile("rb")
         self.wfile = self.socket.makefile("wb")
-        self.key_exchange()
+        try:
+            self.key_exchange()
+        except Exception as ex:
+            raise KeyExchangeException("Key exchange failed") from ex
 
     @abstractmethod
     def key_exchange(self) -> None:
