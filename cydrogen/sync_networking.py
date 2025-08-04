@@ -9,7 +9,7 @@ from collections.abc import Buffer, Callable, Iterator
 from contextlib import suppress
 from typing import Any, BinaryIO, Self
 
-from ._exceptions import DecryptException, KeyExchangeException
+from ._exceptions import ClientClosedError, DecryptException, KeyExchangeException
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
@@ -429,12 +429,12 @@ class BaseTCPClient(ABC):
             msg_id: The message ID to use for this message. Defaults to 1.
 
         Raises:
-            RuntimeError: If the client is not connected.
+            ClientClosedError: If the client is not connected.
             ValueError: If the message ID is not a positive integer.
             OSError: If there is an error writing to the server. The client will be closed in this case.
         """
         if not self.connected or self.wfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected")
+            raise ClientClosedError
         if not msg:
             logger.warning("Attempted to write an empty message, skipping")
             return
@@ -459,17 +459,17 @@ class BaseTCPClient(ABC):
             The message ID of the received message.
 
         Raises:
-            RuntimeError: If the client is not connected.
+            ClientClosedError: If the client is not connected.
             OSError: If there is an error reading from the server. The client will be closed.
             DecryptException: If decryption fails, indicating a possible key mismatch or tampered message. The client will be closed.
         """
         if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected")
+            raise ClientClosedError
         return self.doread(self.rfile, self.session_pair.rx)
 
     def doread(self, rfile: BinaryIO, rx: SecretBoxKey) -> tuple[bytes, int]:
         if not self.connected or self.closed:
-            raise RuntimeError("Client is not connected")
+            raise ClientClosedError
         try:
             with self.read_lock:
                 emsg: EncryptedMessage = EncryptedMessage.read_from(rfile)
@@ -488,7 +488,7 @@ class BaseTCPClient(ABC):
         Return an iterator that reads messages from the server.
         """
         if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise RuntimeError("Client is not connected")
+            raise ClientClosedError
         return _ClientIterator(self)
 
     def close(self) -> None:

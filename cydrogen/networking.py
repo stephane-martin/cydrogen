@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Self
 
 from ._decls import NOGIL_THRESHOLD_BYTES
-from ._exceptions import DecryptException, KeyExchangeException, MessageTooBigException
+from ._exceptions import ClientClosedError, DecryptException, KeyExchangeException, MessageTooBigException
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
@@ -1257,13 +1257,6 @@ async def open_kx_xx_connection(
     return await _open_connection(host, port, machine_factory, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
 
 
-class AsyncRequestResponseClientClosedError(RuntimeError):
-    """Raised when an attempt is made to send a request after the client has been closed."""
-
-    def __init__(self, message: str = "RequestResponseClient is closed") -> None:
-        super().__init__(message)
-
-
 class BaseAsyncRequestResponseClient:
     def __init__(self, request_timeout_secs: int | None = 30) -> None:
         self._counter = Counter()
@@ -1305,7 +1298,7 @@ class BaseAsyncRequestResponseClient:
 
     async def request(self, msg: Buffer, *, timeout_secs: int | None = None) -> bytes:
         if self._read_task.done() or self._rw.is_closing():
-            raise AsyncRequestResponseClientClosedError
+            raise ClientClosedError
         timeout_secs = timeout_secs if timeout_secs is not None else self._request_timeout_secs
         # ensure we get a unique message ID for this request
         msg_id: int = self._counter()
@@ -1320,7 +1313,7 @@ class BaseAsyncRequestResponseClient:
             del self._pending_requests[msg_id]
             self.close(ex)
             if ex.orig_state in (MState.WRITER_CLOSED, MState.READER_WRITER_CLOSED):
-                raise AsyncRequestResponseClientClosedError from ex
+                raise ClientClosedError from ex
             raise
         except:
             # a response will never come, so clean up the future

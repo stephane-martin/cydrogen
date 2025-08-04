@@ -39,7 +39,12 @@ class KeyExchangeException(CyException):
     Exception raised for errors during key exchange operations.
     """
 
-class MessageTooBigException(CyException, ValueError):
+class MessageTooBigException(CyException):
     """
     Raised when the message is too big to be processed.
+    """
+
+class ClientClosedError(CyException):
+    """
+    Raised when an attempt is made to send a request when the client is closed.
     """

@@ -2,10 +2,9 @@ import asyncio
 import time
 
 import pytest
-from cydrogen import KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
+from cydrogen import ClientClosedError, KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
 from cydrogen._networking import MsgQueue
 from cydrogen.networking import (
-    AsyncRequestResponseClientClosedError,
     KX_KK_AsyncRequestResponseClient,
     KX_N_AsyncRequestResponseClient,
     KX_XX_AsyncRequestResponseClient,
@@ -226,7 +225,7 @@ async def test_fail_validate_client_pubkey() -> None:
     await server.start_serving()
 
     try:
-        with pytest.raises(AsyncRequestResponseClientClosedError):
+        with pytest.raises(ClientClosedError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR) as client:
                 await client.request(b"test")
     finally:

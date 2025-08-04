@@ -30,3 +30,7 @@ cdef class KeyExchangeException(CyException):
 
 cdef class MessageTooBigException(CyException):
     pass
+
+
+cdef class ClientClosedError(CyException):
+    pass
