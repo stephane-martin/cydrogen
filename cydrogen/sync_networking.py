@@ -5,7 +5,7 @@ import socketserver
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Buffer, Iterator
+from collections.abc import Buffer, Callable, Iterator
 from contextlib import suppress
 from typing import Any, BinaryIO, Self
 
@@ -29,6 +29,9 @@ logger = logging.getLogger("cydrogen")
 
 PLATFORM = platform.system().lower()
 OK_MESSAGE = b"OK"
+
+
+type ValidatePeerKeyFunc = Callable[[KxPublicKey], None]
 
 
 class BaseTCPHandler(socketserver.StreamRequestHandler, ABC):
@@ -589,6 +592,7 @@ class KX_XX_TCPClient(BaseTCPClient):
         super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
         self.client_keypair: KxPair = client_keypair
         self.psk: Psk | None = psk
+        self.server_public_key: KxPublicKey
 
     def key_exchange(self) -> None:
         assert self.rfile is not None
