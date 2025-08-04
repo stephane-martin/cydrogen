@@ -19,6 +19,7 @@ SERVER_PAIR = KxPair("I4k9+3iOp9BLi5n8HIrYDvoMiJ3MZzkQbE3UU0XWmQIN7g2CCry+J5HqoN
 CLIENT_PUBKEY = CLIENT_PAIR.public_key()
 SERVER_PUBKEY = SERVER_PAIR.public_key()
 PSK = Psk("viHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
+PSK2 = Psk("wiHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
 HOST = "127.0.0.1"
 PORT = 8888
 
@@ -87,4 +88,13 @@ def test_sync_client_sync_server_kx_xx() -> None:
 
     client = KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1)
     server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+    sync_client_sync_server(client, server)
+
+
+def test_sync_client_sync_server_kx_n_wrong_psk() -> None:
+    class H(H_Mixin, KX_N_TCPHandler):
+        pass
+
+    client = KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    server = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK2)
     sync_client_sync_server(client, server)
