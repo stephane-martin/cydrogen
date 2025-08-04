@@ -34,4 +34,11 @@ cdef class MessageTooBigException(CyException):
     """
     def __init__(self, message: str = "Message is too big to be processed."):
         super().__init__(message)
-        self.message = message
+
+
+cdef class ClientClosedError(CyException):
+    """
+    Raised when an attempt is made to send a request when the client is closed.
+    """
+    def __init__(self, message: str = "Client is closed.") -> None:
+        super().__init__(message)

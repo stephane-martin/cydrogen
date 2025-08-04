@@ -23,6 +23,7 @@ from ._decls import (
     unpad,
 )
 from ._exceptions import (
+    ClientClosedError,
     CyException,
     DecryptException,
     DeriveException,
@@ -78,6 +79,7 @@ __all__ = [
     "KX_XX_PACKET3BYTES",
     "NOGIL_THRESHOLD_BYTES",
     "BaseKey",
+    "ClientClosedError",
     "Context",
     "Counter",
     "CyException",
