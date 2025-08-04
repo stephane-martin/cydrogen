@@ -1,5 +1,8 @@
 from cydrogen import KxPair, Psk
 from cydrogen.sync_networking import (
+    BaseTCPClient,
+    BaseTCPHandler,
+    BaseTCPServer,
     KX_KK_TCPClient,
     KX_KK_TCPHandler,
     KX_KK_TCPServer,
@@ -33,14 +36,13 @@ MESSAGES = [
 ]
 
 
-def test_sync_client_sync_server_kx_n() -> None:
-    class H(KX_N_TCPHandler):
-        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
-            self.write(msg.upper())
-            return True
+class H_Mixin(BaseTCPHandler):
+    def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
+        self.write(msg.upper())  # type: ignore
+        return True
 
-    # spawn the server in a background thread
-    server: KX_N_TCPServer = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+
+def sync_client_sync_server(client: BaseTCPClient, server: BaseTCPServer) -> None:
     server.run(background=True)
 
     nb_received = 0
@@ -48,7 +50,7 @@ def test_sync_client_sync_server_kx_n() -> None:
     try:
         # start the client in the main thread
         # set up retries because the server is started in a background thread
-        with KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK, connect_retry=10, connect_retry_wait=1) as client:
+        with client:
             for idx, msg in enumerate(MESSAGES):
                 client.write(msg, msg_id=idx + 1)
                 resp, msg_id = client.read()
@@ -59,57 +61,30 @@ def test_sync_client_sync_server_kx_n() -> None:
         server.shutdown()
 
     assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
+
+
+def test_sync_client_sync_server_kx_n() -> None:
+    class H(H_Mixin, KX_N_TCPHandler):
+        pass
+
+    client = KX_N_TCPClient(HOST, PORT, SERVER_PUBKEY, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    server = KX_N_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+    sync_client_sync_server(client, server)
 
 
 def test_sync_client_sync_server_kx_kk() -> None:
-    class H(KX_KK_TCPHandler):
-        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
-            self.write(msg.upper())
-            return True
+    class H(H_Mixin, KX_KK_TCPHandler):
+        pass
 
-    # spawn the server in a background thread
-    server: KX_KK_TCPServer = KX_KK_TCPServer(HOST, PORT, SERVER_PAIR, H, CLIENT_PUBKEY)
-    server.run(background=True)
-
-    nb_received = 0
-
-    try:
-        # start the client in the main thread
-        with KX_KK_TCPClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY, connect_retry=10, connect_retry_wait=1) as client:
-            for idx, msg in enumerate(MESSAGES):
-                client.write(msg, msg_id=idx + 1)
-                resp, msg_id = client.read()
-                nb_received += 1
-                assert resp == msg.upper(), "Response does not match expected"
-                assert msg_id == idx + 1, "Response message ID does not match request message ID"
-    finally:
-        server.shutdown()
-
-    assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
+    client = KX_KK_TCPClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY, connect_retry=10, connect_retry_wait=1)
+    server = KX_KK_TCPServer(HOST, PORT, SERVER_PAIR, H, CLIENT_PUBKEY)
+    sync_client_sync_server(client, server)
 
 
 def test_sync_client_sync_server_kx_xx() -> None:
-    class H(KX_XX_TCPHandler):
-        def handle_message(self, msg: bytes, msg_id: int) -> bool:  # noqa: ARG002
-            self.write(msg.upper())
-            return True
+    class H(H_Mixin, KX_XX_TCPHandler):
+        pass
 
-    # spawn the server in a background thread
-    server: KX_XX_TCPServer = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
-    server.run(background=True)
-
-    nb_received = 0
-
-    try:
-        # start the client in the main thread
-        with KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1) as client:
-            for idx, msg in enumerate(MESSAGES):
-                client.write(msg, msg_id=idx + 1)
-                resp, msg_id = client.read()
-                nb_received += 1
-                assert resp == msg.upper(), "Response does not match expected"
-                assert msg_id == idx + 1, "Response message ID does not match request message ID"
-    finally:
-        server.shutdown()
-
-    assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
+    client = KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+    sync_client_sync_server(client, server)
