@@ -15,7 +15,9 @@ from cydrogen.networking import (
 )
 
 CLIENT_PAIR = KxPair("PRd15/pwWvuRunBq5pv8jP1Y10gekV7ld8oH0vcYVC/GWd8Wi87qwB9CV76awCqiicaZAGVhEQvQSgZbPK9g6w==0")
+CLIENT_PAIR_WRONG = KxPair.gen()
 SERVER_PAIR = KxPair("I4k9+3iOp9BLi5n8HIrYDvoMiJ3MZzkQbE3UU0XWmQIN7g2CCry+J5HqoNe8AzDWwB78nlsRkIwMm5X0VhSZRA==")
+SERVER_PAIR_WRONG = KxPair.gen()
 CLIENT_PUBKEY = CLIENT_PAIR.public_key()
 SERVER_PUBKEY = SERVER_PAIR.public_key()
 PSK = Psk("viHijbfh4pyqknE4mvQdD2AqmWB59xrB7yxEv+bN/64=")
@@ -189,12 +191,64 @@ async def test_client_too_late_server() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_client_server_with_different_psk() -> None:
+async def test_client_server_kx_n_with_wrong_psk() -> None:
+    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=WRONG_PSK):
+                pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_kx_xx_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
         with pytest.raises(EOFError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=WRONG_PSK):
+                pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_kx_n_with_wrong_server_pubkey() -> None:
+    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR_WRONG, psk=PSK)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK):
+                pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_kx_kk_with_wrong_server_pubkey() -> None:
+    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR_WRONG, CLIENT_PUBKEY)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY):
+                pass
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_server_kx_kk_with_wrong_client_pubkey() -> None:
+    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
+    await server.start_serving()
+    try:
+        with pytest.raises(EOFError):
+            async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR_WRONG, SERVER_PUBKEY):
                 pass
     finally:
         server.close()
@@ -225,6 +279,10 @@ async def test_fail_validate_client_pubkey() -> None:
     await server.start_serving()
 
     try:
+        # the validation of the client key happens on server side,
+        # but it only happens once the XX key exchange has been completed.
+        # so no exception is going to be triggered as part of the connection establishment.
+        # to trigger the exception, we need to send a request.
         with pytest.raises(ClientClosedError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR) as client:
                 await client.request(b"test")
@@ -261,16 +319,15 @@ async def test_server_receives_too_big_message() -> None:
         await server.wait_closed()
 
 
+class SendTooBigHandler(RequestResponseHandler):
+    async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
+        return b"x" * 10001  # This is too big
+
+
 @pytest.mark.asyncio(loop_scope="module")
 async def test_server_sends_too_big_message() -> None:
-    big = b"x" * 10001  # This is too big
-
-    class HSendTooBig(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return big
-
     # constrain the server to send messages of max size 10000
-    server: asyncio.Server = await start_kx_xx_server(HSendTooBig, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
+    server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
     await server.start_serving()
     try:
         with pytest.raises(EOFError):
@@ -283,19 +340,13 @@ async def test_server_sends_too_big_message() -> None:
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_client_receives_too_big_message() -> None:
-    big = b"x" * 10001  # This is too big
-
-    class HSendTooBig(RequestResponseHandler):
-        async def response(self, msg: bytes, msg_id: int) -> bytes:  # noqa: ARG002
-            return big
-
-    server: asyncio.Server = await start_kx_xx_server(HSendTooBig, HOST, PORT, SERVER_PAIR, psk=PSK)
+    server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
         with pytest.raises(EOFError):
             # constrain the client to refuse to receive messages bigger than 10000 bytes
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, received_msg_max_size=10000) as client:
-                await client.request(b"test")  # This should fail server side
+                await client.request(b"test")  # This should fail client side
     finally:
         server.close()
         await server.wait_closed()

@@ -1557,16 +1557,12 @@ class BaseServerHandler(ABC):
         self.rw = rw
         try:
             while not self._stopping:
-                try:
-                    msg, msg_id = await rw.get_next_msg()
-                except EOFError:
-                    logger.info("EOF received")
-                    return
-                except Exception as ex:  # noqa: BLE001
-                    logger.warning("While reading next message: %s", ex)
-                    return
-                self._process(msg, msg_id)
-
+                msg, msg_id = await rw.get_next_msg()
+                self._process_msg(msg, msg_id)
+        except EOFError:
+            logger.info("EOF received")
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("While reading next message: %s", ex)
         finally:
             self._stopping = True
             nb = self._tasks.cancel_all()
@@ -1574,7 +1570,7 @@ class BaseServerHandler(ABC):
             rw.close()
             await rw.wait_closed()
 
-    def _process(self, msg: bytes, msg_id: int) -> None:
+    def _process_msg(self, msg: bytes, msg_id: int) -> None:
         if msg_id == CANCEL_MESSAGE_ID:
             msg_id_to_cancel = load64(msg)
             logger.info("Received cancel for request: %s (%s)", msg_id_to_cancel, self.rw.peername)
