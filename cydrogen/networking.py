@@ -1149,19 +1149,19 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.get_extra_info(name, default)
 
 
-async def _connect(host: str, port: int, protocol_factory: Callable[[], KXProtocol], retry: int, retry_wait: int) -> KXProtocol:
+async def _connect(h: str, p: int, fac: Callable[[], KXProtocol], retry: int, retry_wait: int) -> tuple[asyncio.Transport, KXProtocol]:
     loop = asyncio.get_running_loop()
     while True:
         try:
-            logger.debug("Connecting to %s:%d...", host, port)
-            _, protocol = await loop.create_connection(protocol_factory, host, port)
-            logger.debug("Connected to %s:%d", host, port)
-            return protocol
+            logger.debug("Connecting to %s:%d...", h, p)
+            transport, protocol = await loop.create_connection(fac, h, p)
+            logger.debug("Connected to %s:%d", h, p)
+            return transport, protocol
         except ConnectionRefusedError:
             if retry == 0:
                 raise
         retry -= 1
-        logger.warning("Connection to %s:%d failed", host, port)
+        logger.warning("Connection to %s:%d failed", h, p)
         if retry_wait > 0:
             logger.info("Retrying connection in %d seconds...", retry_wait)
             await asyncio.sleep(retry_wait)
@@ -1181,12 +1181,17 @@ async def _open_connection(
         machine = machine_factory()
         return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
 
-    protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
+    transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
     try:
         await protocol.wait_for_key_exchange()
     except Exception as ex:
+        transport.abort()
         raise KeyExchangeException(f"Failed to complete key exchange with {host}:{port}") from ex
-    await protocol.wait_for_validation()
+    try:
+        await protocol.wait_for_validation()
+    except Exception:
+        transport.abort()
+        raise
     return StreamReaderWriter(protocol)
 
 
