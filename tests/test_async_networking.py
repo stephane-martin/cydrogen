@@ -326,10 +326,12 @@ class SendTooBigHandler(RequestResponseHandler):
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_server_sends_too_big_message() -> None:
-    # constrain the server to send messages of max size 10000
+    # constrain the server to send messages of max size 10000, but instruct it to send a message bigger than that
     server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
     await server.start_serving()
     try:
+        # the MessageTooBigException is raised server side, and it will appear in server logs.
+        # but on the client side, we will just get an EOFError when trying to read the response because the server closes the connection.
         with pytest.raises(EOFError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
                 await client.request(b"test")  # This should fail server side
@@ -343,7 +345,7 @@ async def test_client_receives_too_big_message() -> None:
     server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(MessageTooBigException):
             # constrain the client to refuse to receive messages bigger than 10000 bytes
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, received_msg_max_size=10000) as client:
                 await client.request(b"test")  # This should fail client side

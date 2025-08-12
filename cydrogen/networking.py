@@ -1053,17 +1053,14 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._machine.receive_data(nbytes)
         except (DecryptException, KeyExchangeException):
             logger.exception("decryption or key exchange failed: abort connection with %s", self.peername)
-            self._transport.abort()
-            return
+            raise
         except MessageTooBigException:
             # when we have received a message that is too big
             logger.error("Received message is too big, abort connection with %s", self.peername)  # noqa: TRY400
-            self._transport.abort()
-            return
+            raise
         except Exception:
             logger.exception("While processing received data from %s", self.peername)
-            self._transport.close()
-            return
+            raise
 
         self.maybe_pause_reading()  # TODO: move ?
 
