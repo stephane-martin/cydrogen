@@ -195,7 +195,7 @@ async def test_client_server_kx_n_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(KeyExchangeException):
             async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=WRONG_PSK):
                 pass
     finally:
@@ -208,7 +208,7 @@ async def test_client_server_kx_xx_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(KeyExchangeException):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=WRONG_PSK):
                 pass
     finally:
@@ -221,7 +221,7 @@ async def test_client_server_kx_n_with_wrong_server_pubkey() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR_WRONG, psk=PSK)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(KeyExchangeException):
             async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK):
                 pass
     finally:
@@ -234,7 +234,7 @@ async def test_client_server_kx_kk_with_wrong_server_pubkey() -> None:
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR_WRONG, CLIENT_PUBKEY)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(KeyExchangeException):
             async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY):
                 pass
     finally:
@@ -247,7 +247,7 @@ async def test_client_server_kx_kk_with_wrong_client_pubkey() -> None:
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
     await server.start_serving()
     try:
-        with pytest.raises(EOFError):
+        with pytest.raises(KeyExchangeException):
             async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR_WRONG, SERVER_PUBKEY):
                 pass
     finally:
