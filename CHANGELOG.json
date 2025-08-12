@@ -1,11 +1,8 @@
 {
     "unreleased": {
         "added": [
-            "key exchange using the KK variant.",
-            "key exchange using the XX variant.",
-            "TCP clients and servers supporting the different N/KK/XX key exchange protocols.",
-            "synchronous TCP clients for KX variants KK and XX.",
-            "synchronous TCP servers for KX variants KK and XX."
+            "key exchange implementations for the N/KK/XX protocols.",
+            "TCP clients and servers supporting the different N/KK/XX key exchange protocols."
         ]
     },
     "v0.0.10": {
