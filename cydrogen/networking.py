@@ -1185,7 +1185,10 @@ async def _open_connection(
         return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
 
     protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
-    await protocol.wait_for_key_exchange()
+    try:
+        await protocol.wait_for_key_exchange()
+    except Exception as ex:
+        raise KeyExchangeException(f"Failed to complete key exchange with {host}:{port}") from ex
     await protocol.wait_for_validation()
     return StreamReaderWriter(protocol)
 
