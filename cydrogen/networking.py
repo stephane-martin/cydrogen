@@ -5,6 +5,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Buffer, Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Self
 
@@ -32,23 +33,82 @@ from ._utils import Counter, load64, store64
 logger = logging.getLogger("cydrogen")
 
 OK_MESSAGE: bytes = b"OK"
+"""
+A message sent by the (some of) our servers to the client to acknowledge the successful completion of the key exchange.
+"""
+
 CANCEL_MESSAGE_ID: int = 0
+"""
+With request/response clients, this is the message ID sent by the client to the server to cancel a request.
+"""
+
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB
-eof_exception = EOFError("Connection closed by peer")
+"""
+The threshold in bytes for the total size of received messages that have not been processed yet.
+
+When the total size of received messages exceeds twice this limiit, the Protocol will ask the Transport to pause reading.""
+"""
+
+EOF_EXCEPTION = EOFError("Connection closed by peer")
+"""
+An exception that may be raised when the peer closes the connection.
+"""
 
 
 class MState(StrEnum):
+    """
+    MState represents the different states of the state machine used in the key exchange protocol.
+    """
+
     INITIAL = "initial"
+    """
+    Initial state of the state machine, before any key exchange has started.
+    """
+
     CONNECTED = "connected"
+    """
+    Connected state, after the key exchange has completed successfully.
+    """
+
     READER_CLOSED = "reader_closed"
+    """
+    Reader closed state, when the reader has been closed but the writer is still open.
+    """
+
     WRITER_CLOSED = "writer_closed"
+    """
+    Writer closed state, when the writer has been closed but the reader is still open.
+    """
+
     READER_WRITER_CLOSED = "reader_writer_closed"
+    """
+    Reader and writer closed state, when both the reader and writer have been closed.
+    """
+
     WAITING_FOR_PACKET1 = "waiting_for_packet1"
+    """
+    Waiting for packet1 to be sent by peer.
+    """
+
     WAITING_FOR_PACKET2 = "waiting_for_packet2"
+    """
+    Waiting for packet2 to be sent by peer.
+    """
+
     WAITING_FOR_PACKET3 = "waiting_for_packet3"
+    """
+    Waiting for packet3 to be sent by peer.
+    """
+
     WAITING_FOR_SERVER_ACK = "waiting_for_server_ack"
+    """
+    Waiting for the server to acknowledge the key exchange.
+    """
 
     def kx_is_pending(self) -> bool:
+        """
+        Returns True if the state is one of the states where the key exchange is pending.
+        """
         return self in (
             MState.WAITING_FOR_PACKET1,
             MState.WAITING_FOR_PACKET2,
@@ -58,76 +118,147 @@ class MState(StrEnum):
 
 
 class TransitionEvent(StrEnum):
+    """
+    TransitionEvent represents the different events that can trigger a state transition in the state machine.
+    """
+
     CONNECTION_LOST = "connection_lost"
+    """
+    Connection lost event, triggered when the connection is lost or closed.
+    """
+
     READER_EOF = "reader_eof"
+    """
+    Reader EOF event, triggered when the reader is closing.
+    """
+
     WRITER_EOF = "writer_eof"
+    """
+    Writer EOF event, triggered when the writer is closing.
+    """
+
     WRITE_EMESSAGE = "write_emessage"
+    """
+    Write encrypted message event, triggered when the Protocol wants to send an encrypted message.
+    """
+
     RECEIVE_DATA = "receive_data"
+    """
+    Receive data event, triggered when the Protocol has received data from the peer.
+    """
+
     DATA_TO_SEND = "data_to_send"
+    """
+    Initial event to send data to the peer, when we need to start the key exchange process.
+    """
 
-
-type TransitionDestination = tuple[MState, Callable]
-type TransitionsByOrigState = dict[MState, TransitionDestination]
-type TransitionsByEvent = dict[TransitionEvent, TransitionsByOrigState]
 
 type StreamHandlerFunction = Callable[["StreamReaderWriter"], Awaitable[None]]
+"""
+A function that handles a stream, taking a StreamReaderWriter instance as an argument and returning an Awaitable.
+
+Typically: `async def handler(rw: StreamReaderWriter) -> None`.
+"""
+
 type ValidatePeerKeyFunc = Callable[[KxPublicKey], Awaitable[None]]
+"""
+A function that validates a peer's public key, taking a KxPublicKey instance as an argument and returning an Awaitable.
+
+Typically: `async def validate_peer_key(peer_key: KxPublicKey) -> None`.
+
+The function should raise an exception if the key is not valid.
+"""
 
 ALL_STATES: set[MState] = set(MState)
+"""
+A set containing all possible states of all the state machines.
+"""
 
 
 class InvalidTransitionError(RuntimeError):
+    """
+    Exception raised when an invalid transition is attempted in the state machine.
+    """
+
     def __init__(self, event: TransitionEvent, orig_state: MState) -> None:
+        """
+        Initializes the InvalidTransitionError with the event and original state that caused the error.
+
+        Args:
+            event: The TransitionEvent that was attempted.
+            orig_state: The original state from which the transition was attempted.
+        """
         super().__init__(f"Invalid transition {orig_state} => {event}")
         self.event = event
         self.orig_state = orig_state
 
 
+@dataclass
+class Destination:
+    state: MState
+    callback: Callable
+
+
+type TransitionsByOrigState = dict[MState, Destination]
+
+
 class Transitions:
+    """
+    Transitions represents the valid transitions for one of the state machines used in the key exchange protocol.
+    """
+
     def __init__(self) -> None:
-        self._t: TransitionsByEvent = {}
+        self._t: dict[TransitionEvent, TransitionsByOrigState] = {}
 
-    def add(self, event: TransitionEvent, orig_state: MState, dest_state: MState, callback: Callable) -> None:
-        if event not in self._t:
-            self._t[event] = {}
-        if orig_state not in self._t[event]:
-            self._t[event][orig_state] = (dest_state, callback)
-        else:
-            raise RuntimeError(f"Transition {orig_state} => {event} already exists")
+    def add_many(self, ev: TransitionEvent, transitions: TransitionsByOrigState) -> None:
+        if ev in self._t:
+            raise KeyError(f"Event {ev} already exists in transitions")
+        self._t[ev] = transitions
 
-    def add_many(self, transitions: TransitionsByEvent) -> None:
-        for event, orig_states in transitions.items():
-            if event not in self._t:
-                self._t[event] = {}
-            for orig_state, (dest_state, callback) in orig_states.items():
-                if orig_state not in self._t[event]:
-                    self._t[event][orig_state] = (dest_state, callback)
-                else:
-                    raise RuntimeError(f"Transition {orig_state} => {event} already exists")
+    def add_one(self, ev: TransitionEvent, orig_state: MState, dest_state: MState, callback: Callable) -> None:
+        if ev not in self._t:
+            raise KeyError(f"Event {ev} not found in transitions")
+        if orig_state in self._t[ev]:
+            raise KeyError(f"Transition for event {ev} and state {orig_state} already exists")
+        self._t[ev][orig_state] = Destination(state=dest_state, callback=callback)
 
-    def get(self, event: TransitionEvent, orig_state: MState) -> TransitionDestination:
+    def get(self, event: TransitionEvent, orig_state: MState) -> Destination:
+        """
+        Get the destination state and callback for a given event and original state.
+
+        Args:
+            event: The TransitionEvent for which to get the transition.
+            orig_state: The original state from which the transition occurs.
+
+        Returns:
+            A tuple containing the destination state and the callback function to be called when the transition occurs.
+
+        Raises:
+            InvalidTransitionError: If the event is not valid for the original state.
+        """
         try:
             return self._t[event][orig_state]
         except KeyError as ex:
             raise InvalidTransitionError(event, orig_state) from ex
 
     def keep_only_valid_states(self, valid_states: frozenset[MState]) -> None:
-        # remove all transitions that are referencing states not in valid_states
-        to_remove: TransitionsByEvent = {}
+        """
+        Remove the superfluous transitions that reference invalid states.
 
-        event: TransitionEvent
-        dest: TransitionDestination
-        state_transitions: TransitionsByOrigState
+        Args:
+            valid_states: the set of valid states that transitions should reference.
+        """
+        to_remove: dict[TransitionEvent, set[MState]] = {}
 
         for event, state_transitions in self._t.items():
-            to_remove[event] = {}
+            to_remove[event] = set()
             for orig_state, dest in state_transitions.items():
-                if orig_state not in valid_states or dest[0] not in valid_states:
-                    to_remove[event][orig_state] = dest
+                if orig_state not in valid_states or dest.state not in valid_states:
+                    to_remove[event].add(orig_state)
 
-        for event, state_transitions in to_remove.items():
-            for orig_state, dest in state_transitions.items():
-                logger.debug("Removing: %s => %s => %s", orig_state, event, dest[0])
+        for event, orig_states in to_remove.items():
+            for orig_state in orig_states:
+                logger.debug("Removing: %s => %s => ...", orig_state, event)
                 del self._t[event][orig_state]
             if not self._t[event]:
                 logger.debug("Removing event: %s", event)
@@ -135,6 +266,18 @@ class Transitions:
 
 
 class BaseMachine:
+    """
+    BaseMachine is the base class for all state machines used in the key exchange protocols.
+
+
+    When initializing the base machine, we register the transitions that are common to all state machines.
+
+    Some of those transitions are not valid for all state machines, but they are kept here for convenience.
+    Subclasses should override the `_valid_states` class variable to specify which states are valid for that machine,
+    and call `self._transitions.keep_only_valid_states(...)` in their `__init__` method to remove the
+    superfluous transitions.
+    """
+
     # INITIAL                   => connection_lost  => READER_WRITER_CLOSED
     # CONNECTED                 => connection_lost  => READER_WRITER_CLOSED
     # READER_CLOSED             => connection_lost  => READER_WRITER_CLOSED
@@ -172,71 +315,103 @@ class BaseMachine:
     # WRITER_CLOSED             => receive_data     => WRITER_CLOSED
 
     _valid_states: frozenset[MState] = frozenset()
+    """
+    The set of valid states for this state machine.
+
+    Subclasses should override this variable to specify which states are valid for that machine.
+    """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20) -> None:
+        """
+        Initializes the BaseMachine.
+
+        Args:
+            loop: The asyncio event loop to use for the state machine.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+        """
         self.sent_msg_max_size: int = sent_msg_max_size
         self.received_msg_max_size: int = received_msg_max_size
 
         self._transitions = Transitions()
 
         self._transitions.add_many(
+            TransitionEvent.CONNECTION_LOST,
             {
-                TransitionEvent.CONNECTION_LOST: {
-                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.CONNECTED: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.READER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._connection_lost),
-                },
-                TransitionEvent.READER_EOF: {
-                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.CONNECTED: (MState.READER_CLOSED, self._reader_eof),
-                    MState.READER_CLOSED: (MState.READER_CLOSED, self._reader_eof),
-                    MState.WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._reader_eof),
-                },
-                TransitionEvent.WRITER_EOF: {
-                    MState.INITIAL: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.CONNECTED: (MState.WRITER_CLOSED, self._writer_eof),
-                    MState.READER_CLOSED: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._writer_eof),
-                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.WAITING_FOR_PACKET1: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.WAITING_FOR_PACKET2: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.WAITING_FOR_PACKET3: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.READER_WRITER_CLOSED, self._writer_eof),
-                },
-                TransitionEvent.WRITE_EMESSAGE: {
-                    MState.CONNECTED: (MState.CONNECTED, self._write_emessage),
-                    MState.READER_CLOSED: (MState.READER_CLOSED, self._write_emessage),
-                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET1, self._write_emessage),
-                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_PACKET2, self._write_emessage),
-                    MState.WAITING_FOR_PACKET3: (MState.WAITING_FOR_PACKET3, self._write_emessage),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.WAITING_FOR_SERVER_ACK, self._write_emessage),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.CONNECTED: (MState.CONNECTED, self._receive_data_connected),
-                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._receive_data_connected),
-                },
-                TransitionEvent.DATA_TO_SEND: {
-                    # no MState.INITIAL case, because that will be handled by the subclass
-                    MState.CONNECTED: (MState.CONNECTED, self._data_to_send),
-                    MState.READER_CLOSED: (MState.READER_CLOSED, self._data_to_send),
-                    MState.WRITER_CLOSED: (MState.WRITER_CLOSED, self._data_to_send),
-                    MState.READER_WRITER_CLOSED: (MState.READER_WRITER_CLOSED, self._data_to_send),
-                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET1, self._data_to_send),
-                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_PACKET2, self._data_to_send),
-                    MState.WAITING_FOR_PACKET3: (MState.WAITING_FOR_PACKET3, self._data_to_send),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.WAITING_FOR_SERVER_ACK, self._data_to_send),
-                },
+                MState.INITIAL: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.CONNECTED: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.READER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.READER_WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.WAITING_FOR_PACKET1: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.WAITING_FOR_PACKET2: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.WAITING_FOR_PACKET3: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+                MState.WAITING_FOR_SERVER_ACK: Destination(MState.READER_WRITER_CLOSED, self._connection_lost),
+            },
+        )
+
+        self._transitions.add_many(
+            TransitionEvent.READER_EOF,
+            {
+                MState.INITIAL: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.CONNECTED: Destination(MState.READER_CLOSED, self._reader_eof),
+                MState.READER_CLOSED: Destination(MState.READER_CLOSED, self._reader_eof),
+                MState.WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.READER_WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.WAITING_FOR_PACKET1: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.WAITING_FOR_PACKET2: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.WAITING_FOR_PACKET3: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+                MState.WAITING_FOR_SERVER_ACK: Destination(MState.READER_WRITER_CLOSED, self._reader_eof),
+            },
+        )
+
+        self._transitions.add_many(
+            TransitionEvent.WRITER_EOF,
+            {
+                MState.INITIAL: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.CONNECTED: Destination(MState.WRITER_CLOSED, self._writer_eof),
+                MState.READER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.WRITER_CLOSED: Destination(MState.WRITER_CLOSED, self._writer_eof),
+                MState.READER_WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.WAITING_FOR_PACKET1: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.WAITING_FOR_PACKET2: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.WAITING_FOR_PACKET3: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+                MState.WAITING_FOR_SERVER_ACK: Destination(MState.READER_WRITER_CLOSED, self._writer_eof),
+            },
+        )
+
+        self._transitions.add_many(
+            TransitionEvent.WRITE_EMESSAGE,
+            {
+                MState.CONNECTED: Destination(MState.CONNECTED, self._write_emessage),
+                MState.READER_CLOSED: Destination(MState.READER_CLOSED, self._write_emessage),
+                MState.WAITING_FOR_PACKET1: Destination(MState.WAITING_FOR_PACKET1, self._write_emessage),
+                MState.WAITING_FOR_PACKET2: Destination(MState.WAITING_FOR_PACKET2, self._write_emessage),
+                MState.WAITING_FOR_PACKET3: Destination(MState.WAITING_FOR_PACKET3, self._write_emessage),
+                MState.WAITING_FOR_SERVER_ACK: Destination(MState.WAITING_FOR_SERVER_ACK, self._write_emessage),
+            },
+        )
+
+        self._transitions.add_many(
+            TransitionEvent.RECEIVE_DATA,
+            {
+                MState.CONNECTED: Destination(MState.CONNECTED, self._receive_data_connected),
+                MState.WRITER_CLOSED: Destination(MState.WRITER_CLOSED, self._receive_data_connected),
+            },
+        )
+
+        self._transitions.add_many(
+            TransitionEvent.DATA_TO_SEND,
+            {
+                # no MState.INITIAL case, because that will be handled by the subclass
+                MState.CONNECTED: Destination(MState.CONNECTED, self._data_to_send),
+                MState.READER_CLOSED: Destination(MState.READER_CLOSED, self._data_to_send),
+                MState.WRITER_CLOSED: Destination(MState.WRITER_CLOSED, self._data_to_send),
+                MState.READER_WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._data_to_send),
+                MState.WAITING_FOR_PACKET1: Destination(MState.WAITING_FOR_PACKET1, self._data_to_send),
+                MState.WAITING_FOR_PACKET2: Destination(MState.WAITING_FOR_PACKET2, self._data_to_send),
+                MState.WAITING_FOR_PACKET3: Destination(MState.WAITING_FOR_PACKET3, self._data_to_send),
+                MState.WAITING_FOR_SERVER_ACK: Destination(MState.WAITING_FOR_SERVER_ACK, self._data_to_send),
             },
         )
 
@@ -256,25 +431,61 @@ class BaseMachine:
 
     @property
     def kx_completed(self) -> asyncio.Future:
+        """
+        Returns the Future that will be set when the key exchange is completed.
+
+        This Future will be set with None if the key exchange is successful, or with an exception if it fails.
+        """
         return self._kx_completed
 
     def get_buffer(self) -> memoryview:
+        """
+        Returns a memoryview of the buffer used to read data from the peer.
+
+        The buffer is normally requested by the Transport to the Protocol when it needs to read data from the peer. The Protocol
+        itself forwards the request to the Machine, which provides a memoryview of the buffer that can be used to read data.
+
+        The underlying ReadBuffers class enables clever reusing of the memoryviews.
+        """
         return self._read_buffers.get_buffer()
 
     @property
     def received_size(self) -> int:
+        """
+        Returns the total size of received messages that have not been processed yet.
+        """
         return self._received_decrypted_msgs.bytesize
 
     async def read_message(self) -> tuple[bytes, int]:
+        """
+        Reads a decrypted message from the queue of received decrypted messages.
+
+        Returns:
+            The decrypted message as bytes.
+            The message ID associated with the decrypted message.
+        """
         return await self._received_decrypted_msgs.get()
 
     async def decrypt_received_messages(self) -> None:
+        """
+        Decrypts received encrypted messages and pushes the decrypted messages to the queue of received decrypted messages.
+
+        This is a long running coroutine that continuously reads encrypted messages from the queue of received encrypted messages,
+        decrypts them, and pushes the decrypted messages to the queue of received decrypted messages.
+
+        The function normally runs until the queue of received encrypted messages is closed (e.g. when the connection is lost or closed).
+        But if an an exception occurs during decryption, the coroutine will raise a `DecryptException` and stop processing further messages.
+
+        This coroutine is scheduled as a task by the Protocol when the key exchange is completed successfully.
+        """
         logger.info("starting to decrypt received messages")
         while True:
             try:
                 incoming, _ = await self._received_encrypted_msgs.get()
             except Exception as ex:  # noqa: BLE001
+                # this means that the queue of encrypted messages has been closed
                 logger.info("decrypt received messages has finished: %s", ex)
+                # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
                 self._received_decrypted_msgs.close(ex)
                 return
             # decrypt the message and push the result downstream to _received_decrypted_msgs queue
@@ -286,46 +497,55 @@ class BaseMachine:
                 self._read_buffers.release_bytearray(incoming)  # return the mview to the freelist
                 self._received_decrypted_msgs.put_nowait(plaintext, msg_id)
             except Exception as ex:
+                # we won't decrypt any more message after the decryption failure, so we close the queue of decrypted messages
+                self._received_decrypted_msgs.close(ex)
                 # DecryptException will be captured by the protocol, which will abort the transport
                 raise DecryptException("Failed to decrypt message from peer") from ex
 
-    def connection_lost(self, exc: Exception | None) -> None:
-        event = TransitionEvent.CONNECTION_LOST
-        dest, callback = self._transitions.get(event, self._state)
-        callback(exc)
-        self._state = dest
+    def trigger(self, ev: TransitionEvent, *args):  # noqa: ANN002, ANN201
+        if ev == TransitionEvent.RECEIVE_DATA:
+            return self.receive_data(*args)
+        dest = self._transitions.get(ev, self._state)
+        res = dest.callback(*args)
+        self._state = dest.state
+        return res
+
+    def receive_data(self, nbytes: int) -> None:
+        self._read_buffers.buffer_updated(nbytes)
+        try:
+            while True:
+                dest = self._transitions.get(TransitionEvent.RECEIVE_DATA, self._state)
+                if not dest.callback():
+                    # not enough data
+                    return
+                # when callback returns False, it means there was not enough available data to advance the state
+                # when callback returns True, there was some advance, hence set the destination state
+                old_state = self._state
+                self._state = dest.state
+                if old_state.kx_is_pending() and self._state == MState.CONNECTED:
+                    self._complete_kx()
+        except Exception as ex:
+            self._fail_kx(ex)
+            raise
 
     def _connection_lost(self, exc: Exception | None) -> None:
+        # _reade_eof may have been called before this method, so we check if the exception is already set
         if self._exception is None:
-            # make sure a new reader would get rejected
-            self._exception = eof_exception if exc is None else exc
+            self._exception = EOF_EXCEPTION if exc is None else exc
             self._received_encrypted_msgs.close(self._exception)
         if self._state.kx_is_pending():
             self._fail_kx(self._exception)
-
-    def reader_eof(self) -> None:
-        event = TransitionEvent.READER_EOF
-        dest, callback = self._transitions.get(event, self._state)
-        callback()
-        self._state = dest
 
     def _reader_eof(self) -> None:
         if self._exception is None:
-            # make sure a new reader would get rejected
-            self._exception = eof_exception
+            self._exception = EOF_EXCEPTION
             self._received_encrypted_msgs.close(self._exception)
         if self._state.kx_is_pending():
             self._fail_kx(self._exception)
 
-    def writer_eof(self) -> None:
-        event = TransitionEvent.WRITER_EOF
-        dest, callback = self._transitions.get(event, self._state)
-        callback()
-        self._state = dest
-
     def _writer_eof(self) -> None:
         if self._state.kx_is_pending():
-            self._fail_kx(eof_exception)
+            self._fail_kx(EOF_EXCEPTION)
 
     def _fail_kx(self, exc: Exception) -> None:
         if not self._kx_completed.done():
@@ -341,14 +561,8 @@ class BaseMachine:
         # This method only depends on self._tbox, which is set after the key exchange is completed
         # and is a constant for the lifetime of the machine.
         # So for practical purposes, it is thread-safe.
-        # It makes it possible to offload the encryption to a thread if needed.
+        # It makes it possible to offload the encryption to a thread.
         return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
-
-    def write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
-        event = TransitionEvent.WRITE_EMESSAGE
-        dest, callback = self._transitions.get(event, self._state)
-        callback(ciphertext, msg_id)
-        self._state = dest
 
     def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
         # called by Protocol to prepare sending a message to the server
@@ -375,25 +589,6 @@ class BaseMachine:
             self._fail_kx(ex)
             raise
 
-    def receive_data(self, nbytes: int) -> None:
-        event = TransitionEvent.RECEIVE_DATA
-        self._read_buffers.buffer_updated(nbytes)
-        try:
-            while True:
-                dest, callback = self._transitions.get(event, self._state)
-                if not callback():
-                    # not enough data
-                    return
-                # when callback returns False, it means there was not enough available data to advance the state
-                # when callback returns True, there was some advance, hence set the destination state
-                old_state = self._state
-                self._state = dest
-                if old_state.kx_is_pending() and self._state == MState.CONNECTED:
-                    self._complete_kx()
-        except Exception as ex:
-            self._fail_kx(ex)
-            raise
-
     def _receive_data_connected(self) -> bool:
         # we don't call _get_small_message here, because the message may be big and decrypting it may block the loop
         # may raise MessageTooBigException if the received message is too big
@@ -404,22 +599,8 @@ class BaseMachine:
         self._received_encrypted_msgs.put_nowait(encrypted_data)
         return True
 
-    def data_to_send(self) -> bytes:
-        event = TransitionEvent.DATA_TO_SEND
-        dest, callback = self._transitions.get(event, self._state)
-        data: bytes = callback()
-        self._state = dest
-        return data
-
     def _data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()
-
-    # TODO: use it
-    def _check_invalid_state(self) -> None:
-        if self._state in self._invalid_states:
-            ex = RuntimeError(f"Invalid state: {self._state}")
-            self._fail_kx(ex)
-            raise ex
 
     def get_peer_key(self) -> KxPublicKey | None:
         return None
@@ -451,16 +632,9 @@ class KX_N_ClientStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_SERVER_ACK: (MState.CONNECTED, self._receive_server_ack),
-                },
-            },
-        )
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial)
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_SERVER_ACK, MState.CONNECTED, self._receive_server_ack)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_public_key: KxPublicKey = server_public_key
@@ -511,16 +685,9 @@ class KX_N_ServerStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_PACKET1: (MState.CONNECTED, self._receive_packet1),
-                },
-            },
-        )
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
@@ -537,7 +704,7 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._tbox = SecretBox(self._session_pair.tx)
         # send OK message to the client
         ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
-        self.write_emessage(ciphertext, 0)
+        self.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, 0)
         return True
 
 
@@ -566,16 +733,9 @@ class KX_KK_ClientStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_PACKET2, self._data_to_send_initial),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_PACKET2: (MState.CONNECTED, self._receive_packet2),
-                },
-            },
-        )
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET2, MState.CONNECTED, self._receive_packet2)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._client_pair: KxPair = client_pair
@@ -628,16 +788,9 @@ class KX_KK_ServerStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_PACKET1: (MState.CONNECTED, self._receive_packet1),
-                },
-            },
-        )
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
@@ -688,23 +841,18 @@ class KX_XX_ClientStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_PACKET2, self._data_to_send_initial),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_PACKET2: (MState.WAITING_FOR_SERVER_ACK, self._receive_packet2),
-                    MState.WAITING_FOR_SERVER_ACK: (MState.CONNECTED, self._receive_server_ack),
-                },
-            },
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
+        self._transitions.add_one(
+            TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET2, MState.WAITING_FOR_SERVER_ACK, self._receive_packet2
         )
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_SERVER_ACK, MState.CONNECTED, self._receive_server_ack)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._client_pair: KxPair = client_pair
         self._psk: Psk | None = psk
         self._kx_state: KxXxClientState = self._client_pair.client_init_kx_xx(self._psk)
-        self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
+        self._server_public_key: KxPublicKey  # will be set after receiving packet2 from the server
 
     def _receive_packet2(self) -> bool:
         # we expect to receive packet2 from the server, length KX_XX_PACKET2BYTES
@@ -770,22 +918,17 @@ class KX_XX_ServerStateMachine(BaseMachine):
     ) -> None:
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_many(
-            {
-                TransitionEvent.DATA_TO_SEND: {
-                    MState.INITIAL: (MState.WAITING_FOR_PACKET1, self._data_to_send),
-                },
-                TransitionEvent.RECEIVE_DATA: {
-                    MState.WAITING_FOR_PACKET1: (MState.WAITING_FOR_PACKET3, self._receive_packet1),
-                    MState.WAITING_FOR_PACKET3: (MState.CONNECTED, self._receive_packet3),
-                },
-            },
+        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(
+            TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.WAITING_FOR_PACKET3, self._receive_packet1
         )
+        self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET3, MState.CONNECTED, self._receive_packet3)
+
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
-        self._client_public_key: KxPublicKey | None = None  # will be set after receiving packet1 from the client
+        self._client_public_key: KxPublicKey  # will be set after receiving packet1 from the client
         self._kx_state: KxXxServerState
 
     def _receive_packet1(self) -> bool:
@@ -815,7 +958,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._client_public_key = self._kx_state.client_public_key
         # send OK message to the client
         ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
-        self.write_emessage(ciphertext, 0)
+        self.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, 0)
         return True
 
     def get_peer_key(self) -> KxPublicKey | None:
@@ -914,8 +1057,8 @@ class KXProtocol(asyncio.BufferedProtocol):
         cancel_msg = bytearray(8)
         store64(cancel_msg, target_msg_id)
         ciphertext = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
-        self._machine.write_emessage(ciphertext, CANCEL_MESSAGE_ID)
-        data = self._machine.data_to_send()
+        self._machine.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, CANCEL_MESSAGE_ID)
+        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
             self._transport.write(data)
             await self.drain()
@@ -942,14 +1085,14 @@ class KXProtocol(asyncio.BufferedProtocol):
         # execute encryption in a separate thread to avoid blocking the event loop
         # may raise MessageTooBigException if the message is too big
         ciphertext = await asyncio.to_thread(self._machine.encrypt_message, msg, msg_id)
-        self._machine.write_emessage(ciphertext, msg_id)
-        data = self._machine.data_to_send()
+        self._machine.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, msg_id)
+        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
             self._transport.write(data)
             await self.drain()
 
     def write_eof(self) -> None:
-        self._machine.writer_eof()
+        self._machine.trigger(TransitionEvent.WRITER_EOF)
         self._transport.write_eof()
 
     def can_write_eof(self) -> bool:
@@ -965,7 +1108,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             logger.info("new connection from client %s", self.peername)
         self._kx_completed.add_done_callback(self.key_exchange_completed)
         # state is INITIAL, we need to move the state and if necessary send the first packet
-        data = self._machine.data_to_send()
+        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
             self._transport.write(data)
 
@@ -989,8 +1132,6 @@ class KXProtocol(asyncio.BufferedProtocol):
         except Exception:
             logger.exception("Continuous decryption task failed")
             self._transport.abort()
-            # restart the task to unblock readers
-            await self._machine.decrypt_received_messages()
 
     async def validate_and_handle(self) -> None:
         try:
@@ -1064,7 +1205,7 @@ class KXProtocol(asyncio.BufferedProtocol):
 
         self.maybe_pause_reading()  # TODO: move ?
 
-        data = self._machine.data_to_send()
+        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
             self._transport.write(data)
 
@@ -1073,7 +1214,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             return
         if self._machine.received_size > 2 * self._limit:
             try:
-                logger.info("Transport asked to pause reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+                logger.info("Transport was asked to pause reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
                 self._transport.pause_reading()
                 self._reading_paused = True
             except NotImplementedError:
@@ -1090,8 +1231,8 @@ class KXProtocol(asyncio.BufferedProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         logger.info("connection lost for %s, exc: %s", self.peername, exc)
         if isinstance(exc, ConnectionError):
-            exc = eof_exception
-        self._machine.connection_lost(exc)
+            exc = EOF_EXCEPTION
+        self._machine.trigger(TransitionEvent.CONNECTION_LOST, exc)
 
         # make wait_closed() return
         if not self._closed_fut.done():
@@ -1114,16 +1255,16 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
-        self._machine.reader_eof()
+        self._machine.trigger(TransitionEvent.READER_EOF)
         return False
 
     async def drain(self) -> None:
         if self._connection_lost:
-            raise eof_exception
+            raise EOF_EXCEPTION
         if self._transport.is_closing():
             await asyncio.sleep(0)
         if self._connection_lost:
-            raise eof_exception
+            raise EOF_EXCEPTION
         if not self._writing_paused:
             return
         waiter = self._loop.create_future()
@@ -1535,30 +1676,8 @@ class BaseServerHandler(ABC):
         self.rw: StreamReaderWriter
         self._msgid_var: contextvars.ContextVar = contextvars.ContextVar("msgid")
 
-    @classmethod
-    def func(cls) -> StreamHandlerFunction:
-        """Return a StreamHandlerFunction that can be used to handle the connection."""
-        return cls().handle
-
-    async def _handle_message(self, msg: bytes, msg_id: int) -> None:
-        self._msgid_var.set(msg_id)
-        try:
-            if not await self.handle_message(msg, msg_id):
-                self._stopping = True
-                self.rw.close()
-        except MessageTooBigException:
-            logger.error("Server response is too big (incoming msg_id: %d)", msg_id)  # noqa: TRY400
-            self._stopping = True
-            self.rw.close()
-        except Exception:
-            logger.exception("Error while handling message %s", msg_id)
-
-    @abstractmethod
-    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
-        raise NotImplementedError
-
     async def handle(self, rw: StreamReaderWriter) -> None:
-        # self.handle is a StreamHandlerFunction
+        # note: self.handle is a StreamHandlerFunction
         self.rw = rw
         try:
             while not self._stopping:
@@ -1593,18 +1712,29 @@ class BaseServerHandler(ABC):
 
         task.add_done_callback(cb)
 
+    async def _handle_message(self, msg: bytes, msg_id: int) -> None:
+        self._msgid_var.set(msg_id)
+        try:
+            if not await self.handle_message(msg, msg_id):
+                self._stopping = True
+                self.rw.close()
+        except MessageTooBigException:
+            logger.error("Server response is too big (incoming msg_id: %d)", msg_id)  # noqa: TRY400
+            self._stopping = True
+            self.rw.close()
+        except Exception:
+            logger.exception("Error while handling message %s", msg_id)
 
-class StreamHandler(BaseServerHandler, ABC):
+    @abstractmethod
+    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        raise NotImplementedError
+
     async def write(self, msg: bytes, msg_id: int | None = None) -> None:
         # the write method can be used by subclasses to implement handle_message
         # it automatically uses the message ID from the incoming message to write the response, if not provided
         if msg_id is None:
             msg_id = self._msgid_var.get()
         await self.rw.write_msg(msg, msg_id)
-
-    @abstractmethod
-    async def handle_message(self, msg: bytes, msg_id: int) -> bool:
-        raise NotImplementedError
 
 
 class RequestResponseHandler(BaseServerHandler, ABC):
@@ -1620,7 +1750,7 @@ class RequestResponseHandler(BaseServerHandler, ABC):
 
 def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
     if isinstance(handler, type) and issubclass(handler, BaseServerHandler):
-        return handler.func()
+        return handler().handle
     if not isinstance(handler, type):
         return handler
     raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
@@ -1648,11 +1778,9 @@ async def start_kx_n_server(
     loop = asyncio.get_running_loop()
 
     def factory() -> KXProtocol:
-        # the machine will close the kx_completed future when the key exchange is done
         machine = KX_N_ServerStateMachine(
             server_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        # kxprotocol will wait for the kx_completed future before triggering the handler
         return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit)
 
     return await _loop_create_server(factory, host, port)
