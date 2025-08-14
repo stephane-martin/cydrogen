@@ -10,7 +10,6 @@ from enum import StrEnum
 from typing import Any, Self
 
 from ._decls import NOGIL_THRESHOLD_BYTES
-from ._exceptions import ClientClosedError, DecryptException, KeyExchangeException, MessageTooBigException
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
@@ -29,6 +28,7 @@ from ._kx_n import (
 from ._networking import BytearrayBuilder, MsgQueue, ReadBuffers
 from ._secretbox import EncryptedMessage, SecretBox, encrypted_message_header
 from ._utils import Counter, load64, store64
+from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, MessageTooBigException
 
 logger = logging.getLogger("cydrogen")
 

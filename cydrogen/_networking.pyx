@@ -7,11 +7,12 @@ from libc.stdint cimport uint64_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._secretbox cimport parse_encrypted_message_header, _ENC_MSG_HEADER_SIZE
-from ._exceptions cimport MessageTooBigException
 
 import asyncio
 import logging
 from collections import deque
+
+from .exceptions import MessageTooBigException
 
 
 logger = logging.getLogger("cydrogen")
