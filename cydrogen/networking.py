@@ -153,6 +153,24 @@ class TransitionEvent(StrEnum):
     """
 
 
+class InvalidTransitionError(RuntimeError):
+    """
+    Exception raised when an invalid transition is attempted in the state machine.
+    """
+
+    def __init__(self, event: TransitionEvent, orig_state: MState) -> None:
+        """
+        Initializes the InvalidTransitionError with the event and original state that caused the error.
+
+        Args:
+            event: The TransitionEvent that was attempted.
+            orig_state: The original state from which the transition was attempted.
+        """
+        super().__init__(f"Invalid transition {orig_state} => {event}")
+        self.event = event
+        self.orig_state = orig_state
+
+
 type StreamHandlerFunction = Callable[["StreamReaderWriter"], Awaitable[None]]
 """
 A function that handles a stream, taking a StreamReaderWriter instance as an argument and returning an Awaitable.
@@ -177,29 +195,18 @@ A set containing all possible states of all the state machines.
 
 @dataclass(frozen=True, slots=True)
 class Destination:
+    """
+    Destination represents a destination state and a callback function to be called when the transition occurs.
+    """
+
     state: MState
     callback: Callable
 
 
 type TransitionsByOrigState = dict[MState, Destination]
-
-
-class InvalidTransitionError(RuntimeError):
-    """
-    Exception raised when an invalid transition is attempted in the state machine.
-    """
-
-    def __init__(self, event: TransitionEvent, orig_state: MState) -> None:
-        """
-        Initializes the InvalidTransitionError with the event and original state that caused the error.
-
-        Args:
-            event: The TransitionEvent that was attempted.
-            orig_state: The original state from which the transition was attempted.
-        """
-        super().__init__(f"Invalid transition {orig_state} => {event}")
-        self.event = event
-        self.orig_state = orig_state
+"""
+A dictionary mapping original states to their corresponding Destination objects (for a given TransitionEvent).
+"""
 
 
 class Transitions:
@@ -503,6 +510,16 @@ class BaseMachine:
                 raise DecryptException("Failed to decrypt message from peer") from ex
 
     def trigger(self, ev: TransitionEvent, *args):  # noqa: ANN002, ANN201
+        """
+        Triggers a state transition in the state machine based on the given event and arguments.
+
+        Args:
+            ev: The TransitionEvent that triggers the state transition.
+            *args: Additional arguments to pass to the callback function associated with the transition.
+
+        Returns:
+            The result of the callback function associated with the transition.
+        """
         if ev == TransitionEvent.RECEIVE_DATA:
             return self._receive_data(*args)
         dest = self._transitions.get(ev, self._state)
@@ -558,10 +575,20 @@ class BaseMachine:
             self._kx_completed.set_result(None)
 
     def encrypt_message(self, msg: Buffer, msg_id: int) -> bytearray:
-        # This method only depends on self._tbox, which is set after the key exchange is completed
-        # and is a constant for the lifetime of the machine.
-        # So for practical purposes, it is thread-safe.
-        # It makes it possible to offload the encryption to a thread.
+        """
+        Encrypts a message using the session keys established during the key exchange.
+
+        Encryption may take some time, so it is recommended to call this method in a separate thread
+        to avoid to block the event loop. As the encryption only depends on the session keys,
+        and the session keys are constant after the key exchange is completed, this method is thread-safe.
+
+        Args:
+            msg: The message to encrypt, as a bytes-like object.
+            msg_id: The message ID to associate with the encrypted message.
+
+        Returns:
+            A bytearray containing the encrypted message, ready to be sent over the network.
+        """
         return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
 
     def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
@@ -603,10 +630,20 @@ class BaseMachine:
         return self._data_ready_to_send.get()
 
     def get_peer_key(self) -> KxPublicKey | None:
+        """
+        Returns the public key of the peer when it is known.
+
+        Returns:
+            The public key of the peer, or None if the peer's key is not known yet or not applicable (e.g. in KX_N, server side).
+        """
         return None
 
 
 class KX_N_ClientStateMachine(BaseMachine):
+    """
+    KX_N_ClientStateMachine implements the client side of the KX_N key exchange protocol.
+    """
+
     # INITIAL                   => data_to_send => WAITING_FOR_SERVER_ACK
     # WAITING_FOR_SERVER_ACK    => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
 
@@ -630,6 +667,16 @@ class KX_N_ClientStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_N_ClientStateMachine.
+
+        Args:
+            server_public_key: The public key of the server to which we are connecting.
+            loop: The asyncio event loop to use for the state machine.
+            psk: An optional pre-shared key to use for the key exchange.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial)
@@ -660,6 +707,10 @@ class KX_N_ClientStateMachine(BaseMachine):
 
 
 class KX_N_ServerStateMachine(BaseMachine):
+    """
+    KX_N_ServerStateMachine implements the server side of the KX_N key exchange protocol.
+    """
+
     # INITIAL               => data_to_send => WAITING_FOR_PACKET1
     # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
 
@@ -683,6 +734,16 @@ class KX_N_ServerStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_N_ServerStateMachine.
+
+        Args:
+            server_pair: The KxPair instance representing the server's key exchange pair.
+            loop: The asyncio event loop to use for the state machine.
+            psk: An optional pre-shared key to use for the key exchange.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
@@ -709,6 +770,10 @@ class KX_N_ServerStateMachine(BaseMachine):
 
 
 class KX_KK_ClientStateMachine(BaseMachine):
+    """
+    KX_KK_ClientStateMachine implements the client side of the KX_KK key exchange protocol.
+    """
+
     # INITIAL               => data_to_send => WAITING_FOR_PACKET2
     # WAITING_FOR_PACKET2   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET2 if not enough data)
 
@@ -731,6 +796,16 @@ class KX_KK_ClientStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_KK_ClientStateMachine.
+
+        Args:
+            client_pair: The KxPair instance representing the client's key exchange pair.
+            server_public_key: The public key of the server to which we are connecting.
+            loop: The asyncio event loop to use for the state machine.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
@@ -764,6 +839,10 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
 
 class KX_KK_ServerStateMachine(BaseMachine):
+    """
+    KX_KK_ServerStateMachine implements the server side of the KX_KK key exchange protocol.
+    """
+
     # INITIAL               => data_to_send => WAITING_FOR_PACKET1
     # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
 
@@ -786,6 +865,16 @@ class KX_KK_ServerStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_KK_ServerStateMachine.
+
+        Args:
+            server_pair: The KxPair instance representing the server's key exchange pair.
+            client_public_key: The public key of the client that is connecting to the server.
+            loop: The asyncio event loop to use for the state machine.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
@@ -814,6 +903,10 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
 
 class KX_XX_ClientStateMachine(BaseMachine):
+    """
+    KX_XX_ClientStateMachine implements the client side of the KX_XX key exchange protocol.
+    """
+
     # INITIAL                => data_to_send => WAITING_FOR_PACKET2
     # WAITING_FOR_PACKET2    => receive_data => WAITING_FOR_SERVER_ACK (or stay in WAITING_FOR_PACKET2 if not enough data)
     # WAITING_FOR_SERVER_ACK => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
@@ -839,6 +932,16 @@ class KX_XX_ClientStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_XX_ClientStateMachine.
+
+        Args:
+            client_pair: The KxPair instance representing the client's key exchange pair.
+            loop: The asyncio event loop to use for the state machine.
+            psk: An optional pre-shared key to use for the key exchange.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
@@ -891,6 +994,10 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
 
 class KX_XX_ServerStateMachine(BaseMachine):
+    """
+    KX_XX_ServerStateMachine implements the server side of the KX_XX key exchange protocol.
+    """
+
     # INITIAL               => data_to_send => WAITING_FOR_PACKET1
     # WAITING_FOR_PACKET1   => receive_data => WAITING_FOR_PACKET3 (or stay in WAITING_FOR_PACKET1 if not enough data)
     # WAITING_FOR_PACKET3   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET3 if not enough data)
@@ -916,6 +1023,16 @@ class KX_XX_ServerStateMachine(BaseMachine):
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
+        """
+        Initializes the KX_XX_ServerStateMachine.
+
+        Args:
+            server_pair: The KxPair instance representing the server's key exchange pair.
+            loop: The asyncio event loop to use for the state machine.
+            psk: An optional pre-shared key to use for the key exchange.
+            received_msg_max_size: The maximum size of messages that can be received, in bytes.
+            sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
+        """
         super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
@@ -966,38 +1083,89 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
 
 class StreamReaderWriter:
+    """
+    StreamReaderWriter provides a simple interface for reading and writing messages.
+
+    Attributes:
+        peername: The name of the peer this reader/writer is connected to.
+    """
+
     def __init__(self, protocol: "KXProtocol") -> None:
         self._protocol: KXProtocol = protocol
         self.peername = protocol.peername
 
     def close(self) -> None:
+        """
+        Closes the stream reader/writer.
+        """
         self._protocol.close()
 
     def is_closing(self) -> bool:
+        """
+        Returns whether the stream is closing.
+        """
         return self._protocol.is_closing()
 
     async def wait_closed(self) -> None:
+        """
+        Waits until the stream is closed.
+        """
         await self._protocol.wait_closed()
 
     async def get_next_msg(self) -> tuple[bytes, int]:
+        """
+        Reads the next message from the stream.
+
+        Returns:
+            The decrypted message.
+            The message ID associated with the decrypted message.
+        """
         return await self._protocol.get_next_msg()
 
     async def write_cancel_msg(self, target_msg_id: int) -> None:
+        """
+        Writes a cancel message to the server.
+
+        This method only makes sense for a request/response client. It asks the server to cancel the processing of a
+        previously sent message.
+
+        Args:
+            target_msg_id: The message ID of the message to cancel.
+        """
         await self._protocol.write_cancel_msg(target_msg_id)
 
     async def write_msg(self, msg: Buffer, msg_id: int) -> None:
+        """
+        Writes a message to the stream after encrypting it.
+
+        Args:
+            msg: The message to write, as a bytes-like object.
+            msg_id: The message ID to use for the message.
+        """
         await self._protocol.write_msg(msg, msg_id)
 
     def write_eof(self) -> None:
+        """
+        Writes an EOF to the stream.
+        """
         self._protocol.write_eof()
 
     def can_write_eof(self) -> bool:
+        """
+        Returns whether the stream can write an EOF.
+        """
         return self._protocol.can_write_eof()
 
     async def drain(self) -> None:
+        """
+        Waits until all data has been written to the stream.
+        """
         await self._protocol.drain()
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
+        """
+        Returns extra information about the stream.
+        """
         return self._protocol.get_extra_info(name, default)
 
 
