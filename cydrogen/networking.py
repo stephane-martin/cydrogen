@@ -175,6 +175,15 @@ A set containing all possible states of all the state machines.
 """
 
 
+@dataclass(frozen=True, slots=True)
+class Destination:
+    state: MState
+    callback: Callable
+
+
+type TransitionsByOrigState = dict[MState, Destination]
+
+
 class InvalidTransitionError(RuntimeError):
     """
     Exception raised when an invalid transition is attempted in the state machine.
@@ -191,15 +200,6 @@ class InvalidTransitionError(RuntimeError):
         super().__init__(f"Invalid transition {orig_state} => {event}")
         self.event = event
         self.orig_state = orig_state
-
-
-@dataclass
-class Destination:
-    state: MState
-    callback: Callable
-
-
-type TransitionsByOrigState = dict[MState, Destination]
 
 
 class Transitions:
