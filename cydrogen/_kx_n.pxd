@@ -7,8 +7,6 @@ from ._decls cimport hydro_kx_keypair, hydro_kx_state
 from ._secretbox cimport SecretBoxKey
 from ._utils cimport SafeMemory
 
-from dataclasses import dataclass
-
 
 cdef class Psk(BaseKey):
     pass
