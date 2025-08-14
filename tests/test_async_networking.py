@@ -44,7 +44,7 @@ class H(RequestResponseHandler):
         return msg.upper()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_msg_queue() -> None:
     q: MsgQueue = MsgQueue()
     assert q.bytesize == 0
@@ -71,7 +71,7 @@ async def wait_and_put(q: MsgQueue, msg: bytes, msg_id: int = 0) -> None:
     q.put_nowait(msg, msg_id)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_msg_queue_waiting() -> None:
     loop = asyncio.get_running_loop()
     q: MsgQueue = MsgQueue()
@@ -87,7 +87,7 @@ async def test_msg_queue_waiting() -> None:
     assert msg_id == 3
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_async_client_async_server_kx_xx() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
@@ -102,7 +102,7 @@ async def test_async_client_async_server_kx_xx() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_async_client_async_server_kx_kk() -> None:
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
     await server.start_serving()
@@ -117,7 +117,7 @@ async def test_async_client_async_server_kx_kk() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_two_async_clients_async_server_kx_n() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
@@ -142,14 +142,14 @@ async def test_two_async_clients_async_server_kx_n() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_without_server() -> None:
     with pytest.raises(ConnectionRefusedError):
         async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=0):
             pass
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_delayed_server() -> None:
     async def delayed_server() -> asyncio.Server:
         await asyncio.sleep(2)
@@ -170,7 +170,7 @@ async def test_client_delayed_server() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_too_late_server() -> None:
     async def delayed_server() -> asyncio.Server:
         await asyncio.sleep(10)
@@ -190,7 +190,7 @@ async def test_client_too_late_server() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_server_kx_n_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
@@ -203,7 +203,7 @@ async def test_client_server_kx_n_with_wrong_psk() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_server_kx_xx_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
@@ -216,7 +216,7 @@ async def test_client_server_kx_xx_with_wrong_psk() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_server_kx_n_with_wrong_server_pubkey() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR_WRONG, psk=PSK)
     await server.start_serving()
@@ -229,7 +229,7 @@ async def test_client_server_kx_n_with_wrong_server_pubkey() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_server_kx_kk_with_wrong_server_pubkey() -> None:
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR_WRONG, CLIENT_PUBKEY)
     await server.start_serving()
@@ -242,7 +242,7 @@ async def test_client_server_kx_kk_with_wrong_server_pubkey() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_server_kx_kk_with_wrong_client_pubkey() -> None:
     server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
     await server.start_serving()
@@ -259,7 +259,7 @@ async def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
     raise RuntimeError("nope")
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_fail_validate_server_pubkey() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR)
     await server.start_serving()
@@ -273,7 +273,7 @@ async def test_fail_validate_server_pubkey() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_fail_validate_client_pubkey() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, validate_client_key=failing_validation)
     await server.start_serving()
@@ -291,7 +291,7 @@ async def test_fail_validate_client_pubkey() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_sends_too_big_message() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
@@ -306,7 +306,7 @@ async def test_client_sends_too_big_message() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_server_receives_too_big_message() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, received_msg_max_size=10000)
     await server.start_serving()
@@ -324,7 +324,7 @@ class SendTooBigHandler(RequestResponseHandler):
         return b"x" * 10001  # This is too big
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_server_sends_too_big_message() -> None:
     # constrain the server to send messages of max size 10000, but instruct it to send a message bigger than that
     server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
@@ -340,7 +340,7 @@ async def test_server_sends_too_big_message() -> None:
         await server.wait_closed()
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_client_receives_too_big_message() -> None:
     server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
