@@ -504,13 +504,13 @@ class BaseMachine:
 
     def trigger(self, ev: TransitionEvent, *args):  # noqa: ANN002, ANN201
         if ev == TransitionEvent.RECEIVE_DATA:
-            return self.receive_data(*args)
+            return self._receive_data(*args)
         dest = self._transitions.get(ev, self._state)
         res = dest.callback(*args)
         self._state = dest.state
         return res
 
-    def receive_data(self, nbytes: int) -> None:
+    def _receive_data(self, nbytes: int) -> None:
         self._read_buffers.buffer_updated(nbytes)
         try:
             while True:
@@ -1190,7 +1190,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
-        self._machine.receive_data(nbytes)
+        self._machine.trigger(TransitionEvent.RECEIVE_DATA, nbytes)
         self.maybe_pause_reading()  # TODO: move ?
         data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:

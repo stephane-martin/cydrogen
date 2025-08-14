@@ -114,7 +114,7 @@ async def sync_client_async_server(client: BaseTCPClient, server: asyncio.Server
     assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_sync_client_async_server_kx_n() -> None:
     """
     Test that a synchronous client KX_N client can communicate with an asynchronous KX_N server.
@@ -124,7 +124,7 @@ async def test_sync_client_async_server_kx_n() -> None:
     await sync_client_async_server(client, server)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_sync_client_async_server_kx_kk() -> None:
     """
     Test that a synchronous client KX_KK client can communicate with an asynchronous KX_KK server.
@@ -134,7 +134,7 @@ async def test_sync_client_async_server_kx_kk() -> None:
     await sync_client_async_server(client, server)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_sync_client_async_server_kx_xx() -> None:
     """
     Test that a synchronous client KX_XX client can communicate with an asynchronous KX_XX server.
@@ -144,7 +144,7 @@ async def test_sync_client_async_server_kx_xx() -> None:
     await sync_client_async_server(client, server)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_async_client_sync_server_kx_n() -> None:
     """
     Test that an asynchronous client KX_N client can communicate with an synchronous KX_N server.
@@ -158,7 +158,7 @@ async def test_async_client_sync_server_kx_n() -> None:
     await async_client_sync_server(client, server)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_async_client_sync_server_kx_kk() -> None:
     """
     Test that an asynchronous client KX_KK client can communicate with an synchronous KX_KK server.
@@ -172,7 +172,7 @@ async def test_async_client_sync_server_kx_kk() -> None:
     await async_client_sync_server(client, server)
 
 
-@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.asyncio
 async def test_async_client_sync_server_kx_xx() -> None:
     """
     Test that an asynchronous client KX_XX client can communicate with an synchronous KX_XX server.
