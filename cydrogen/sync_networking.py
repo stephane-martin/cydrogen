@@ -9,7 +9,6 @@ from collections.abc import Buffer, Callable, Iterator
 from contextlib import suppress
 from typing import Any, BinaryIO, Self
 
-from ._exceptions import ClientClosedError, DecryptException, KeyExchangeException
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
     KX_KK_PACKET2BYTES,
@@ -24,6 +23,7 @@ from ._kx_n import (
     client_init_kx_n,
 )
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
+from .exceptions import ClientClosedError, DecryptException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
 

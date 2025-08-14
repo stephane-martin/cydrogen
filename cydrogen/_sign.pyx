@@ -1,19 +1,21 @@
 # cython: language_level=3
 
-import base64
-import threading
-
 from cpython.buffer cimport PyBuffer_FillInfo
 
 from ._basekey cimport BaseKey
 from ._decls cimport hydro_sign_PUBLICKEYBYTES, hydro_sign_SECRETKEYBYTES, hydro_sign_BYTES
 from ._decls cimport sign_keygen, sign_init, sign_update, sign_final_create, sign_final_verify
 from ._context cimport make_context
-from ._exceptions cimport SignException, VerifyException
 from ._hash cimport HashKey
 from ._masterkey cimport MasterKey
 from ._secretbox cimport SecretBoxKey
 from ._utils cimport FileOpener, SafeMemory
+
+import base64
+import threading
+
+from .exceptions import SignException, VerifyException
+
 
 cdef const int hydro_x25519_PUBLICKEYBYTES = 32
 cdef const int hydro_x25519_SECRETKEYBYTES = 32

@@ -1,21 +1,21 @@
 # cython: language_level=3
 
-import base64
-
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.string cimport memcmp
 
 from ._basekey cimport BaseKey
 from ._context cimport make_context
-from ._exceptions cimport DecryptException, EncryptException, MessageTooBigException
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._utils cimport FileOpener, SafeMemory, TeeWriter, make_safe_reader, make_safe_writer, make_async_safe_reader
 from ._utils cimport store64, load64, store32, load32
-
 from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
+
+import base64
+
+from .exceptions import DecryptException, EncryptException, MessageTooBigException
 
 
 cdef bytes _ENC_MSG_MARKER = b"qN\x00\x00"          # used internally here

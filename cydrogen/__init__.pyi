@@ -22,17 +22,6 @@ from ._decls import (
     shuffle_buffer,
     unpad,
 )
-from ._exceptions import (
-    ClientClosedError,
-    CyException,
-    DecryptException,
-    DeriveException,
-    EncryptException,
-    KeyExchangeException,
-    MessageTooBigException,
-    SignException,
-    VerifyException,
-)
 from ._hash import Hash, HashKey, hash_file
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
@@ -66,6 +55,17 @@ from ._secretbox import (
 )
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
 from ._utils import Counter, load16, load32, load64, store16, store32, store64
+from .exceptions import (
+    ClientClosedError,
+    CyException,
+    DecryptException,
+    DeriveException,
+    EncryptException,
+    KeyExchangeException,
+    MessageTooBigException,
+    SignException,
+    VerifyException,
+)
 
 __all__ = [
     "ENC_MSG_HEADER_SIZE",

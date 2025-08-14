@@ -13,12 +13,12 @@ from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_k
 from ._decls cimport kx_n_1, kx_n_2
 from ._decls cimport kx_kk_1, kx_kk_2, kx_kk_3
 from ._decls cimport kx_xx_1, kx_xx_2, kx_xx_3, kx_xx_4
-from ._exceptions cimport KeyExchangeException
 from ._secretbox cimport SecretBoxKey
 
 import base64
 import threading
 
+from .exceptions import KeyExchangeException
 
 KX_PAIR_SIZE = sizeof(hydro_kx_keypair)
 KX_N_PACKET1BYTES = hydro_kx_N_PACKET1BYTES
