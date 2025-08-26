@@ -432,8 +432,6 @@ class BaseMachine:
         self._rbox: SecretBox
         self._tbox: SecretBox
 
-        self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
-        self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
         self._exception: Exception | None = None
 
     @property
@@ -456,58 +454,28 @@ class BaseMachine:
         """
         return self._read_buffers.get_buffer()
 
-    @property
-    def received_size(self) -> int:
+    def decrypt_message(self, msg: Buffer) -> tuple[bytes, int]:
         """
-        Returns the total size of received messages that have not been processed yet.
-        """
-        return self._received_decrypted_msgs.bytesize
+        Decrypts a message using the session keys established during the key exchange.
 
-    async def read_message(self) -> tuple[bytes, int]:
-        """
-        Reads a decrypted message from the queue of received decrypted messages.
+        Decryption may take some time, so it is recommended to call this method in a separate thread
+        to avoid to block the event loop. As the decryption only depends on the session keys,
+        and the session keys are constant after the key exchange is completed, this method is thread-safe.
+
+        Args:
+            msg: The encrypted message to decrypt, as a bytes-like object.
 
         Returns:
             The decrypted message as bytes.
             The message ID associated with the decrypted message.
         """
-        return await self._received_decrypted_msgs.get()
+        emsg = EncryptedMessage.from_bytes(msg)
+        msg_id = emsg.msg_id
+        plaintext: bytes = self._rbox.decrypt(emsg)
+        return plaintext, msg_id
 
-    async def decrypt_received_messages(self) -> None:
-        """
-        Decrypts received encrypted messages and pushes the decrypted messages to the queue of received decrypted messages.
-
-        This is a long running coroutine that continuously reads encrypted messages from the queue of received encrypted messages,
-        decrypts them, and pushes the decrypted messages to the queue of received decrypted messages.
-
-        The function normally runs until the queue of received encrypted messages is closed (e.g. when the connection is lost or closed).
-        But if an an exception occurs during decryption, the coroutine will raise a `DecryptException` and stop processing further messages.
-
-        This coroutine is scheduled as a task by the Protocol when the key exchange is completed successfully.
-        """
-        logger.info("starting to decrypt received messages")
-        while True:
-            try:
-                incoming, _ = await self._received_encrypted_msgs.get()
-            except Exception as ex:  # noqa: BLE001
-                # this means that the queue of encrypted messages has been closed
-                logger.info("decrypt received messages has finished: %s", ex)
-                # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
-                self._received_decrypted_msgs.close(ex)
-                return
-            # decrypt the message and push the result downstream to _received_decrypted_msgs queue
-            emsg = EncryptedMessage.from_bytes(incoming)
-            msg_id = emsg.msg_id
-            try:
-                plaintext: bytes = await asyncio.to_thread(self._rbox.decrypt, emsg)
-                del emsg
-                self._read_buffers.release_bytearray(incoming)  # return the mview to the freelist
-                self._received_decrypted_msgs.put_nowait(plaintext, msg_id)
-            except Exception as ex:
-                # we won't decrypt any more message after the decryption failure, so we close the queue of decrypted messages
-                self._received_decrypted_msgs.close(ex)
-                # DecryptException will be captured by the protocol, which will abort the transport
-                raise DecryptException("Failed to decrypt message from peer") from ex
+    def release_encrypted_message(self, mv: Buffer) -> None:
+        self._read_buffers.release_bytearray(mv)
 
     def trigger(self, ev: TransitionEvent, *args):  # noqa: ANN002, ANN201
         """
@@ -527,16 +495,20 @@ class BaseMachine:
         self._state = dest.state
         return res
 
-    def _receive_data(self, nbytes: int) -> None:
+    def _receive_data(self, nbytes: int) -> list[memoryview]:
         self._read_buffers.buffer_updated(nbytes)
+        emsgs: list[memoryview] = []
         try:
             while True:
                 dest = self._transitions.get(TransitionEvent.RECEIVE_DATA, self._state)
-                if not dest.callback():
-                    # not enough data
-                    return
-                # when callback returns False, it means there was not enough available data to advance the state
-                # when callback returns True, there was some advance, hence set the destination state
+                result = dest.callback()
+                if not result:
+                    # when callback returns False, it means there was not enough available data to advance the state
+                    return emsgs
+                # result may be True or a memoryview
+                if result is not True:
+                    emsgs.append(result)
+                # update the state as the true result means there was some advancement
                 old_state = self._state
                 self._state = dest.state
                 if old_state.kx_is_pending() and self._state == MState.CONNECTED:
@@ -545,20 +517,22 @@ class BaseMachine:
             self._fail_kx(ex)
             raise
 
-    def _connection_lost(self, exc: Exception | None) -> None:
+    def _receive_data_connected(self) -> memoryview | None:
+        # may raise MessageTooBigException if the received message is too big
+        return self._read_buffers.consume_message()
+
+    def _connection_lost(self, exc: Exception | None) -> Exception:
         # _reade_eof may have been called before this method, so we check if the exception is already set
         if self._exception is None:
             self._exception = EOF_EXCEPTION if exc is None else exc
-            self._received_encrypted_msgs.close(self._exception)
-        if self._state.kx_is_pending():
-            self._fail_kx(self._exception)
+        self._fail_kx(self._exception)
+        return self._exception
 
-    def _reader_eof(self) -> None:
+    def _reader_eof(self) -> Exception:
         if self._exception is None:
             self._exception = EOF_EXCEPTION
-            self._received_encrypted_msgs.close(self._exception)
-        if self._state.kx_is_pending():
-            self._fail_kx(self._exception)
+        self._fail_kx(self._exception)
+        return self._exception
 
     def _writer_eof(self) -> None:
         if self._state.kx_is_pending():
@@ -615,16 +589,6 @@ class BaseMachine:
         except Exception as ex:
             self._fail_kx(ex)
             raise
-
-    def _receive_data_connected(self) -> bool:
-        # we don't call _get_small_message here, because the message may be big and decrypting it may block the loop
-        # may raise MessageTooBigException if the received message is too big
-        encrypted_data = self._read_buffers.consume_message()
-        if encrypted_data is None:
-            # not enough data to read more messages, we're finished for now
-            return False
-        self._received_encrypted_msgs.put_nowait(encrypted_data)
-        return True
 
     def _data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()
@@ -1197,9 +1161,19 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._task: asyncio.Task | None = None
         self._validation_fut: asyncio.Future = self._loop.create_future()
 
+        self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
+        self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
+
         self.peername: str = ""
 
         self._transport: asyncio.Transport
+
+    @property
+    def received_size(self) -> int:
+        """
+        Returns the total size of received messages that have not been processed yet.
+        """
+        return self._received_decrypted_msgs.bytesize
 
     @property
     def machine(self) -> BaseMachine:
@@ -1219,7 +1193,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         await self._closed_fut
 
     async def get_next_msg(self) -> tuple[bytes, int]:
-        return await self._machine.read_message()
+        return await self._received_decrypted_msgs.get()
 
     async def write_cancel_msg(self, target_msg_id: int) -> None:
         cancel_msg = bytearray(8)
@@ -1294,9 +1268,43 @@ class KXProtocol(asyncio.BufferedProtocol):
 
         self._task = self._loop.create_task(self.validate_and_handle())
 
+    async def _decrypt_received_messages(self) -> None:
+        """
+        Decrypts received encrypted messages and pushes the decrypted messages to the queue of received decrypted messages.
+
+        This is a long running coroutine that continuously reads encrypted messages from the queue of received encrypted messages,
+        decrypts them, and pushes the decrypted messages to the queue of received decrypted messages.
+
+        The function normally runs until the queue of received encrypted messages is closed (e.g. when the connection is lost or closed).
+        But if an an exception occurs during decryption, the coroutine will raise a `DecryptException` and stop processing further messages.
+
+        This coroutine is scheduled as a task by the Protocol when the key exchange is completed successfully.
+        """
+        logger.info("starting to decrypt received messages")
+        while True:
+            try:
+                incoming, _ = await self._received_encrypted_msgs.get()
+            except Exception as ex:  # noqa: BLE001
+                # this means that the queue of encrypted messages has been closed
+                logger.info("decrypt received messages has finished: %s", ex)
+                # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
+                self._received_decrypted_msgs.close(ex)
+                return
+            # decrypt the message and push the result downstream to _received_decrypted_msgs queue
+            try:
+                plaintext, msg_id = await asyncio.to_thread(self._machine.decrypt_message, incoming)
+                self._received_decrypted_msgs.put_nowait(plaintext, msg_id)
+            except Exception as ex:
+                # we won't decrypt any more message after the decryption failure, so we close the queue of decrypted messages
+                self._received_decrypted_msgs.close(ex)
+                # DecryptException will be captured by the protocol, which will abort the transport
+                raise DecryptException("Failed to decrypt message from peer") from ex
+            finally:
+                self._machine.release_encrypted_message(incoming)  # return the mview to the freelist
+
     async def continuous_decrypt(self) -> None:
         try:
-            await self._machine.decrypt_received_messages()
+            await self._decrypt_received_messages()
         except Exception:
             logger.exception("Continuous decryption task failed")
             self._transport.abort()
@@ -1358,7 +1366,8 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
-        self._machine.trigger(TransitionEvent.RECEIVE_DATA, nbytes)
+        for msg in self._machine.trigger(TransitionEvent.RECEIVE_DATA, nbytes):
+            self._received_encrypted_msgs.put_nowait(msg)
         self.maybe_pause_reading()  # TODO: move ?
         data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
@@ -1367,9 +1376,9 @@ class KXProtocol(asyncio.BufferedProtocol):
     def maybe_pause_reading(self) -> None:
         if self._reading_paused:
             return
-        if self._machine.received_size > 2 * self._limit:
+        if self.received_size > 2 * self._limit:
             try:
-                logger.info("Transport was asked to pause reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+                logger.info("Transport was asked to pause reading, received_size: %d, limit: %d", self.received_size, self._limit)
                 self._transport.pause_reading()
                 self._reading_paused = True
             except NotImplementedError:
@@ -1378,8 +1387,8 @@ class KXProtocol(asyncio.BufferedProtocol):
     def maybe_resume_reading(self) -> None:
         if not self._reading_paused:
             return
-        if self._machine.received_size <= self._limit:
-            logger.info("Transport asked to resume reading, received_size: %d, limit: %d", self._machine.received_size, self._limit)
+        if self.received_size <= self._limit:
+            logger.info("Transport asked to resume reading, received_size: %d, limit: %d", self.received_size, self._limit)
             self._reading_paused = False
             self._transport.resume_reading()
 
@@ -1387,8 +1396,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         logger.info("connection lost for %s, exc: %s", self.peername, exc)
         if isinstance(exc, ConnectionError):
             exc = EOF_EXCEPTION
-        self._machine.trigger(TransitionEvent.CONNECTION_LOST, exc)
-
+        self._received_encrypted_msgs.close(self._machine.trigger(TransitionEvent.CONNECTION_LOST, exc))  # unblock readers
         # make wait_closed() return
         if not self._closed_fut.done():
             if exc is None:
@@ -1410,7 +1418,7 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
-        self._machine.trigger(TransitionEvent.READER_EOF)
+        self._received_encrypted_msgs.close(self._machine.trigger(TransitionEvent.READER_EOF))  # unblock readers
         return False
 
     async def drain(self) -> None:

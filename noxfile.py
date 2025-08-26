@@ -76,6 +76,7 @@ def test(session: nox.Session) -> None:
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
     session.install(".")
     session.run("pytest")
+    # session.run("pytest", "-v")
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
