@@ -1,10 +1,13 @@
 import asyncio
 import contextvars
 import logging
+import os
 import sys
+import types
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Buffer, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Self
@@ -53,6 +56,8 @@ EOF_EXCEPTION = EOFError("Connection closed by peer")
 """
 An exception that may be raised when the peer closes the connection.
 """
+
+N_CPUS = os.process_cpu_count() or 1
 
 
 class MState(StrEnum):
@@ -1146,6 +1151,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         client_handler: StreamHandlerFunction | None = None,
         limit: int = _DEFAULT_LIMIT,
         validate_peer_key: ValidatePeerKeyFunc | None = None,
+        executor: ThreadPoolExecutor,
     ) -> None:
         self._loop = loop
         self._reading_paused = False
@@ -1159,7 +1165,9 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._kx_completed = machine.kx_completed
         self._validate_peer_key: ValidatePeerKeyFunc = validate_peer_key or dummy_validate_peer_key
         self._task: asyncio.Task | None = None
+        self._decrypt_task: asyncio.Task | None = None
         self._validation_fut: asyncio.Future = self._loop.create_future()
+        self._executor = executor
 
         self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
         self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
@@ -1226,7 +1234,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             raise MessageTooBigException
         # execute encryption in a separate thread to avoid blocking the event loop
         # may raise MessageTooBigException if the message is too big
-        ciphertext = await asyncio.to_thread(self._machine.encrypt_message, msg, msg_id)
+        ciphertext = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
         self._machine.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, msg_id)
         data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
         if data:
@@ -1292,7 +1300,7 @@ class KXProtocol(asyncio.BufferedProtocol):
                 return
             # decrypt the message and push the result downstream to _received_decrypted_msgs queue
             try:
-                plaintext, msg_id = await asyncio.to_thread(self._machine.decrypt_message, incoming)
+                plaintext, msg_id = await self._loop.run_in_executor(self._executor, self._machine.decrypt_message, incoming)
                 self._received_decrypted_msgs.put_nowait(plaintext, msg_id)
             except Exception as ex:
                 # we won't decrypt any more message after the decryption failure, so we close the queue of decrypted messages
@@ -1406,15 +1414,25 @@ class KXProtocol(asyncio.BufferedProtocol):
 
         self._connection_lost = True  # makes next calls to drain() raise EOFError
 
-        if not self._writing_paused:
-            return
-        # some writers may be on pause, we need to unblock them
-        for dfut in self._drain_futures:
-            if not dfut.done():
-                if exc is None:
-                    dfut.set_result(None)
-                else:
-                    dfut.set_exception(exc)
+        if self._writing_paused:
+            # some writers may be on pause, we need to unblock them
+            for dfut in self._drain_futures:
+                if not dfut.done():
+                    if exc is None:
+                        dfut.set_result(None)
+                    else:
+                        dfut.set_exception(exc)
+
+        if self._decrypt_task is not None and self._client_handler is None:
+            # because we received connection_lost, it is not possible anymore to send encrypted messages
+            # because self._client_handler is None, we know we are client side
+            # because the queue of encrypted messages has been closed, we know that the decrypt task will finish soon
+            # when _decrypt_task finishes, we also know we wont be decrypting any more message
+            # so in that case we can shutdown the executor as no encryption/decryption will happen anymore
+            def callback(_: asyncio.Future) -> None:
+                self._executor.shutdown(wait=False)
+
+            self._decrypt_task.add_done_callback(callback)
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
@@ -1453,19 +1471,25 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.get_extra_info(name, default)
 
 
-async def _connect(h: str, p: int, fac: Callable[[], KXProtocol], retry: int, retry_wait: int) -> tuple[asyncio.Transport, KXProtocol]:
+async def _connect(
+    host: str,
+    port: int,
+    protocol_factory: Callable[[], KXProtocol],
+    retry: int,
+    retry_wait: int,
+) -> tuple[asyncio.Transport, KXProtocol]:
     loop = asyncio.get_running_loop()
     while True:
         try:
-            logger.debug("Connecting to %s:%d...", h, p)
-            transport, protocol = await loop.create_connection(fac, h, p)
-            logger.debug("Connected to %s:%d", h, p)
+            logger.debug("Connecting to %s:%d...", host, port)
+            transport, protocol = await loop.create_connection(protocol_factory, host, port)
+            logger.debug("Connected to %s:%d", host, port)
             return transport, protocol
         except ConnectionRefusedError:
             if retry == 0:
                 raise
         retry -= 1
-        logger.warning("Connection to %s:%d failed", h, p)
+        logger.warning("Connection to %s:%d failed", host, port)
         if retry_wait > 0:
             logger.info("Retrying connection in %d seconds...", retry_wait)
             await asyncio.sleep(retry_wait)
@@ -1481,11 +1505,18 @@ async def _open_connection(
     retry_wait: int,
     loop: asyncio.AbstractEventLoop,
 ) -> StreamReaderWriter:
+    # one executor per client
+    executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
+
     def protocol_factory() -> KXProtocol:
         machine = machine_factory()
-        return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key)
+        return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key, executor=executor)
 
-    transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
+    try:
+        transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
+    except:
+        executor.shutdown(wait=False)
+        raise
     try:
         await protocol.wait_for_key_exchange()
     except Exception as ex:
@@ -1661,7 +1692,7 @@ class BaseAsyncRequestResponseClient:
                 fut = self._pending_requests.get(msg_id)
                 if fut is None:
                     await self.handle_unexpected_response(msg, msg_id)
-                else:
+                elif not fut.done():
                     fut.set_result(msg)
         except Exception as ex:  # noqa: BLE001
             self.close(ex)
@@ -1919,12 +1950,26 @@ def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHand
     raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
 
 
-async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port: int) -> asyncio.Server:
+async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port: int, executor: ThreadPoolExecutor) -> asyncio.Server:
     loop = asyncio.get_running_loop()
+    server: asyncio.Server
     if sys.version_info < (3, 13):
         # python 3.12 does not support keep_alive here
-        return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False)
-    return await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+        server = await loop.create_server(factory, host, port, reuse_address=True, start_serving=False)
+    else:
+        server = await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+
+    # modify the server's _wakeup method to also shutdown the executor
+    original_wakeup = server._wakeup  # type: ignore[attr-defined]  # noqa: SLF001
+
+    def _wakeup(self: asyncio.Server) -> None:  # noqa: ARG001
+        try:
+            original_wakeup()
+        finally:
+            executor.shutdown(wait=False)
+
+    server._wakeup = types.MethodType(_wakeup, server)  # type: ignore[attr-defined]  # noqa: SLF001
+    return server
 
 
 async def start_kx_n_server(
@@ -1939,14 +1984,20 @@ async def start_kx_n_server(
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
     loop = asyncio.get_running_loop()
+    # a single executor per server, shared by all clients
+    executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
         machine = KX_N_ServerStateMachine(
             server_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
-    return await _loop_create_server(factory, host, port)
+    try:
+        return await _loop_create_server(factory, host, port, executor)
+    except:
+        executor.shutdown(wait=False)
+        raise
 
 
 async def start_kx_kk_server(
@@ -1961,14 +2012,19 @@ async def start_kx_kk_server(
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
     loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
         machine = KX_KK_ServerStateMachine(
             server_pair, client_public_key, loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
-    return await _loop_create_server(factory, host, port)
+    try:
+        return await _loop_create_server(factory, host, port, executor)
+    except:
+        executor.shutdown(wait=False)
+        raise
 
 
 async def start_kx_xx_server(
@@ -1984,11 +2040,18 @@ async def start_kx_xx_server(
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
     loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
         machine = KX_XX_ServerStateMachine(
             server_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key)
+        return KXProtocol(
+            machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key, executor=executor
+        )
 
-    return await _loop_create_server(factory, host, port)
+    try:
+        return await _loop_create_server(factory, host, port, executor)
+    except:
+        executor.shutdown(wait=False)
+        raise
