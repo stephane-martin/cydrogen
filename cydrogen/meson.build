@@ -126,10 +126,11 @@ python_sources = [
   '_utils.pyi',
   '_decls.pxd',
   '_decls.pyi',
+  '_protocols.py',
   'exceptions.py',
   'networking.py',
+  'async_networking.py',
   'sync_networking.py',
-  '_protocols.py',
   'py.typed',
 ]
 
