@@ -1,7 +1,6 @@
 import asyncio
 import contextvars
 import logging
-import sys
 import types
 from abc import ABC, abstractmethod
 from collections import deque
@@ -21,6 +20,7 @@ from .networking import (
     CANCEL_MESSAGE_ID,
     EOF_EXCEPTION,
     N_CPUS,
+    PY312,
     BaseMachine,
     InvalidTransitionError,
     KX_KK_ClientStateMachine,
@@ -967,7 +967,7 @@ def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHand
 async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port: int, executor: ThreadPoolExecutor) -> asyncio.Server:
     loop = asyncio.get_running_loop()
     server: asyncio.Server
-    if sys.version_info < (3, 13):
+    if PY312:
         # python 3.12 does not support keep_alive here
         server = await loop.create_server(factory, host, port, reuse_address=True, start_serving=False)
     else:

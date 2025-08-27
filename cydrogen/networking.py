@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import logging
 import os
+import sys
 from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -42,7 +43,9 @@ EOF_EXCEPTION = EOFError("Connection closed by peer")
 An exception that may be raised when the peer closes the connection.
 """
 
-N_CPUS = os.process_cpu_count() or 1
+PY312 = sys.version_info < (3, 13)
+
+N_CPUS: int = (os.cpu_count() or 1) if PY312 else (os.process_cpu_count() or 1)
 
 
 class MState(StrEnum):
