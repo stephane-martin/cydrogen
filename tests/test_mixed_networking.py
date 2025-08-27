@@ -3,7 +3,7 @@ import queue
 
 import pytest
 from cydrogen import KxPair, Psk
-from cydrogen.networking import (
+from cydrogen.async_networking import (
     BaseAsyncRequestResponseClient,
     KX_KK_AsyncRequestResponseClient,
     KX_N_AsyncRequestResponseClient,

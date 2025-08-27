@@ -4,7 +4,7 @@ import time
 import pytest
 from cydrogen import ClientClosedError, KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
 from cydrogen._networking import MsgQueue
-from cydrogen.networking import (
+from cydrogen.async_networking import (
     KX_KK_AsyncRequestResponseClient,
     KX_N_AsyncRequestResponseClient,
     KX_XX_AsyncRequestResponseClient,
