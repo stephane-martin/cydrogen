@@ -172,6 +172,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._closed_fut = loop.create_future()
         self._limit = limit
         self._client_handler: StreamHandlerFunction | None = client_handler
+        assert isinstance(machine.kx_completed, asyncio.Future)
         self._kx_completed = machine.kx_completed
         self._validate_peer_key: ValidatePeerKeyFunc = validate_peer_key or dummy_validate_peer_key
         self._task: asyncio.Task | None = None
@@ -552,11 +553,12 @@ async def open_kx_n_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> StreamReaderWriter:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
+        kx_completed: asyncio.Future = loop.create_future()
         return KX_N_ClientStateMachine(
-            server_public_key, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_public_key, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
@@ -574,11 +576,12 @@ async def open_kx_kk_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> StreamReaderWriter:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
+        kx_completed: asyncio.Future = loop.create_future()
         return KX_KK_ClientStateMachine(
-            client_pair, server_public_key, loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            client_pair, server_public_key, kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
@@ -597,11 +600,12 @@ async def open_kx_xx_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> StreamReaderWriter:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
+        kx_completed: asyncio.Future = loop.create_future()
         return KX_XX_ClientStateMachine(
-            client_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            client_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
@@ -993,13 +997,14 @@ async def start_kx_n_server(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     # a single executor per server, shared by all clients
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
+        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_N_ServerStateMachine(
-            server_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
@@ -1021,12 +1026,13 @@ async def start_kx_kk_server(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
+        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_KK_ServerStateMachine(
-            server_pair, client_public_key, loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, client_public_key, kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
@@ -1049,12 +1055,13 @@ async def start_kx_xx_server(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
-    loop = asyncio.get_running_loop()
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
+        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_XX_ServerStateMachine(
-            server_pair, loop, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(
             machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key, executor=executor

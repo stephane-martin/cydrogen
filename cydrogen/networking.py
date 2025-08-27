@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import logging
 import os
 from collections.abc import Buffer, Callable
@@ -301,12 +302,14 @@ class BaseMachine:
     Subclasses should override this variable to specify which states are valid for that machine.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20) -> None:
+    def __init__(
+        self, kx_completed: concurrent.futures.Future | asyncio.Future, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20
+    ) -> None:
         """
         Initializes the BaseMachine.
 
         Args:
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
         """
@@ -395,7 +398,7 @@ class BaseMachine:
             },
         )
 
-        self._kx_completed: asyncio.Future = loop.create_future()
+        self._kx_completed = kx_completed
         self._invalid_states: set[MState] = ALL_STATES - self._valid_states
         self._state: MState = MState.INITIAL
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
@@ -408,7 +411,7 @@ class BaseMachine:
         self._exception: Exception | None = None
 
     @property
-    def kx_completed(self) -> asyncio.Future:
+    def kx_completed(self) -> asyncio.Future | concurrent.futures.Future:
         """
         Returns the Future that will be set when the key exchange is completed.
 
@@ -598,7 +601,7 @@ class KX_N_ClientStateMachine(BaseMachine):
     def __init__(
         self,
         server_public_key: KxPublicKey,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -609,12 +612,12 @@ class KX_N_ClientStateMachine(BaseMachine):
 
         Args:
             server_public_key: The public key of the server to which we are connecting.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_SERVER_ACK, MState.CONNECTED, self._receive_server_ack)
@@ -665,7 +668,7 @@ class KX_N_ServerStateMachine(BaseMachine):
     def __init__(
         self,
         server_pair: KxPair,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -676,12 +679,12 @@ class KX_N_ServerStateMachine(BaseMachine):
 
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
@@ -729,7 +732,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self,
         client_pair: KxPair,
         server_public_key: KxPublicKey,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -739,11 +742,11 @@ class KX_KK_ClientStateMachine(BaseMachine):
         Args:
             client_pair: The KxPair instance representing the client's key exchange pair.
             server_public_key: The public key of the server to which we are connecting.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET2, MState.CONNECTED, self._receive_packet2)
@@ -798,7 +801,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self,
         server_pair: KxPair,
         client_public_key: KxPublicKey,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -808,11 +811,11 @@ class KX_KK_ServerStateMachine(BaseMachine):
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
             client_public_key: The public key of the client that is connecting to the server.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
@@ -863,7 +866,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
     def __init__(
         self,
         client_pair: KxPair,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -874,12 +877,12 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
         Args:
             client_pair: The KxPair instance representing the client's key exchange pair.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
         self._transitions.add_one(
@@ -954,7 +957,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
     def __init__(
         self,
         server_pair: KxPair,
-        loop: asyncio.AbstractEventLoop,
+        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -965,12 +968,12 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
-            loop: The asyncio event loop to use for the state machine.
+            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(loop, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
         self._transitions.add_one(
