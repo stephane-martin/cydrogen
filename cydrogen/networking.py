@@ -498,7 +498,7 @@ class BaseMachine:
         return self._read_buffers.consume_message()
 
     def _connection_lost(self, exc: Exception | None) -> Exception:
-        # _reade_eof may have been called before this method, so we check if the exception is already set
+        # _reader_eof may have been called before this method, so we check if the exception is already set
         if self._exception is None:
             self._exception = EOF_EXCEPTION if exc is None else exc
         self._fail_kx(self._exception)
