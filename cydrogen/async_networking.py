@@ -29,8 +29,12 @@ from .networking import (
     KX_N_ServerStateMachine,
     KX_XX_ClientStateMachine,
     KX_XX_ServerStateMachine,
+    KxCompleted,
+    KxFailed,
+    KxProgress,
+    MachineOutEvent,
     MState,
-    TransitionEvent,
+    ReceivedEncryptedMessage,
 )
 
 logger = logging.getLogger("cydrogen")
@@ -172,8 +176,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._closed_fut = loop.create_future()
         self._limit = limit
         self._client_handler: StreamHandlerFunction | None = client_handler
-        assert isinstance(machine.kx_completed, asyncio.Future)
-        self._kx_completed = machine.kx_completed
+        self._kx_completed = loop.create_future()
         self._validate_peer_key: ValidatePeerKeyFunc = validate_peer_key or dummy_validate_peer_key
         self._task: asyncio.Task | None = None
         self._decrypt_task: asyncio.Task | None = None
@@ -214,12 +217,28 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def get_next_msg(self) -> tuple[bytes, int]:
         return await self._received_decrypted_msgs.get()
 
+    def _handle_machine_events(self, events: list[MachineOutEvent]) -> None:
+        for event in events:
+            self._handle_machine_event(event)
+
+    def _handle_machine_event(self, ev: MachineOutEvent) -> None:
+        match ev:
+            case KxCompleted():
+                self._kx_completed.set_result(None)
+            case KxFailed(exc=exc):
+                self._kx_completed.set_exception(exc)
+            case KxProgress():
+                pass
+            case ReceivedEncryptedMessage(emsg=emsg):
+                self._received_encrypted_msgs.put_nowait(emsg)
+
     async def write_cancel_msg(self, target_msg_id: int) -> None:
         cancel_msg = bytearray(8)
         store64(cancel_msg, target_msg_id)
         ciphertext = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
-        self._machine.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, CANCEL_MESSAGE_ID)
-        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
+        evs = self._machine.trigger_write_emessage(ciphertext, CANCEL_MESSAGE_ID)
+        self._handle_machine_events(evs)
+        data = self._machine.data_to_send()
         if data:
             self._transport.write(data)
             await self.drain()
@@ -246,14 +265,16 @@ class KXProtocol(asyncio.BufferedProtocol):
         # execute encryption in a separate thread to avoid blocking the event loop
         # may raise MessageTooBigException if the message is too big
         ciphertext = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
-        self._machine.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, msg_id)
-        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
+        evs = self._machine.trigger_write_emessage(ciphertext, msg_id)
+        self._handle_machine_events(evs)
+        data = self._machine.data_to_send()
         if data:
             self._transport.write(data)
             await self.drain()
 
     def write_eof(self) -> None:
-        self._machine.trigger(TransitionEvent.WRITER_EOF)
+        evs = self._machine.trigger_writer_eof()
+        self._handle_machine_events(evs)
         self._transport.write_eof()
 
     def can_write_eof(self) -> bool:
@@ -268,8 +289,9 @@ class KXProtocol(asyncio.BufferedProtocol):
         else:
             logger.info("new connection from client %s", self.peername)
         self._kx_completed.add_done_callback(self.key_exchange_completed)
-        # state is INITIAL, we need to move the state and if necessary send the first packet
-        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
+        evs = self._machine.trigger_connection_made()
+        self._handle_machine_events(evs)
+        data = self._machine.data_to_send()
         if data:
             self._transport.write(data)
 
@@ -385,10 +407,10 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
-        for msg in self._machine.trigger(TransitionEvent.RECEIVE_DATA, nbytes):
-            self._received_encrypted_msgs.put_nowait(msg)
+        evs = self._machine.trigger_receive_data(nbytes)
+        self._handle_machine_events(evs)
         self.maybe_pause_reading()  # TODO: move ?
-        data = self._machine.trigger(TransitionEvent.DATA_TO_SEND)
+        data = self._machine.data_to_send()
         if data:
             self._transport.write(data)
 
@@ -415,7 +437,9 @@ class KXProtocol(asyncio.BufferedProtocol):
         logger.info("connection lost for %s, exc: %s", self.peername, exc)
         if isinstance(exc, ConnectionError):
             exc = EOF_EXCEPTION
-        self._received_encrypted_msgs.close(self._machine.trigger(TransitionEvent.CONNECTION_LOST, exc))  # unblock readers
+        evs = self._machine.trigger_connection_lost(exc)
+        self._handle_machine_events(evs)
+        self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         # make wait_closed() return
         if not self._closed_fut.done():
             if exc is None:
@@ -447,7 +471,9 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
-        self._received_encrypted_msgs.close(self._machine.trigger(TransitionEvent.READER_EOF))  # unblock readers
+        evs = self._machine.trigger_reader_eof()
+        self._handle_machine_events(evs)
+        self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         return False
 
     async def drain(self) -> None:
@@ -556,9 +582,8 @@ async def open_kx_n_connection(
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
-        kx_completed: asyncio.Future = loop.create_future()
         return KX_N_ClientStateMachine(
-            server_public_key, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_public_key, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
@@ -579,9 +604,8 @@ async def open_kx_kk_connection(
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
-        kx_completed: asyncio.Future = loop.create_future()
         return KX_KK_ClientStateMachine(
-            client_pair, server_public_key, kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            client_pair, server_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
@@ -603,9 +627,8 @@ async def open_kx_xx_connection(
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
     def machine_factory() -> BaseMachine:
-        kx_completed: asyncio.Future = loop.create_future()
         return KX_XX_ClientStateMachine(
-            client_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            client_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
     return await _open_connection(host, port, machine_factory, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
@@ -1002,9 +1025,8 @@ async def start_kx_n_server(
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
-        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_N_ServerStateMachine(
-            server_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
@@ -1030,9 +1052,8 @@ async def start_kx_kk_server(
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
-        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_KK_ServerStateMachine(
-            server_pair, client_public_key, kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, client_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
@@ -1059,9 +1080,8 @@ async def start_kx_xx_server(
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def factory() -> KXProtocol:
-        kx_completed: asyncio.Future = loop.create_future()
         machine = KX_XX_ServerStateMachine(
-            server_pair, kx_completed, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(
             machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key, executor=executor

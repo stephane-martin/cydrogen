@@ -1,5 +1,6 @@
-import asyncio
-import concurrent.futures
+# note that this module does not contain any networking code, it is just the state machines used by the networking code.
+# in particular, it does not use asyncio or any other networking library.
+
 import logging
 import os
 import sys
@@ -46,6 +47,28 @@ An exception that may be raised when the peer closes the connection.
 PY312 = sys.version_info < (3, 13)
 
 N_CPUS: int = (os.cpu_count() or 1) if PY312 else (os.process_cpu_count() or 1)
+
+
+class MachineOutEvent:
+    pass
+
+
+class KxCompleted(MachineOutEvent):
+    pass
+
+
+class KxFailed(MachineOutEvent):
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+
+class KxProgress(MachineOutEvent):
+    pass
+
+
+class ReceivedEncryptedMessage(MachineOutEvent):
+    def __init__(self, emsg: memoryview) -> None:
+        self.emsg = emsg
 
 
 class MState(StrEnum):
@@ -140,9 +163,9 @@ class TransitionEvent(StrEnum):
     Receive data event, triggered when the Protocol has received data from the peer.
     """
 
-    DATA_TO_SEND = "data_to_send"
+    CONNECTION_MADE = "connection_made"
     """
-    Initial event to send data to the peer, when we need to start the key exchange process.
+    When the network connection with the peer was made
     """
 
 
@@ -177,7 +200,7 @@ class Destination:
     """
 
     state: MState
-    callback: Callable
+    callback: Callable[..., list[MachineOutEvent]]
 
 
 type TransitionsByOrigState = dict[MState, Destination]
@@ -192,7 +215,9 @@ class Transitions:
     """
 
     def __init__(self) -> None:
-        self._t: dict[TransitionEvent, TransitionsByOrigState] = {}
+        self._t: dict[TransitionEvent, TransitionsByOrigState] = {
+            TransitionEvent.CONNECTION_MADE: {},
+        }
 
     def add_many(self, ev: TransitionEvent, transitions: TransitionsByOrigState) -> None:
         if ev in self._t:
@@ -305,19 +330,17 @@ class BaseMachine:
     Subclasses should override this variable to specify which states are valid for that machine.
     """
 
-    def __init__(
-        self, kx_completed: concurrent.futures.Future | asyncio.Future, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20
-    ) -> None:
+    def __init__(self, sent_msg_max_size: int = 2**20, received_msg_max_size: int = 2**20) -> None:
         """
         Initializes the BaseMachine.
 
         Args:
-            kx_completed: A Future that will be set when the key exchange is completed.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
         """
         self.sent_msg_max_size: int = sent_msg_max_size
         self.received_msg_max_size: int = received_msg_max_size
+        self._kx_finished = False
 
         self._transitions = Transitions()
 
@@ -386,22 +409,6 @@ class BaseMachine:
             },
         )
 
-        self._transitions.add_many(
-            TransitionEvent.DATA_TO_SEND,
-            {
-                # no MState.INITIAL case, because that will be handled by the subclass
-                MState.CONNECTED: Destination(MState.CONNECTED, self._data_to_send),
-                MState.READER_CLOSED: Destination(MState.READER_CLOSED, self._data_to_send),
-                MState.WRITER_CLOSED: Destination(MState.WRITER_CLOSED, self._data_to_send),
-                MState.READER_WRITER_CLOSED: Destination(MState.READER_WRITER_CLOSED, self._data_to_send),
-                MState.WAITING_FOR_PACKET1: Destination(MState.WAITING_FOR_PACKET1, self._data_to_send),
-                MState.WAITING_FOR_PACKET2: Destination(MState.WAITING_FOR_PACKET2, self._data_to_send),
-                MState.WAITING_FOR_PACKET3: Destination(MState.WAITING_FOR_PACKET3, self._data_to_send),
-                MState.WAITING_FOR_SERVER_ACK: Destination(MState.WAITING_FOR_SERVER_ACK, self._data_to_send),
-            },
-        )
-
-        self._kx_completed = kx_completed
         self._invalid_states: set[MState] = ALL_STATES - self._valid_states
         self._state: MState = MState.INITIAL
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
@@ -411,16 +418,7 @@ class BaseMachine:
         self._rbox: SecretBox
         self._tbox: SecretBox
 
-        self._exception: Exception | None = None
-
-    @property
-    def kx_completed(self) -> asyncio.Future | concurrent.futures.Future:
-        """
-        Returns the Future that will be set when the key exchange is completed.
-
-        This Future will be set with None if the key exchange is successful, or with an exception if it fails.
-        """
-        return self._kx_completed
+        self.exception: Exception | None = None
 
     def get_buffer(self) -> memoryview:
         """
@@ -456,7 +454,25 @@ class BaseMachine:
     def release_encrypted_message(self, mv: Buffer) -> None:
         self._read_buffers.release_bytearray(mv)
 
-    def trigger(self, ev: TransitionEvent, *args):  # noqa: ANN002, ANN201
+    def trigger_receive_data(self, nbytes: int) -> list[MachineOutEvent]:
+        return self._receive_data(nbytes)
+
+    def trigger_connection_lost(self, exc: Exception | None) -> list[MachineOutEvent]:
+        return self._trigger(TransitionEvent.CONNECTION_LOST, exc)
+
+    def trigger_reader_eof(self) -> list[MachineOutEvent]:
+        return self._trigger(TransitionEvent.READER_EOF)
+
+    def trigger_writer_eof(self) -> list[MachineOutEvent]:
+        return self._trigger(TransitionEvent.WRITER_EOF)
+
+    def trigger_write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineOutEvent]:
+        return self._trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, msg_id)
+
+    def trigger_connection_made(self) -> list[MachineOutEvent]:
+        return self._trigger(TransitionEvent.CONNECTION_MADE)
+
+    def _trigger(self, ev: TransitionEvent, *args) -> list[MachineOutEvent]:  # noqa: ANN002
         """
         Triggers a state transition in the state machine based on the given event and arguments.
 
@@ -467,65 +483,85 @@ class BaseMachine:
         Returns:
             The result of the callback function associated with the transition.
         """
-        if ev == TransitionEvent.RECEIVE_DATA:
-            return self._receive_data(*args)
-        dest = self._transitions.get(ev, self._state)
-        res = dest.callback(*args)
-        self._state = dest.state
-        return res
-
-    def _receive_data(self, nbytes: int) -> list[memoryview]:
-        self._read_buffers.buffer_updated(nbytes)
-        emsgs: list[memoryview] = []
+        events: list[MachineOutEvent] = []
         try:
-            while True:
-                dest = self._transitions.get(TransitionEvent.RECEIVE_DATA, self._state)
-                result = dest.callback()
-                if not result:
-                    # when callback returns False, it means there was not enough available data to advance the state
-                    return emsgs
-                # result may be True or a memoryview
-                if result is not True:
-                    emsgs.append(result)
-                # update the state as the true result means there was some advancement
-                old_state = self._state
-                self._state = dest.state
-                if old_state.kx_is_pending() and self._state == MState.CONNECTED:
-                    self._complete_kx()
+            dest = self._transitions.get(ev, self._state)
+            events.extend(dest.callback(*args))
         except Exception as ex:
-            self._fail_kx(ex)
+            self._state = MState.READER_WRITER_CLOSED
+            if kx_ev := self._fail_kx(ex):
+                events.extend(kx_ev)
+                return events
             raise
+        self._state = dest.state
+        return events
 
-    def _receive_data_connected(self) -> memoryview | None:
+    def _receive_data(self, nbytes: int) -> list[MachineOutEvent]:
+        self._read_buffers.buffer_updated(nbytes)
+        events: list[MachineOutEvent] = []
+        while True:
+            try:
+                dest = self._transitions.get(TransitionEvent.RECEIVE_DATA, self._state)
+                evs = dest.callback()
+            except Exception as ex:
+                self._state = MState.READER_WRITER_CLOSED
+                if kx_ev := self._fail_kx(ex):
+                    events.extend(kx_ev)
+                    return events
+                raise
+            if not evs:
+                # when callback returns no event, it means there was not enough available data to advance the state
+                return events
+            events.extend(evs)
+            # update the state as the true result means there was some advancement
+            old_state = self._state
+            self._state = dest.state
+            if old_state.kx_is_pending() and self._state == MState.CONNECTED:
+                events.extend(self._complete_kx())
+
+    def _receive_data_connected(self) -> list[MachineOutEvent]:
         # may raise MessageTooBigException if the received message is too big
-        return self._read_buffers.consume_message()
+        evs: list[MachineOutEvent] = []
+        while True:
+            msg = self._read_buffers.consume_message()
+            if msg is None:
+                return evs
+            evs.append(ReceivedEncryptedMessage(msg))
 
-    def _connection_lost(self, exc: Exception | None) -> Exception:
+    def _connection_lost(self, exc: Exception | None) -> list[MachineOutEvent]:
         # _reader_eof may have been called before this method, so we check if the exception is already set
-        if self._exception is None:
-            self._exception = EOF_EXCEPTION if exc is None else exc
-        self._fail_kx(self._exception)
-        return self._exception
+        if self.exception is None:
+            self.exception = EOF_EXCEPTION if exc is None else exc
+        return self._fail_kx(self.exception)
 
-    def _reader_eof(self) -> Exception:
-        if self._exception is None:
-            self._exception = EOF_EXCEPTION
-        self._fail_kx(self._exception)
-        return self._exception
+    def _reader_eof(self) -> list[MachineOutEvent]:
+        if self.exception is None:
+            self.exception = EOF_EXCEPTION
+        return self._fail_kx(self.exception)
 
-    def _writer_eof(self) -> None:
-        if self._state.kx_is_pending():
-            self._fail_kx(EOF_EXCEPTION)
+    def _writer_eof(self) -> list[MachineOutEvent]:
+        return self._fail_kx(EOF_EXCEPTION)
 
-    def _fail_kx(self, exc: Exception) -> None:
-        if not self._kx_completed.done():
-            logger.error("Key exchange failed")
-            self._kx_completed.set_exception(exc)
+    def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineOutEvent]:
+        # called by Protocol to prepare sending a message to the server
+        self._data_ready_to_send.add(encrypted_message_header(ciphertext, msg_id))
+        self._data_ready_to_send.add(ciphertext)
+        return []
 
-    def _complete_kx(self) -> None:
-        if not self._kx_completed.done():
-            logger.info("Key exchange completed successfully")
-            self._kx_completed.set_result(None)
+    def _connection_made(self) -> list[MachineOutEvent]:
+        return []
+
+    def _fail_kx(self, exc: Exception) -> list[MachineOutEvent]:
+        if self._kx_finished:
+            return []
+        self._kx_finished = True
+        return [KxFailed(exc)]
+
+    def _complete_kx(self) -> list[MachineOutEvent]:
+        if self._kx_finished:
+            return []
+        self._kx_finished = True
+        return [KxCompleted()]
 
     def encrypt_message(self, msg: Buffer, msg_id: int) -> bytearray:
         """
@@ -543,11 +579,6 @@ class BaseMachine:
             A bytearray containing the encrypted message, ready to be sent over the network.
         """
         return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
-
-    def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> None:
-        # called by Protocol to prepare sending a message to the server
-        self._data_ready_to_send.add(encrypted_message_header(ciphertext, msg_id))
-        self._data_ready_to_send.add(ciphertext)
 
     def _get_small_message(self) -> tuple[bytes, int] | None:
         # for small messages that occur during key exchange, we consider the decryption is immediate,
@@ -569,7 +600,7 @@ class BaseMachine:
             self._fail_kx(ex)
             raise
 
-    def _data_to_send(self) -> bytearray:
+    def data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()
 
     def get_peer_key(self) -> KxPublicKey | None:
@@ -587,8 +618,8 @@ class KX_N_ClientStateMachine(BaseMachine):
     KX_N_ClientStateMachine implements the client side of the KX_N key exchange protocol.
     """
 
-    # INITIAL                   => data_to_send => WAITING_FOR_SERVER_ACK
-    # WAITING_FOR_SERVER_ACK    => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+    # INITIAL                   => connection_made => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK    => receive_data    => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
 
     _valid_states = frozenset(
         {
@@ -604,7 +635,6 @@ class KX_N_ClientStateMachine(BaseMachine):
     def __init__(
         self,
         server_public_key: KxPublicKey,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -615,14 +645,13 @@ class KX_N_ClientStateMachine(BaseMachine):
 
         Args:
             server_public_key: The public key of the server to which we are connecting.
-            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_SERVER_ACK, self._data_to_send_initial)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_SERVER_ACK, self._connection_made)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_SERVER_ACK, MState.CONNECTED, self._receive_server_ack)
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -632,18 +661,18 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._rbox: SecretBox = SecretBox(self._session_pair.rx)
         self._tbox: SecretBox = SecretBox(self._session_pair.tx)
 
-    def _receive_server_ack(self) -> bool:
+    def _receive_server_ack(self) -> list[MachineOutEvent]:
         two_uple = self._get_small_message()
         if two_uple is None:
             # not enough data to read the message
-            return False
+            return []
         if two_uple[0] != OK_MESSAGE:
             raise RuntimeError("Server did not respond with OK")
-        return True
+        return [KxProgress()]
 
-    def _data_to_send_initial(self) -> bytearray:
+    def _connection_made(self) -> list[MachineOutEvent]:
         self._data_ready_to_send.add(self._packet1)
-        return self._data_to_send()
+        return []
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
@@ -654,8 +683,8 @@ class KX_N_ServerStateMachine(BaseMachine):
     KX_N_ServerStateMachine implements the server side of the KX_N key exchange protocol.
     """
 
-    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
+    # INITIAL               => connection_made => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
 
     _valid_states = frozenset(
         {
@@ -671,7 +700,6 @@ class KX_N_ServerStateMachine(BaseMachine):
     def __init__(
         self,
         server_pair: KxPair,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -682,14 +710,13 @@ class KX_N_ServerStateMachine(BaseMachine):
 
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
-            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._connection_made)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -697,19 +724,18 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
 
-    def _receive_packet1(self) -> bool:
+    def _receive_packet1(self) -> list[MachineOutEvent]:
         # we expect to receive packet1 from the client, length KX_N_PACKET1BYTES
         packet1: bytes | None = self._read_buffers.consume_bytes(KX_N_PACKET1BYTES)
         if packet1 is None:
             # not enough data to read the packet1
-            return False
+            return []
         self._session_pair = self._server_pair.server_finish_kx_n(packet1, self._psk)
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         # send OK message to the client
-        ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
-        self.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, 0)
-        return True
+        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
+        return [KxProgress()]
 
 
 class KX_KK_ClientStateMachine(BaseMachine):
@@ -717,8 +743,8 @@ class KX_KK_ClientStateMachine(BaseMachine):
     KX_KK_ClientStateMachine implements the client side of the KX_KK key exchange protocol.
     """
 
-    # INITIAL               => data_to_send => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET2 if not enough data)
+    # INITIAL               => connection_made => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET2 if not enough data)
 
     _valid_states = frozenset(
         {
@@ -735,7 +761,6 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self,
         client_pair: KxPair,
         server_public_key: KxPublicKey,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -745,13 +770,12 @@ class KX_KK_ClientStateMachine(BaseMachine):
         Args:
             client_pair: The KxPair instance representing the client's key exchange pair.
             server_public_key: The public key of the server to which we are connecting.
-            kx_completed: A Future that will be set when the key exchange is completed.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._connection_made)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET2, MState.CONNECTED, self._receive_packet2)
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -760,22 +784,22 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._server_public_key: KxPublicKey = server_public_key
         self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
 
-    def _receive_packet2(self) -> bool:
+    def _receive_packet2(self) -> list[MachineOutEvent]:
         # we expect to receive packet2 from the server, length KX_KK_PACKET2BYTES
         packet2: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET2BYTES)
         if packet2 is None:
             # not enough data to read the packet2
-            return False
+            return []
         self._kx_state.client_finish_kx_kk(packet2)
         assert self._kx_state.session_pair is not None
         self._session_pair = self._kx_state.session_pair
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
-        return True
+        return [KxProgress()]
 
-    def _data_to_send_initial(self) -> bytes:
+    def _connection_made(self) -> list[MachineOutEvent]:
         self._data_ready_to_send.add(self._kx_state.packet1)
-        return self._data_to_send()
+        return []
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
@@ -786,8 +810,8 @@ class KX_KK_ServerStateMachine(BaseMachine):
     KX_KK_ServerStateMachine implements the server side of the KX_KK key exchange protocol.
     """
 
-    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
+    # INITIAL               => connection_made => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
 
     _valid_states = frozenset(
         {
@@ -804,7 +828,6 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self,
         server_pair: KxPair,
         client_public_key: KxPublicKey,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -814,13 +837,12 @@ class KX_KK_ServerStateMachine(BaseMachine):
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
             client_public_key: The public key of the client that is connecting to the server.
-            kx_completed: A Future that will be set when the key exchange is completed.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._connection_made)
         self._transitions.add_one(TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.CONNECTED, self._receive_packet1)
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -828,18 +850,18 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self._server_pair: KxPair = server_pair
         self._client_public_key: KxPublicKey = client_public_key
 
-    def _receive_packet1(self) -> bool:
+    def _receive_packet1(self) -> list[MachineOutEvent]:
         # we expect to receive packet1 from the client, length KX_KK_PACKET1BYTES
         packet1: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET1BYTES)
         if packet1 is None:
             # not enough data to read the packet1
-            return False
+            return []
         pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, packet1)
         self._session_pair = pair
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         self._data_ready_to_send.add(packet2)
-        return True
+        return [KxProgress()]
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key
@@ -850,9 +872,9 @@ class KX_XX_ClientStateMachine(BaseMachine):
     KX_XX_ClientStateMachine implements the client side of the KX_XX key exchange protocol.
     """
 
-    # INITIAL                => data_to_send => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2    => receive_data => WAITING_FOR_SERVER_ACK (or stay in WAITING_FOR_PACKET2 if not enough data)
-    # WAITING_FOR_SERVER_ACK => receive_data => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+    # INITIAL                => connection_made => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2    => receive_data    => WAITING_FOR_SERVER_ACK (or stay in WAITING_FOR_PACKET2 if not enough data)
+    # WAITING_FOR_SERVER_ACK => receive_data    => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
 
     _valid_states = frozenset(
         {
@@ -869,7 +891,6 @@ class KX_XX_ClientStateMachine(BaseMachine):
     def __init__(
         self,
         client_pair: KxPair,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -880,14 +901,13 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
         Args:
             client_pair: The KxPair instance representing the client's key exchange pair.
-            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._data_to_send_initial)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_PACKET2, self._connection_made)
         self._transitions.add_one(
             TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET2, MState.WAITING_FOR_SERVER_ACK, self._receive_packet2
         )
@@ -900,12 +920,12 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._kx_state: KxXxClientState = self._client_pair.client_init_kx_xx(self._psk)
         self._server_public_key: KxPublicKey  # will be set after receiving packet2 from the server
 
-    def _receive_packet2(self) -> bool:
+    def _receive_packet2(self) -> list[MachineOutEvent]:
         # we expect to receive packet2 from the server, length KX_XX_PACKET2BYTES
         packet2: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET2BYTES)
         if packet2 is None:
             # not enough data to read the packet2
-            return False
+            return []
         self._kx_state.client_process_kx_xx(packet2)
         assert self._kx_state.packet3
         assert self._kx_state.session_pair is not None
@@ -916,21 +936,21 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._server_public_key = self._kx_state.server_public_key
         # send packet3 to the server
         self._data_ready_to_send.add(self._kx_state.packet3)
-        return True
+        return [KxProgress()]
 
-    def _receive_server_ack(self) -> bool:
+    def _receive_server_ack(self) -> list[MachineOutEvent]:
         # self._state == MState.WAITING_FOR_SERVER_ACK:
         two_uple = self._get_small_message()
         if two_uple is None:
             # not enough data to read the message
-            return False
+            return []
         if two_uple[0] != OK_MESSAGE:
             raise RuntimeError("Server did not respond with OK")
-        return True
+        return [KxProgress()]
 
-    def _data_to_send_initial(self) -> bytes:
+    def _connection_made(self) -> list[MachineOutEvent]:
         self._data_ready_to_send.add(self._kx_state.packet1)
-        return self._data_to_send()
+        return []
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
@@ -941,9 +961,9 @@ class KX_XX_ServerStateMachine(BaseMachine):
     KX_XX_ServerStateMachine implements the server side of the KX_XX key exchange protocol.
     """
 
-    # INITIAL               => data_to_send => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data => WAITING_FOR_PACKET3 (or stay in WAITING_FOR_PACKET1 if not enough data)
-    # WAITING_FOR_PACKET3   => receive_data => CONNECTED (or stay in WAITING_FOR_PACKET3 if not enough data)
+    # INITIAL               => connection_made => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1   => receive_data    => WAITING_FOR_PACKET3 (or stay in WAITING_FOR_PACKET1 if not enough data)
+    # WAITING_FOR_PACKET3   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET3 if not enough data)
 
     _valid_states = frozenset(
         {
@@ -960,7 +980,6 @@ class KX_XX_ServerStateMachine(BaseMachine):
     def __init__(
         self,
         server_pair: KxPair,
-        kx_completed: concurrent.futures.Future | asyncio.Future,
         *,
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
@@ -971,14 +990,13 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
         Args:
             server_pair: The KxPair instance representing the server's key exchange pair.
-            kx_completed: A Future that will be set when the key exchange is completed.
             psk: An optional pre-shared key to use for the key exchange.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        super().__init__(kx_completed, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(TransitionEvent.DATA_TO_SEND, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._data_to_send)
+        self._transitions.add_one(TransitionEvent.CONNECTION_MADE, MState.INITIAL, MState.WAITING_FOR_PACKET1, self._connection_made)
         self._transitions.add_one(
             TransitionEvent.RECEIVE_DATA, MState.WAITING_FOR_PACKET1, MState.WAITING_FOR_PACKET3, self._receive_packet1
         )
@@ -991,24 +1009,24 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._client_public_key: KxPublicKey  # will be set after receiving packet1 from the client
         self._kx_state: KxXxServerState
 
-    def _receive_packet1(self) -> bool:
+    def _receive_packet1(self) -> list[MachineOutEvent]:
         # we expect to receive packet1 from the client, length KX_XX_PACKET1BYTES
         packet1: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET1BYTES)
         if packet1 is None:
             # not enough data to read the packet1
-            return False
+            return []
         self._kx_state = self._server_pair.server_process_kx_xx(packet1, self._psk)
         assert self._kx_state.packet2
         # send packet2 to the client
         self._data_ready_to_send.add(self._kx_state.packet2)
-        return True
+        return [KxProgress()]
 
-    def _receive_packet3(self) -> bool:
+    def _receive_packet3(self) -> list[MachineOutEvent]:
         # self._state == MState.WAITING_FOR_PACKET3
         packet3: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET3BYTES)
         if packet3 is None:
             # not enough data to read the packet3
-            return False
+            return []
         self._kx_state.server_finish_kx_xx(packet3)
         assert self._kx_state.session_pair is not None
         assert self._kx_state.client_public_key is not None
@@ -1017,9 +1035,8 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._tbox = SecretBox(self._session_pair.tx)
         self._client_public_key = self._kx_state.client_public_key
         # send OK message to the client
-        ciphertext = self.encrypt_message(OK_MESSAGE, msg_id=0)
-        self.trigger(TransitionEvent.WRITE_EMESSAGE, ciphertext, 0)
-        return True
+        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
+        return [KxProgress()]
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key
