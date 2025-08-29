@@ -32,8 +32,8 @@ from .networking import (
     KxCompleted,
     KxFailed,
     KxProgress,
-    MachineOutEvent,
-    MState,
+    MachineProducedEvent,
+    MachineState,
     ReceivedEncryptedMessage,
 )
 
@@ -217,11 +217,11 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def get_next_msg(self) -> tuple[bytes, int]:
         return await self._received_decrypted_msgs.get()
 
-    def _handle_machine_events(self, events: list[MachineOutEvent]) -> None:
+    def _handle_machine_events(self, events: list[MachineProducedEvent]) -> None:
         for event in events:
             self._handle_machine_event(event)
 
-    def _handle_machine_event(self, ev: MachineOutEvent) -> None:
+    def _handle_machine_event(self, ev: MachineProducedEvent) -> None:
         match ev:
             case KxCompleted():
                 self._kx_completed.set_result(None)
@@ -689,7 +689,7 @@ class BaseAsyncRequestResponseClient:
             # a response will never come, so clean up the future
             del self._pending_requests[msg_id]
             self.close(ex)
-            if ex.orig_state in (MState.WRITER_CLOSED, MState.READER_WRITER_CLOSED):
+            if ex.orig_state in (MachineState.WRITER_CLOSED, MachineState.READER_WRITER_CLOSED):
                 raise ClientClosedError from ex
             raise
         except:
