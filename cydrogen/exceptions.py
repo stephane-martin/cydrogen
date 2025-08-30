@@ -74,3 +74,7 @@ class ClientClosedError(CyException):
 
     def __init__(self, message: str = "Client is closed.") -> None:
         super().__init__(message)
+
+
+class SyncMsgQueueShutdown(CyException):
+    pass
