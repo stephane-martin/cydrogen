@@ -30,7 +30,7 @@ from ._kx_n import (
     server_finish_kx_n,
 )
 from ._masterkey import MasterKey
-from ._networking import MsgQueue, ReadBuffers
+from ._networking import MsgQueue, ReadBuffers, SyncMsgQueue
 from ._secretbox import (
     ENC_MSG_HEADER_SIZE,
     ENC_MSG_MARKER,
@@ -96,6 +96,7 @@ __all__ = [
     "SignPublicKey",
     "SignSecretKey",
     "Signer",
+    "SyncMsgQueue",
     "Verifier",
     "VerifyException",
     "client_init_kx_n",

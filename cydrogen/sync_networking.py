@@ -1,6 +1,5 @@
 import logging
 import platform
-import queue
 import socket
 import socketserver
 import threading
@@ -19,8 +18,9 @@ from ._kx_n import (
     SessionPair,
     client_init_kx_n,
 )
+from ._networking import SyncMsgQueue
 from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
-from .exceptions import ClientClosedError, DecryptException, KeyExchangeException
+from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, SyncMsgQueueShutdown
 from .networking import (
     BaseMachine,
     KX_KK_ServerStateMachine,
@@ -57,8 +57,8 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         self.current_msg_id: int = 0
         self._machine = machine
         self._machine_lock = threading.Lock()
-        self._received_encrypted_msgs: queue.Queue[memoryview] = queue.Queue()
-        self._received_decrypted_msgs: queue.Queue[tuple[bytes, int]] = queue.Queue()
+        self._received_encrypted_msgs: SyncMsgQueue[memoryview] = SyncMsgQueue()
+        self._received_decrypted_msgs: SyncMsgQueue[tuple[bytes, int]] = SyncMsgQueue()
         self.read_thread: threading.Thread = threading.Thread(target=self.read)
         self.decrypt_thread: threading.Thread = threading.Thread(target=self.decrypt_received_messages)
         super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
@@ -90,7 +90,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         try:
             self._read()
         finally:
-            self._received_encrypted_msgs.shutdown(immediate=False)
+            self._received_encrypted_msgs.shutdown()
             logger.info("read thread has finished for %s", self.peer)
 
     def _read(self) -> None:
@@ -130,14 +130,14 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         try:
             self._decrypt_received_messages()
         finally:
-            self._received_decrypted_msgs.shutdown(immediate=False)
+            self._received_decrypted_msgs.shutdown()
             logger.info("decrypt thread has finished for %s", self.peer)
 
     def _decrypt_received_messages(self) -> None:
         while True:
             try:
                 incoming = self._received_encrypted_msgs.get()
-            except queue.ShutDown:
+            except SyncMsgQueueShutdown:
                 # this means that the queue of encrypted messages has been closed
                 logger.info("decrypt received messages has finished")
                 # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
@@ -194,7 +194,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
             while True:
                 try:
                     msg, msg_id = self._received_decrypted_msgs.get()
-                except queue.ShutDown:
+                except SyncMsgQueueShutdown:
                     # this means that the queue of decrypted messages has been closed
                     logger.info("No more decrypted messages to handle, exiting handle() for %s", self.peer)
                     break

@@ -5,6 +5,31 @@ class BytearrayBuilder:
     def add(self, data: Buffer) -> None: ...
     def get(self) -> bytearray: ...
 
+class SyncMsgQueue[T]:
+    def __init__(self) -> None:
+        """
+        Initialize SyncMsgQueue.
+        """
+        ...
+
+    def put_nowait(self, item: T) -> None:
+        """
+        Put an item into the queue without blocking.
+        """
+        ...
+
+    def get(self) -> T:
+        """
+        Get an item from the queue, blocking if necessary until an item is available.
+        """
+        ...
+
+    def shutdown(self) -> None:
+        """
+        Shutdown the queue, preventing any further items from being added.
+        """
+        ...
+
 class MsgQueue[T: Sized]:
     """
     MsgQueue is a queue that holds messages to be sent or received.

@@ -27,6 +27,18 @@ cdef class MsgQueue:
 
 
 @cython.final
+cdef class SyncMsgQueue:
+    cdef object queue
+    cdef object mutex
+    cdef object not_empty
+    cdef bint is_shutdown
+
+    cpdef put_nowait(self, item)
+    cpdef get(self)
+    cpdef shutdown(self)
+
+
+@cython.final
 cdef class ReadBuffers:
     cdef object read_buffers
     cdef uint16_t nb_max_read_buffers

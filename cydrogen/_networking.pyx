@@ -10,9 +10,10 @@ from ._secretbox cimport parse_encrypted_message_header, _ENC_MSG_HEADER_SIZE
 
 import asyncio
 import logging
+import threading
 from collections import deque
 
-from .exceptions import MessageTooBigException
+from .exceptions import MessageTooBigException, SyncMsgQueueShutdown
 
 
 logger = logging.getLogger("cydrogen")
@@ -267,3 +268,34 @@ cdef class ReadBuffers:
                     return result
             if total_read == nbytes:
                 return result
+
+cdef class SyncMsgQueue:
+    def __init__(self):
+        self.queue = deque()
+        self.mutex = threading.Lock()
+        self.not_empty = threading.Condition(self.mutex)
+        self.is_shutdown = 0
+
+    cpdef put_nowait(self, item):
+        with self.mutex:
+            if self.is_shutdown:
+                raise SyncMsgQueueShutdown
+            self.queue.append(item)
+            self.not_empty.notify()
+
+    cpdef get(self):
+        with self.not_empty:
+            if self.is_shutdown and not len(self.queue):
+                raise SyncMsgQueueShutdown
+
+            while not len(self.queue):
+                self.not_empty.wait()
+                if self.is_shutdown and not len(self.queue):
+                    raise SyncMsgQueueShutdown
+            return self.queue.popleft()
+
+    cpdef shutdown(self):
+        with self.mutex:
+            self.is_shutdown = 1
+            # All getters need to re-check queue-empty to raise ShutDown
+            self.not_empty.notify_all()
