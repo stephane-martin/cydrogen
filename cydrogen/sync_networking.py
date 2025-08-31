@@ -5,26 +5,24 @@ import socketserver
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Buffer, Callable, Iterator
+from collections.abc import Buffer, Callable
 from contextlib import suppress
-from typing import Any, BinaryIO, Self
+from typing import Any, Self
 
 from ._kx_n import (
-    KX_KK_PACKET2BYTES,
-    KX_XX_PACKET2BYTES,
     KxPair,
     KxPublicKey,
     Psk,
-    SessionPair,
-    client_init_kx_n,
 )
 from ._networking import SyncMsgQueue
-from ._secretbox import EncryptedMessage, SecretBox, SecretBoxKey
-from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, SyncMsgQueueShutdown
+from .exceptions import DecryptException, KeyExchangeException, SyncMsgQueueShutdown
 from .networking import (
     BaseMachine,
+    KX_KK_ClientStateMachine,
     KX_KK_ServerStateMachine,
+    KX_N_ClientStateMachine,
     KX_N_ServerStateMachine,
+    KX_XX_ClientStateMachine,
     KX_XX_ServerStateMachine,
     KxCompleted,
     KxFailed,
@@ -35,70 +33,69 @@ from .networking import (
 
 logger = logging.getLogger("cydrogen")
 
-PLATFORM = platform.system().lower()
-OK_MESSAGE = b"OK"
 
-
-type ValidatePeerKeyFunc = Callable[[KxPublicKey], None]
-
-
-class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
-    """
-    KX_N_TCPHandler provides a handler to build a TCP server with key exchange variant N.
-
-    Subclasses must implement the handle_message() method to define how to process incoming messages.
-    """
-
-    def __init__(self, request: socket.socket, client_address: Any, server: "BaseTCPServer", machine: BaseMachine) -> None:  # noqa: ANN401
-        self.request: socket.socket = request
-        self._write_lock = threading.Lock()
-        self.server: BaseTCPServer = server  # to make type checker happy
-        self.peer = request.getpeername()
-        self.current_msg_id: int = 0
+class Protocol:
+    def __init__(self, sock: socket.socket, machine: BaseMachine, validate: Callable[[KxPublicKey], None]) -> None:
+        self.socket = sock
+        self.peer = sock.getpeername()
         self._machine = machine
         self._machine_lock = threading.Lock()
-        self._received_encrypted_msgs: SyncMsgQueue[memoryview] = SyncMsgQueue()
-        self._received_decrypted_msgs: SyncMsgQueue[tuple[bytes, int]] = SyncMsgQueue()
-        self.read_thread: threading.Thread = threading.Thread(target=self.read)
-        self.decrypt_thread: threading.Thread = threading.Thread(target=self.decrypt_received_messages)
-        super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
+        self.received_encrypted_msgs: SyncMsgQueue[memoryview] = SyncMsgQueue()
+        self.received_decrypted_msgs: SyncMsgQueue[tuple[bytes, int]] = SyncMsgQueue()
+        self._write_lock = threading.Lock()
+        self.validate = validate
+        self.read_thread: threading.Thread = threading.Thread(target=self._read)
+        self.decrypt_thread: threading.Thread = threading.Thread(target=self._decrypt_received_messages)
+        self.kx_finished = threading.Event()
 
-    def setup(self) -> None:
-        logger.warning("Connection from %s", self.peer)
-        self.server.add_accepted_socket(self.request)
-        super().setup()  # creates self.rfile and self.wfile
+    @property
+    def exception(self) -> Exception | None:
+        with self._machine_lock:
+            return self._machine.exception
 
-    def finish(self) -> None:
-        super().finish()
-        self.server.remove_accepted_socket(self.request)
-        logger.warning("Connection closed: %s", self.peer)
-        # That's all we need to do, the server itself will shutdown/close the accepted socket
-        # for this thread by calling its shutdown_request(socket) method.
+    def start(self) -> None:
+        self.read_thread.start()
+        self.decrypt_thread.start()
+
+    def join(self) -> None:
+        self.read_thread.join()
+        self.decrypt_thread.join()
+
+    def connection_made(self) -> None:
+        with self._machine_lock:
+            events = self._machine.trigger_connection_made()
+        self._handle_machine_events(events)
+        with self._machine_lock:
+            data = self._machine.data_to_send()
+        if data:
+            with self._write_lock:
+                self.socket.sendall(data)
 
     def connection_lost(self, exc: Exception | None = None) -> None:
         try:
-            self.request.shutdown(socket.SHUT_RDWR)
+            self.socket.shutdown(socket.SHUT_RDWR)
         except OSError as e:
             logger.info("socket shutdown: %s", e)
         with self._machine_lock:
             events = self._machine.trigger_connection_lost(exc)
         self._handle_machine_events(events)  # KxFailed events may be generated here
+        # not useful to try to send any pending data, the connection is lost
 
-    def read(self) -> None:
+    def _read(self) -> None:
         # this is executed in a separate thread
         # when read() returns, the _received_encrypted_msgs queue is closed to signal _decrypt_received_messages() to exit
         try:
-            self._read()
+            self._read1()
         finally:
-            self._received_encrypted_msgs.shutdown()
+            self.received_encrypted_msgs.shutdown()
             logger.info("read thread has finished for %s", self.peer)
 
-    def _read(self) -> None:
+    def _read1(self) -> None:
         while True:
             with self._machine_lock:
                 buf = self._machine.get_buffer()
             try:
-                n = self.request.recv_into(buf)
+                n = self.socket.recv_into(buf)
                 if n == 0:
                     logger.info("Connection closed by peer %s", self.peer)
                     self.connection_lost(None)
@@ -117,26 +114,26 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
             if data:
                 try:
                     with self._write_lock:
-                        self.request.sendall(data)
+                        self.socket.sendall(data)
                 except Exception as ex:  # noqa: BLE001
                     logger.info("Connection lost with %s while sending data: %s", self.peer, ex)
                     self.connection_lost(ex)
                     return
 
-    def decrypt_received_messages(self) -> None:
+    def _decrypt_received_messages(self) -> None:
         # this is executed in a separate thread
         # when _decrypt_received_messages() returns, the _received_encrypted_msgs queue is closed to signal handle() to exit
         logger.info("starting to decrypt received messages for %s", self.peer)
         try:
-            self._decrypt_received_messages()
+            self._decrypt_received_messages1()
         finally:
-            self._received_decrypted_msgs.shutdown()
+            self.received_decrypted_msgs.shutdown()
             logger.info("decrypt thread has finished for %s", self.peer)
 
-    def _decrypt_received_messages(self) -> None:
+    def _decrypt_received_messages1(self) -> None:
         while True:
             try:
-                incoming = self._received_encrypted_msgs.get()
+                incoming = self.received_encrypted_msgs.get()
             except SyncMsgQueueShutdown:
                 # this means that the queue of encrypted messages has been closed
                 logger.info("decrypt received messages has finished")
@@ -146,7 +143,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
             try:
                 # we don't need to hold the machine lock while decrypting, as decrypt_message() does not modify the machine state
                 plaintext, msg_id = self._machine.decrypt_message(incoming)
-                self._received_decrypted_msgs.put_nowait((plaintext, msg_id))
+                self.received_decrypted_msgs.put_nowait((plaintext, msg_id))
             except Exception as ex:
                 self.connection_lost(ex)
                 raise DecryptException("Failed to decrypt message from peer") from ex
@@ -158,6 +155,9 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         try:
             for event in events:
                 self._handle_machine_event(event)
+        except KeyExchangeException as ex:
+            self.connection_lost(ex)
+            self.kx_finished.set()
         except Exception as ex:  # noqa: BLE001
             self.connection_lost(ex)
 
@@ -168,32 +168,69 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
                 client_pubkey = self._machine.get_peer_key()
                 if client_pubkey is not None:
                     try:
-                        self.validate_client_public_key(client_pubkey)
+                        self.validate(client_pubkey)
                     except KeyExchangeException:
                         raise
                     except Exception as ex:
                         raise KeyExchangeException("Client public key validation failed") from ex
+                self.kx_finished.set()
             case KxFailed(exc=exc):
                 raise KeyExchangeException from exc
             case KxProgress():
                 logger.debug("Key exchange in progress with %s", self.peer)
             case ReceivedEncryptedMessage(emsg=emsg):
-                self._received_encrypted_msgs.put_nowait(emsg)
+                self.received_encrypted_msgs.put_nowait(emsg)
+
+    def write(self, msg: Buffer, *, msg_id: int) -> None:
+        # we don't need to hold the machine lock while encrypting, as encrypt_message() does not modify the machine state
+        ciphertext = self._machine.encrypt_message(msg, msg_id)
+        with self._machine_lock:
+            events = self._machine.trigger_write_emessage(ciphertext, msg_id)
+        self._handle_machine_events(events)  # normally no events
+        with self._machine_lock:
+            data = self._machine.data_to_send()
+        if data:
+            with self._write_lock:
+                self.socket.sendall(data)
+
+
+class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
+    """
+    KX_N_TCPHandler provides a handler to build a TCP server with key exchange variant N.
+
+    Subclasses must implement the handle_message() method to define how to process incoming messages.
+    """
+
+    def __init__(self, request: socket.socket, client_address: Any, server: "BaseTCPServer", machine: BaseMachine) -> None:  # noqa: ANN401
+        self.request: socket.socket = request
+        self.server: BaseTCPServer = server  # to make type checker happy
+        self.current_msg_id: int = 0
+        self.protocol = Protocol(request, machine, self.validate_client_public_key)
+        self.peer = request.getpeername()
+        super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
+
+    def setup(self) -> None:
+        logger.info("Connection from %s", self.peer)
+        self.server.add_accepted_socket(self.request)
+        super().setup()  # creates self.rfile and self.wfile
+
+    def finish(self) -> None:
+        super().finish()
+        self.server.remove_accepted_socket(self.request)
+        logger.info("Connection closed: %s", self.peer)
+        # That's all we need to do, the server itself will shutdown/close the accepted socket
+        # for this thread by calling its shutdown_request(socket) method.
 
     def handle(self) -> None:
         # called by __init__ for each accepted connection
         set_keepalive(self.request)
-        with self._machine_lock:
-            events = self._machine.trigger_connection_made()
-        self._handle_machine_events(events)
-
-        self.read_thread.start()
-        self.decrypt_thread.start()
+        self.protocol.connection_made()
+        self.protocol.start()
 
         try:
             while True:
                 try:
-                    msg, msg_id = self._received_decrypted_msgs.get()
+                    msg, msg_id = self.protocol.received_decrypted_msgs.get()
                 except SyncMsgQueueShutdown:
                     # this means that the queue of decrypted messages has been closed
                     logger.info("No more decrypted messages to handle, exiting handle() for %s", self.peer)
@@ -202,22 +239,19 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
                     break
         except Exception as ex:
             # just be sure that the other threads will finish, close the connection
-            self.connection_lost(ex)
-            with self._machine_lock:
-                exc = self._machine.exception
+            self.protocol.connection_lost(ex)
+            exc = self.protocol.exception
             if exc is not None:
                 raise exc from ex
             raise
         else:
-            self.connection_lost(None)
-            with self._machine_lock:
-                exc = self._machine.exception
+            self.protocol.connection_lost(None)
+            exc = self.protocol.exception
             if exc is not None:
                 raise exc
         finally:
             # wait for the read and decrypt threads to finish
-            self.read_thread.join()
-            self.decrypt_thread.join()
+            self.protocol.join()
 
     def _handle_message(self, msg: bytes, msg_id: int) -> bool:
         self.current_msg_id = msg_id
@@ -263,18 +297,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
             msg: The message to write to the client.
             msg_id: Optional message ID. If not provided, it defaults to the current incoming message ID.
         """
-        if msg_id is None:
-            msg_id = self.current_msg_id
-        # we don't need to hold the machine lock while encrypting, as encrypt_message() does not modify the machine state
-        ciphertext = self._machine.encrypt_message(msg, msg_id)
-        with self._machine_lock:
-            events = self._machine.trigger_write_emessage(ciphertext, msg_id)
-        self._handle_machine_events(events)  # normally no events
-        with self._machine_lock:
-            data = self._machine.data_to_send()
-        if data:
-            with self._write_lock:
-                self.request.sendall(data)
+        self.protocol.write(msg, msg_id=msg_id if msg_id is not None else self.current_msg_id)
 
     def validate_client_public_key(self, client_public_key: KxPublicKey) -> None:
         logger.info("Discovered client public key: %s", client_public_key)
@@ -409,56 +432,52 @@ class KX_XX_TCPServer(BaseTCPServer):
         self.psk = psk
 
 
-class BaseTCPClient(ABC):
-    def __init__(self, host: str, port: int, *, connect_retry: int = 3, connect_retry_wait: int = 30) -> None:
+class BaseTCPClient:
+    def __init__(self, host: str, port: int, machine: BaseMachine, *, connect_retry: int = 3, connect_retry_wait: int = 30) -> None:
         self.server_address: tuple[str, int] = (host, port)
         self.retry = connect_retry
         self.retry_wait = connect_retry_wait
+        self.machine = machine
 
-        self.connected: bool = False
-        self.closed: bool = True
-
-        self.session_pair: SessionPair | None = None
+        self.connected = False
+        self.connecting = False
+        self.state_lock = threading.Lock()
 
         self.socket: socket.socket | None = None
-        self.rfile: BinaryIO | None = None
-        self.wfile: BinaryIO | None = None
-
-        self.read_lock = threading.Lock()
-        self.write_lock = threading.Lock()
+        self.protocol: Protocol | None = None
 
     def connect(self) -> None:
-        """
-        Connect to the server and establish session keys.
-
-        Args:
-            retry: Number of times to retry connecting if the initial connection fails.
-                   Set to 0 to disable retries and -1 to retry indefinitely.
-            retry_wait: Number of seconds to wait between retries.
-
-        Raises:
-            KeyExchangeException: If the key exchange fails or the server does not respond with OK.
-            ConnectionRefusedError: If the server is not reachable after the specified retries.
-        """
-        if self.connected or not self.closed:
-            logger.info("Client is already connected or connecting, skipping connect")
-            return
-        self.closed = False
+        with self.state_lock:
+            if self.connected:
+                logger.info("Already connected to %s", self.server_address)
+                return
+            if self.connecting:
+                logger.info("Already connecting to %s", self.server_address)
+                return
+            self.connecting = True
         try:
-            self._connect()
+            self.socket = self._create_connection()
+            set_keepalive(self.socket)
+            self.protocol = Protocol(self.socket, self.machine, self.validate_server_public_key)
+            self.protocol.connection_made()
+            self.protocol.start()
+            with self.state_lock:
+                self.connected = True
+                self.connecting = False
+            self.protocol.kx_finished.wait()  # wait for key exchange to complete
+            if self.protocol.exception is not None:
+                self.close()
+                raise KeyExchangeException from self.protocol.exception
         except:
-            self.close()
+            with self.state_lock:
+                self.connecting = False
             raise
-        else:
-            self.connected = True
-            logger.info("Server acknowledged, session keys established")
 
-    def _create_connection(self) -> None:
+    def _create_connection(self) -> socket.socket:
         retry = self.retry
         while True:
             try:
-                self.socket = socket.create_connection(self.server_address, timeout=30)
-                return
+                return socket.create_connection(self.server_address, timeout=30)
             except ConnectionRefusedError:
                 if retry == 0:
                     raise
@@ -467,114 +486,19 @@ class BaseTCPClient(ABC):
             if self.retry_wait > 0:
                 time.sleep(self.retry_wait)
 
-    def _connect(self) -> None:
-        self._create_connection()
-        assert self.socket is not None
-        self.socket.settimeout(None)  # timeout does not play nice with makefile
-        set_keepalive(self.socket)
-        logger.info("Connected to server at %s", self.server_address)
-        self.rfile = self.socket.makefile("rb")
-        self.wfile = self.socket.makefile("wb")
-        try:
-            self.key_exchange()
-        except Exception as ex:
-            raise KeyExchangeException("Key exchange failed") from ex
-
-    @abstractmethod
-    def key_exchange(self) -> None:
-        raise NotImplementedError
-
-    def write(self, msg: Buffer, *, msg_id: int = 1) -> None:
-        """
-        Write a message to the server. The message will be encrypted using the session keys.
-
-        Args:
-            msg: The message to write to the server.
-            msg_id: The message ID to use for this message. Defaults to 1.
-
-        Raises:
-            ClientClosedError: If the client is not connected.
-            ValueError: If the message ID is not a positive integer.
-            OSError: If there is an error writing to the server. The client will be closed in this case.
-        """
-        if not self.connected or self.wfile is None or self.closed or self.session_pair is None:
-            raise ClientClosedError
-        if not msg:
-            logger.warning("Attempted to write an empty message, skipping")
-            return
-        if msg_id < 1:
-            raise ValueError("Message ID must be a positive integer")
-        tbox, wfile = SecretBox(self.session_pair.tx), self.wfile
-        try:
-            with self.write_lock:
-                tbox.encrypt(msg, msg_id=msg_id, out=wfile)
-                wfile.flush()
-        except OSError:
-            logger.exception("Failed to write to server")
-            self.close()
-            raise
-
-    def read(self) -> tuple[bytes, int]:
-        """
-        Read a message from the server. The message will be decrypted using the session keys.
-
-        Returns:
-            The decrypted message as bytes.
-            The message ID of the received message.
-
-        Raises:
-            ClientClosedError: If the client is not connected.
-            OSError: If there is an error reading from the server. The client will be closed.
-            DecryptException: If decryption fails, indicating a possible key mismatch or tampered message. The client will be closed.
-        """
-        if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise ClientClosedError
-        return self.doread(self.rfile, self.session_pair.rx)
-
-    def doread(self, rfile: BinaryIO, rx: SecretBoxKey) -> tuple[bytes, int]:
-        if not self.connected or self.closed:
-            raise ClientClosedError
-        try:
-            with self.read_lock:
-                emsg: EncryptedMessage = EncryptedMessage.read_from(rfile)
-            return emsg.decrypt(rx), emsg.msg_id
-        except OSError:
-            logger.exception("Failed to read from server")
-            self.close()
-            raise
-        except DecryptException:
-            logger.exception("Decryption failed")
-            self.close()
-            raise
-
-    def __iter__(self) -> Iterator[tuple[bytes, int]]:
-        """
-        Return an iterator that reads messages from the server.
-        """
-        if not self.connected or self.rfile is None or self.closed or self.session_pair is None:
-            raise ClientClosedError
-        return _ClientIterator(self)
-
     def close(self) -> None:
-        """
-        Close the client connection.
-        """
-        if self.closed:
-            return
-        self.closed = True
-        self.connected = False
-        if self.socket is not None:
-            with suppress(OSError):
-                self.socket.shutdown(socket.SHUT_RDWR)
-        if self.rfile is not None:
-            with suppress(OSError):
-                self.rfile.close()
-        if self.wfile is not None:
-            with suppress(OSError):
-                self.wfile.close()
-        if self.socket is not None:
-            with suppress(OSError):
-                self.socket.close()
+        with self.state_lock:
+            if self.connecting:
+                raise RuntimeError("Cannot close while connecting")
+            if not self.connected:
+                return
+            if self.socket is not None:
+                with suppress(OSError):
+                    self.socket.shutdown(socket.SHUT_RDWR)
+                self.socket = None  # will close the socket eventually when the socket is garbage collected
+            if self.protocol is not None:
+                self.protocol.join()
+            self.connected = False
 
     def __enter__(self) -> Self:
         self.connect()
@@ -582,6 +506,37 @@ class BaseTCPClient(ABC):
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:  # noqa: ANN001
         self.close()
+
+    def validate_server_public_key(self, server_public_key: KxPublicKey) -> None:
+        logger.info("Discovered server public key: %s", server_public_key)
+
+    def read(self) -> tuple[bytes, int]:
+        with self.state_lock:
+            if self.connecting:
+                raise RuntimeError("Cannot read while connecting")
+            if not self.connected:
+                raise RuntimeError("Not connected")
+        if self.protocol is None:
+            raise RuntimeError("Protocol not initialized")
+        if not self.protocol.kx_finished.is_set():
+            raise RuntimeError("Key exchange not completed")
+        try:
+            msg, msg_id = self.protocol.received_decrypted_msgs.get()
+            return msg, msg_id
+        except SyncMsgQueueShutdown:
+            raise RuntimeError("Connection closed") from None
+
+    def write(self, msg: Buffer, *, msg_id: int) -> None:
+        with self.state_lock:
+            if self.connecting:
+                raise RuntimeError("Cannot write while connecting")
+            if not self.connected:
+                raise RuntimeError("Not connected")
+        if self.protocol is None:
+            raise RuntimeError("Protocol not initialized")
+        if not self.protocol.kx_finished.is_set():
+            raise RuntimeError("Key exchange not completed")
+        self.protocol.write(msg, msg_id=msg_id)
 
 
 class KX_N_TCPClient(BaseTCPClient):
@@ -595,19 +550,8 @@ class KX_N_TCPClient(BaseTCPClient):
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
     ) -> None:
-        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
-        self.server_public_key: KxPublicKey = server_public_key
-        self.psk: Psk | None = psk
-
-    def key_exchange(self) -> None:
-        assert self.rfile is not None
-        assert self.wfile is not None
-        self.session_pair, packet1 = client_init_kx_n(self.server_public_key, self.psk)
-        self.wfile.write(packet1)
-        self.wfile.flush()
-        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with OK")
+        machine = KX_N_ClientStateMachine(server_public_key, psk=psk)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
 
 
 class KX_KK_TCPClient(BaseTCPClient):
@@ -620,26 +564,8 @@ class KX_KK_TCPClient(BaseTCPClient):
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
     ) -> None:
-        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
-        self.client_keypair: KxPair = client_keypair
-        self.server_public_key: KxPublicKey = server_public_key
-
-    def key_exchange(self) -> None:
-        assert self.rfile is not None
-        assert self.wfile is not None
-        # calculate packet1
-        state = self.client_keypair.client_init_kx_kk(self.server_public_key)
-        # send packet1 to the server
-        self.wfile.write(state.packet1)
-        self.wfile.flush()
-        # receive packet2 from the server
-        packet2 = self.rfile.read(KX_KK_PACKET2BYTES)
-        if len(packet2) != KX_KK_PACKET2BYTES:
-            raise KeyExchangeException("Received packet2 is not of the expected length")
-        # calculate session keys
-        state.client_finish_kx_kk(packet2)
-        assert state.session_pair is not None
-        self.session_pair = state.session_pair
+        machine = KX_KK_ClientStateMachine(client_keypair, server_public_key)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
 
 
 class KX_XX_TCPClient(BaseTCPClient):
@@ -653,64 +579,8 @@ class KX_XX_TCPClient(BaseTCPClient):
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
     ) -> None:
-        super().__init__(host, port, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
-        self.client_keypair: KxPair = client_keypair
-        self.psk: Psk | None = psk
-        self.server_public_key: KxPublicKey
-
-    def key_exchange(self) -> None:
-        assert self.rfile is not None
-        assert self.wfile is not None
-        state = self.client_keypair.client_init_kx_xx(self.psk)
-        self.wfile.write(state.packet1)
-        self.wfile.flush()
-        packet2 = self.rfile.read(KX_XX_PACKET2BYTES)
-        if len(packet2) != KX_XX_PACKET2BYTES:
-            raise KeyExchangeException("Received packet2 is not of the expected length")
-        state.client_process_kx_xx(packet2)
-        assert state.server_public_key is not None
-        self.server_public_key = state.server_public_key
-        self.validate_server_public_key()
-        assert state.session_pair is not None
-        self.session_pair = state.session_pair
-        self.wfile.write(state.packet3)
-        self.wfile.flush()
-        ack: bytes = EncryptedMessage.read_from(self.rfile).decrypt(self.session_pair.rx)
-        if ack != OK_MESSAGE:
-            raise KeyExchangeException("Server did not respond with OK")
-
-    def validate_server_public_key(self) -> None:
-        logger.info("Discovered server public key: %s", self.server_public_key)
-
-
-class _ClientIterator:
-    def __init__(self, client: BaseTCPClient) -> None:
-        if client.session_pair is None or client.rfile is None:
-            raise RuntimeError("Client is not connected")
-        self.client = client
-        self.stopped = False
-        self.rfile = client.rfile
-        self.rx = client.session_pair.rx
-
-    def __iter__(self) -> Self:
-        return self
-
-    def __next__(self) -> tuple[bytes, int]:
-        if self.stopped:
-            raise StopIteration
-        try:
-            return self.client.doread(self.rfile, self.rx)
-        except OSError as ex:
-            self.stopped = True
-            logger.warning("Connection closed or read error, stopping iteration: %s", ex)
-            raise StopIteration from ex
-        except DecryptException:
-            self.stopped = True
-            logger.warning("Decryption failed, stopping read loop")
-            raise
-        except:
-            self.stopped = True
-            raise
+        machine = KX_XX_ClientStateMachine(client_keypair, psk=psk)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
 
 
 def set_keepalive_linux(sock: socket.socket, after_idle_sec: int, interval_sec: int, max_fails: int) -> None:
@@ -730,6 +600,9 @@ def set_keepalive_osx(sock: socket.socket, after_idle_sec: int, interval_sec: in
 
 def set_keepalive_win(sock: socket.socket, after_idle_sec: int, interval_sec: int, max_fails: int) -> None:  # noqa: ARG001
     sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, after_idle_sec * 1000, interval_sec * 1000))  # type: ignore[attr-defined]
+
+
+PLATFORM = platform.system().lower()
 
 
 def set_keepalive(sock: socket.socket, *, after_idle_sec: int = 10, interval_sec: int = 5, max_fails: int = 4) -> None:
