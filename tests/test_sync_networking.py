@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from cydrogen import KeyExchangeException, KxPair, KxPublicKey, Psk
 from cydrogen.sync_networking import (
@@ -41,6 +43,8 @@ MESSAGES = [
     b"nine",
     b"ten",
 ]
+
+logger = logging.getLogger("cydrogen.tests")
 
 
 class H_Mixin(BaseTCPHandler):
@@ -138,8 +142,8 @@ def test_sync_client_sync_server_kx_kk_wrong_server_pubkey() -> None:
 
 
 class Validating_KX_XX_TCPClient(KX_XX_TCPClient):
-    def validate_server_public_key(self) -> None:
-        if self.server_public_key != SERVER_PUBKEY:
+    def validate_server_public_key(self, pubkey: KxPublicKey) -> None:
+        if pubkey != SERVER_PUBKEY:
             raise KeyExchangeException("Server public key does not match expected value.")
 
 
