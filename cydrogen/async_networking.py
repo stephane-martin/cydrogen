@@ -611,8 +611,6 @@ class BaseAsyncRequestResponseClient:
         await self._rw.wait_closed()
         try:
             await self._read_task
-        except asyncio.CancelledError:
-            pass
         except Exception as ex:  # noqa: BLE001
             logger.info("Read task stopped with error: %s", ex)
 
@@ -637,28 +635,41 @@ class BaseAsyncRequestResponseClient:
         try:
             await self._rw.write_msg(msg, msg_id=msg_id)
         except InvalidTransitionError as ex:
-            # a response will never come, so clean up the future
+            # Invalid transition means the client is not in a state where it can send messages.
+            # The request has not been sent, so we can delete the pending request future.
             del self._pending_requests[msg_id]
+            # closing the client formally to unblock any other pending requests
             self.close(ex)
             if ex.orig_state in (MachineState.WRITER_CLOSED, MachineState.READER_WRITER_CLOSED):
+                # raise a more precise exception if we know the client is closed
                 raise ClientClosedError from ex
             raise
-        except:
-            # a response will never come, so clean up the future
+        except asyncio.CancelledError:
+            # The user cancelled the request before it was sent. We can delete the pending request future.
             del self._pending_requests[msg_id]
-            self.close()
+            raise
+        except BaseException as ex:
+            # Some other exception occurred while sending the request. We delete the pending request future.
+            del self._pending_requests[msg_id]
+            # Closing the client formally to unblock any other pending requests.
+            self.close(ex)
             raise
         try:
             async with asyncio.timeout(timeout_secs):
                 return await fut
         except TimeoutError:
-            await self._cancel_request(msg_id)  # attempt to cancel the request on the server side
+            # The server did not respond in time.
+            # Attempt to cancel the request on the server side.
+            await self._cancel_request(msg_id)
             logger.info("Request timed out: %s", msg_id)
             raise
         except asyncio.CancelledError:
-            await self._cancel_request(msg_id)  # attempt to cancel the request on the server side
+            # The user cancelled the request before the server responded.
+            # Attempt to cancel the request on the server side.
+            await self._cancel_request(msg_id)
             raise
         finally:
+            # we are done with this request, remove it from the pending requests
             if msg_id in self._pending_requests:
                 del self._pending_requests[msg_id]
 
@@ -676,7 +687,7 @@ class BaseAsyncRequestResponseClient:
         # read responses from the server in a loop
         try:
             while True:
-                msg, msg_id = await self._rw.get_next_msg()
+                msg, msg_id = await self._rw.get_next_msg()  # may raise after connection lost
                 fut = self._pending_requests.get(msg_id)
                 if fut is None:
                     await self.handle_unexpected_response(msg, msg_id)
