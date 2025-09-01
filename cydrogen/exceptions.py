@@ -58,6 +58,15 @@ class KeyExchangeException(CyException):
         super().__init__(message)
 
 
+class InvalidPeerKeyException(KeyExchangeException):
+    """
+    Raised when the peer's public key is invalid during key exchange.
+    """
+
+    def __init__(self, message: str = "The peer's public key is invalid.") -> None:
+        super().__init__(message)
+
+
 class MessageTooBigException(CyException):
     """
     Raised when the message is too big to be processed.

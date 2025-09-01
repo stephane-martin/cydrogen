@@ -166,6 +166,8 @@ class Protocol:
                 logger.info("Key exchange completed with %s", self.peer)
                 self.kx_finished.set()
             case KxFailed(exc=exc):
+                if isinstance(exc, KeyExchangeException):
+                    raise exc
                 raise KeyExchangeException from exc
             case KxProgress():
                 logger.debug("Key exchange in progress with %s", self.peer)
@@ -465,6 +467,8 @@ class BaseTCPClient:
             self.protocol.kx_finished.wait()  # wait for key exchange to complete
             if self.protocol.exception is not None:
                 self.close()
+                if isinstance(self.protocol.exception, KeyExchangeException):
+                    raise self.protocol.exception
                 raise KeyExchangeException from self.protocol.exception
         except:
             with self.state_lock:

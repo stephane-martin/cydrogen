@@ -26,6 +26,7 @@ from ._kx_n import (
 )
 from ._networking import BytearrayBuilder, ReadBuffers
 from ._secretbox import EncryptedMessage, SecretBox, encrypted_message_header
+from .exceptions import InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
 
@@ -555,7 +556,11 @@ class BaseMachine:
         if self._kx_finished:
             return []
         self._kx_finished = True
-        return [KxFailed(exc)]
+        if isinstance(exc, KeyExchangeException):
+            return [KxFailed(exc)]
+        new_ex = KeyExchangeException()
+        new_ex.__cause__ = exc
+        return [KxFailed(new_ex)]
 
     def _complete_kx(self) -> list[MachineProducedEvent]:
         if self._kx_finished:
@@ -959,8 +964,13 @@ class KX_XX_ClientStateMachine(BaseMachine):
         if self.validate_peer_key is not None:
             try:
                 self.validate_peer_key(self._server_public_key)
-            except Exception as ex:  # noqa: BLE001
+            except InvalidPeerKeyException as ex:
                 return self._fail_kx(ex)
+            except Exception as ex:  # noqa: BLE001
+                # ensure the exception is of type InvalidPeerKeyException
+                new_ex = InvalidPeerKeyException()
+                new_ex.__cause__ = ex
+                return self._fail_kx(new_ex)
         # send packet3 to the server
         self._data_ready_to_send.add(self._kx_state.packet3)
         return [KxProgress()]
@@ -1067,11 +1077,17 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         self._client_public_key = self._kx_state.client_public_key
+
         if self.validate_peer_key is not None:
             try:
                 self.validate_peer_key(self._client_public_key)
-            except Exception as ex:  # noqa: BLE001
+            except InvalidPeerKeyException as ex:
                 return self._fail_kx(ex)
+            except Exception as ex:  # noqa: BLE001
+                # ensure the exception is of type InvalidPeerKeyException
+                new_ex = InvalidPeerKeyException()
+                new_ex.__cause__ = ex
+                return self._fail_kx(new_ex)
         # send OK message to the client
         self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
         return [KxProgress()]
