@@ -141,17 +141,23 @@ def test_sync_client_sync_server_kx_kk_wrong_server_pubkey() -> None:
         sync_client_sync_server(client, server)
 
 
-class Validating_KX_XX_TCPClient(KX_XX_TCPClient):
-    def validate_server_public_key(self, pubkey: KxPublicKey) -> None:
-        if pubkey != SERVER_PUBKEY:
-            raise KeyExchangeException("Server public key does not match expected value.")
+def validate_client_public_key(pubkey: KxPublicKey) -> None:
+    if pubkey != CLIENT_PUBKEY:
+        raise KeyExchangeException("Client public key does not match expected value.")
+
+
+def validate_server_public_key(pubkey: KxPublicKey) -> None:
+    if pubkey != SERVER_PUBKEY:
+        raise KeyExchangeException("Server public key does not match expected value.")
 
 
 def test_sync_client_sync_server_kx_xx_validate() -> None:
     class H(H_Mixin, KX_XX_TCPHandler):
         pass
 
-    client = Validating_KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    client = KX_XX_TCPClient(
+        HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1, validate_server_public_key=validate_server_public_key
+    )
     server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
     sync_client_sync_server(client, server)
 
@@ -160,7 +166,9 @@ def test_sync_client_sync_server_kx_xx_validate_wrong_server_pubkey() -> None:
     class H(H_Mixin, KX_XX_TCPHandler):
         pass
 
-    client = Validating_KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1)
+    client = KX_XX_TCPClient(
+        HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=10, connect_retry_wait=1, validate_server_public_key=validate_server_public_key
+    )
     server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR_WRONG, H, psk=PSK)
     with pytest.raises(KeyExchangeException):
         sync_client_sync_server(client, server)
@@ -168,11 +176,9 @@ def test_sync_client_sync_server_kx_xx_validate_wrong_server_pubkey() -> None:
 
 def test_sync_client_sync_server_kx_xx_validate_wrong_client_pubkey() -> None:
     class H(H_Mixin, KX_XX_TCPHandler):
-        def validate_client_public_key(self, pubkey: KxPublicKey) -> None:
-            if pubkey != CLIENT_PUBKEY:
-                raise KeyExchangeException("Client public key does not match expected value.")
+        pass
 
     client = KX_XX_TCPClient(HOST, PORT, CLIENT_PAIR_WRONG, psk=PSK, connect_retry=10, connect_retry_wait=1)
-    server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK)
+    server = KX_XX_TCPServer(HOST, PORT, SERVER_PAIR, H, psk=PSK, validate_client_public_key=validate_client_public_key)
     with pytest.raises(KeyExchangeException):
         sync_client_sync_server(client, server)

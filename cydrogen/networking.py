@@ -911,6 +911,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
+        validate_peer_key: Callable[[KxPublicKey], None] | None = None,
     ) -> None:
         """
         Initializes the KX_XX_ClientStateMachine.
@@ -922,6 +923,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        self.validate_peer_key = validate_peer_key
 
         self._transitions.add_one(
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._connection_made
@@ -954,6 +956,11 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         self._server_public_key = self._kx_state.server_public_key
+        if self.validate_peer_key is not None:
+            try:
+                self.validate_peer_key(self._server_public_key)
+            except Exception as ex:  # noqa: BLE001
+                return self._fail_kx(ex)
         # send packet3 to the server
         self._data_ready_to_send.add(self._kx_state.packet3)
         return [KxProgress()]
@@ -1004,6 +1011,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         psk: Psk | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
+        validate_peer_key: Callable[[KxPublicKey], None] | None = None,
     ) -> None:
         """
         Initializes the KX_XX_ServerStateMachine.
@@ -1015,6 +1023,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
+        self.validate_peer_key = validate_peer_key
 
         self._transitions.add_one(
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET1, self._connection_made
@@ -1058,6 +1067,11 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         self._client_public_key = self._kx_state.client_public_key
+        if self.validate_peer_key is not None:
+            try:
+                self.validate_peer_key(self._client_public_key)
+            except Exception as ex:  # noqa: BLE001
+                return self._fail_kx(ex)
         # send OK message to the client
         self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
         return [KxProgress()]
