@@ -35,7 +35,7 @@ logger = logging.getLogger("cydrogen")
 
 
 class Protocol:
-    def __init__(self, sock: socket.socket, machine: BaseMachine, validate: Callable[[KxPublicKey], None]) -> None:
+    def __init__(self, sock: socket.socket, machine: BaseMachine) -> None:
         self.socket = sock
         self.peer = sock.getpeername()
         self._machine = machine
@@ -43,7 +43,6 @@ class Protocol:
         self.received_encrypted_msgs: SyncMsgQueue[memoryview] = SyncMsgQueue()
         self.received_decrypted_msgs: SyncMsgQueue[tuple[bytes, int]] = SyncMsgQueue()
         self._write_lock = threading.Lock()
-        self.validate = validate
         self.read_thread: threading.Thread = threading.Thread(target=self._read)
         self.decrypt_thread: threading.Thread = threading.Thread(target=self._decrypt_received_messages)
         self.kx_finished = threading.Event()
@@ -165,14 +164,6 @@ class Protocol:
         match ev:
             case KxCompleted():
                 logger.info("Key exchange completed with %s", self.peer)
-                client_pubkey = self._machine.get_peer_key()
-                if client_pubkey is not None:
-                    try:
-                        self.validate(client_pubkey)
-                    except KeyExchangeException:
-                        raise
-                    except Exception as ex:
-                        raise KeyExchangeException("Client public key validation failed") from ex
                 self.kx_finished.set()
             case KxFailed(exc=exc):
                 raise KeyExchangeException from exc
@@ -205,7 +196,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         self.request: socket.socket = request
         self.server: BaseTCPServer = server  # to make type checker happy
         self.current_msg_id: int = 0
-        self.protocol = Protocol(request, machine, self.validate_client_public_key)
+        self.protocol = Protocol(request, machine)
         self.peer = request.getpeername()
         super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
 
@@ -299,9 +290,6 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         """
         self.protocol.write(msg, msg_id=msg_id if msg_id is not None else self.current_msg_id)
 
-    def validate_client_public_key(self, client_public_key: KxPublicKey) -> None:
-        logger.info("Discovered client public key: %s", client_public_key)
-
 
 class KX_N_TCPHandler(BaseTCPHandler):
     def __init__(self, request: socket.socket, client_address: Any, server: "KX_N_TCPServer") -> None:  # noqa: ANN401
@@ -317,7 +305,7 @@ class KX_KK_TCPHandler(BaseTCPHandler):
 
 class KX_XX_TCPHandler(BaseTCPHandler):
     def __init__(self, request: socket.socket, client_address: Any, server: "KX_XX_TCPServer") -> None:  # noqa: ANN401
-        machine = KX_XX_ServerStateMachine(server.server_keypair, psk=server.psk)
+        machine = KX_XX_ServerStateMachine(server.server_keypair, psk=server.psk, validate_peer_key=server.validate)
         super().__init__(request, client_address, server, machine)
 
 
@@ -427,9 +415,19 @@ class KX_KK_TCPServer(BaseTCPServer):
 
 
 class KX_XX_TCPServer(BaseTCPServer):
-    def __init__(self, host: str, port: int, server_keypair: KxPair, handler: type[KX_XX_TCPHandler], *, psk: Psk | None = None) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        server_keypair: KxPair,
+        handler: type[KX_XX_TCPHandler],
+        *,
+        psk: Psk | None = None,
+        validate_client_public_key: Callable[[KxPublicKey], None] | None = None,
+    ) -> None:
         super().__init__(host, port, server_keypair, handler)
         self.psk = psk
+        self.validate = validate_client_public_key
 
 
 class BaseTCPClient:
@@ -458,7 +456,7 @@ class BaseTCPClient:
         try:
             self.socket = self._create_connection()
             set_keepalive(self.socket)
-            self.protocol = Protocol(self.socket, self.machine, self.validate_server_public_key)
+            self.protocol = Protocol(self.socket, self.machine)
             self.protocol.connection_made()
             self.protocol.start()
             with self.state_lock:
@@ -506,9 +504,6 @@ class BaseTCPClient:
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:  # noqa: ANN001
         self.close()
-
-    def validate_server_public_key(self, server_public_key: KxPublicKey) -> None:
-        logger.info("Discovered server public key: %s", server_public_key)
 
     def read(self) -> tuple[bytes, int]:
         with self.state_lock:
@@ -564,7 +559,10 @@ class KX_KK_TCPClient(BaseTCPClient):
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
     ) -> None:
-        machine = KX_KK_ClientStateMachine(client_keypair, server_public_key)
+        machine = KX_KK_ClientStateMachine(
+            client_keypair,
+            server_public_key,
+        )
         super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
 
 
@@ -578,8 +576,9 @@ class KX_XX_TCPClient(BaseTCPClient):
         psk: Psk | None = None,
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
+        validate_server_public_key: Callable[[KxPublicKey], None] | None = None,
     ) -> None:
-        machine = KX_XX_ClientStateMachine(client_keypair, psk=psk)
+        machine = KX_XX_ClientStateMachine(client_keypair, psk=psk, validate_peer_key=validate_server_public_key)
         super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
 
 
