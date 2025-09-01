@@ -624,7 +624,7 @@ class KX_N_ClientStateMachine(BaseMachine):
     """
 
     # INITIAL                   => connection_made => WAITING_FOR_SERVER_ACK
-    # WAITING_FOR_SERVER_ACK    => receive_data    => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+    # WAITING_FOR_SERVER_ACK    => receive_data    => CONNECTED
 
     _valid_states = frozenset(
         {

@@ -15,7 +15,7 @@ from ._kx_n import (
     Psk,
 )
 from ._networking import SyncMsgQueue
-from .exceptions import DecryptException, KeyExchangeException, SyncMsgQueueShutdown
+from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, SyncMsgQueueShutdown
 from .networking import (
     BaseMachine,
     KX_KK_ClientStateMachine,
@@ -514,25 +514,25 @@ class BaseTCPClient:
             if self.connecting:
                 raise RuntimeError("Cannot read while connecting")
             if not self.connected:
-                raise RuntimeError("Not connected")
+                raise ClientClosedError("Not connected")
         if self.protocol is None:
-            raise RuntimeError("Protocol not initialized")
+            raise RuntimeError("Protocol not initialized")  # should not happen
         if not self.protocol.kx_finished.is_set():
             raise RuntimeError("Key exchange not completed")
         try:
             msg, msg_id = self.protocol.received_decrypted_msgs.get()
             return msg, msg_id
         except SyncMsgQueueShutdown:
-            raise RuntimeError("Connection closed") from None
+            raise ClientClosedError from None
 
     def write(self, msg: Buffer, *, msg_id: int) -> None:
         with self.state_lock:
             if self.connecting:
                 raise RuntimeError("Cannot write while connecting")
             if not self.connected:
-                raise RuntimeError("Not connected")
+                raise ClientClosedError("Not connected")
         if self.protocol is None:
-            raise RuntimeError("Protocol not initialized")
+            raise RuntimeError("Protocol not initialized")  # should not happen
         if not self.protocol.kx_finished.is_set():
             raise RuntimeError("Key exchange not completed")
         self.protocol.write(msg, msg_id=msg_id)
