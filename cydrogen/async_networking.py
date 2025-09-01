@@ -55,15 +55,6 @@ A function that handles a stream, taking a StreamReaderWriter instance as an arg
 Typically: `async def handler(rw: StreamReaderWriter) -> None`.
 """
 
-type ValidatePeerKeyFunc = Callable[[KxPublicKey], Awaitable[None]]
-"""
-A function that validates a peer's public key, taking a KxPublicKey instance as an argument and returning an Awaitable.
-
-Typically: `async def validate_peer_key(peer_key: KxPublicKey) -> None`.
-
-The function should raise an exception if the key is not valid.
-"""
-
 
 class StreamReaderWriter:
     """
@@ -152,10 +143,6 @@ class StreamReaderWriter:
         return self._protocol.get_extra_info(name, default)
 
 
-async def dummy_validate_peer_key(key: KxPublicKey) -> None:
-    logger.debug("Dummy validate peer key called for %s", key)
-
-
 class KXProtocol(asyncio.BufferedProtocol):
     def __init__(
         self,
@@ -164,7 +151,6 @@ class KXProtocol(asyncio.BufferedProtocol):
         *,
         client_handler: StreamHandlerFunction | None = None,
         limit: int = _DEFAULT_LIMIT,
-        validate_peer_key: ValidatePeerKeyFunc | None = None,
         executor: ThreadPoolExecutor,
     ) -> None:
         self._loop = loop
@@ -177,10 +163,8 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._limit = limit
         self._client_handler: StreamHandlerFunction | None = client_handler
         self._kx_completed = loop.create_future()
-        self._validate_peer_key: ValidatePeerKeyFunc = validate_peer_key or dummy_validate_peer_key
         self._task: asyncio.Task | None = None
         self._decrypt_task: asyncio.Task | None = None
-        self._validation_fut: asyncio.Future = self._loop.create_future()
         self._executor = executor
 
         self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
@@ -351,26 +335,6 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._transport.abort()
 
     async def validate_and_handle(self) -> None:
-        try:
-            await self.validate_peer_key()
-            self._validation_fut.set_result(None)
-        except asyncio.CancelledError:
-            self._transport.abort()
-            logger.warning("Peer public key validation for %s cancelled", self.peername)
-            self._validation_fut.cancel()
-            return
-        except Exception as ex:
-            self._transport.abort()
-            logger.exception("Peer public key validation for %s failed", self.peername)
-            if self._client_handler is None:
-                # we are client side, we need to set the exception so that the client will fail
-                self._validation_fut.set_exception(ex)
-            else:
-                # we are server side, there is nothing to await the validation future
-                self._validation_fut.set_result(None)
-            return
-        logger.info("Peer public key validation for %s passed", self.peername)
-
         self._decrypt_task = self._loop.create_task(self.continuous_decrypt())
 
         if self._client_handler is None:
@@ -385,20 +349,6 @@ class KXProtocol(asyncio.BufferedProtocol):
         finally:
             self._transport.close()
             logger.info("Client %s disconnected", self.peername)
-
-    async def validate_peer_key(self) -> None:
-        peer_key = self._machine.get_peer_key()
-        if peer_key is None:
-            logger.debug("No peer public key to validate")
-            return
-        logger.debug("Validating peer public key")
-        try:
-            await self._validate_peer_key(peer_key)
-        except Exception as ex:
-            raise KeyExchangeException("Failed to validate peer public key") from ex
-
-    async def wait_for_validation(self) -> None:
-        await self._validation_fut
 
     async def wait_for_key_exchange(self) -> None:
         await self._kx_completed
@@ -537,7 +487,6 @@ async def _open_connection(
     port: int,
     machine_factory: Callable[[], BaseMachine],
     limit: int,
-    validate_server_key: ValidatePeerKeyFunc | None,
     retry: int,
     retry_wait: int,
     loop: asyncio.AbstractEventLoop,
@@ -547,7 +496,7 @@ async def _open_connection(
 
     def protocol_factory() -> KXProtocol:
         machine = machine_factory()
-        return KXProtocol(machine, loop, limit=limit, validate_peer_key=validate_server_key, executor=executor)
+        return KXProtocol(machine, loop, limit=limit, executor=executor)
 
     try:
         transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
@@ -556,14 +505,12 @@ async def _open_connection(
         raise
     try:
         await protocol.wait_for_key_exchange()
+    except KeyExchangeException:
+        transport.abort()
+        raise
     except Exception as ex:
         transport.abort()
         raise KeyExchangeException(f"Failed to complete key exchange with {host}:{port}") from ex
-    try:
-        await protocol.wait_for_validation()
-    except Exception:
-        transport.abort()
-        raise
     return StreamReaderWriter(protocol)
 
 
@@ -586,7 +533,7 @@ async def open_kx_n_connection(
             server_public_key, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
-    return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
+    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_kk_connection(
@@ -608,7 +555,7 @@ async def open_kx_kk_connection(
             client_pair, server_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
-    return await _open_connection(host, port, machine_factory, limit, None, connect_retry, connect_retry_wait, loop)
+    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop)
 
 
 async def open_kx_xx_connection(
@@ -618,7 +565,7 @@ async def open_kx_xx_connection(
     *,
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
-    validate_server_key: ValidatePeerKeyFunc | None = None,
+    validate_server_key: Callable[[KxPublicKey], None] | None = None,
     connect_retry: int = 3,
     connect_retry_wait: int = 30,
     sent_msg_max_size: int = 2**20,
@@ -628,10 +575,14 @@ async def open_kx_xx_connection(
 
     def machine_factory() -> BaseMachine:
         return KX_XX_ClientStateMachine(
-            client_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            client_pair,
+            psk=psk,
+            sent_msg_max_size=sent_msg_max_size,
+            received_msg_max_size=received_msg_max_size,
+            validate_peer_key=validate_server_key,
         )
 
-    return await _open_connection(host, port, machine_factory, limit, validate_server_key, connect_retry, connect_retry_wait, loop)
+    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop)
 
 
 class BaseAsyncRequestResponseClient:
@@ -834,7 +785,7 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         *,
         psk: Psk | None = None,
         limit: int = _DEFAULT_LIMIT,
-        validate_server_key: ValidatePeerKeyFunc | None = None,
+        validate_server_key: Callable[[KxPublicKey], None] | None = None,
         request_timeout_secs: int | None = 30,
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
@@ -1072,7 +1023,7 @@ async def start_kx_xx_server(
     *,
     psk: Psk | None = None,
     limit: int = _DEFAULT_LIMIT,
-    validate_client_key: ValidatePeerKeyFunc | None = None,
+    validate_client_key: Callable[[KxPublicKey], None] | None = None,
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
 ) -> asyncio.Server:
@@ -1081,11 +1032,13 @@ async def start_kx_xx_server(
 
     def factory() -> KXProtocol:
         machine = KX_XX_ServerStateMachine(
-            server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
+            server_pair,
+            psk=psk,
+            sent_msg_max_size=sent_msg_max_size,
+            received_msg_max_size=received_msg_max_size,
+            validate_peer_key=validate_client_key,
         )
-        return KXProtocol(
-            machine, loop, client_handler=wrap(handler), limit=limit, validate_peer_key=validate_client_key, executor=executor
-        )
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
 
     try:
         return await _loop_create_server(factory, host, port, executor)

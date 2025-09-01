@@ -2,7 +2,7 @@ import asyncio
 import time
 
 import pytest
-from cydrogen import ClientClosedError, KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
+from cydrogen import KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
 from cydrogen._networking import MsgQueue
 from cydrogen.async_networking import (
     KX_KK_AsyncRequestResponseClient,
@@ -255,7 +255,7 @@ async def test_client_server_kx_kk_with_wrong_client_pubkey() -> None:
         await server.wait_closed()
 
 
-async def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
+def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
     raise RuntimeError("nope")
 
 
@@ -279,13 +279,9 @@ async def test_fail_validate_client_pubkey() -> None:
     await server.start_serving()
 
     try:
-        # the validation of the client key happens on server side,
-        # but it only happens once the XX key exchange has been completed.
-        # so no exception is going to be triggered as part of the connection establishment.
-        # to trigger the exception, we need to send a request.
-        with pytest.raises(ClientClosedError):
-            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR) as client:
-                await client.request(b"test")
+        with pytest.raises(KeyExchangeException):
+            async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR):
+                pass
     finally:
         server.close()
         await server.wait_closed()
