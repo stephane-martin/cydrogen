@@ -3,13 +3,14 @@
 from libc.string cimport memcmp
 from libc.stdint cimport uint64_t
 
-from ._utils cimport make_safe_reader, make_safe_writer, make_async_safe_reader, store64, load64
+from ._decls cimport hydro_secretbox_HEADERBYTES
+from ._utils cimport make_safe_writer, store64, load64
 
 from .exceptions import DecryptException
 
 
-cdef bytes CY_ENC_MSG_MARKER = b"qN\x00\x00"          # used internally here
-cdef const size_t CY_ENC_MSG_HEADER_SIZE = 20         # 4 bytes marker + 8 bytes for ciphertext length + 8 bytes for message ID
+cdef bytes CY_ENC_MSG_MARKER = b"EM"
+cdef const size_t CY_ENC_MSG_HEADER_SIZE = 10         # 2 bytes marker + 8 bytes for message ID
 ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)             # to make it available in Python
 ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE          # to make it available in Python
 
@@ -20,19 +21,17 @@ cpdef parse_encrypted_message_header(const unsigned char[:] header):
     if len(header) < CY_ENC_MSG_HEADER_SIZE:
         raise OSError("Header is too short")
     cdef unsigned char* marker_ptr = CY_ENC_MSG_MARKER
-    if memcmp(&header[0], marker_ptr, 4) != 0:
+    if memcmp(&header[0], marker_ptr, 2) != 0:
         raise DecryptException("Invalid message marker")
-    cdef size_t msg_size = load64(header[4:12])
-    cdef uint64_t msg_id = load64(header[12:20])
-    return msg_size, msg_id
+    cdef uint64_t msg_id = load64(header[2:10])
+    return msg_id
 
 
-cpdef encrypted_message_header(const unsigned char[:] ciphertext, uint64_t msg_id):
+cpdef encrypted_message_header(uint64_t msg_id):
     cdef bytearray header = bytearray(CY_ENC_MSG_HEADER_SIZE)
-    header[0:4] = CY_ENC_MSG_MARKER
+    header[0:2] = CY_ENC_MSG_MARKER
     cdef unsigned char[:] header_view = header
-    store64(header_view[4:12], len(ciphertext))
-    store64(header_view[12:20], msg_id)
+    store64(header_view[2:10], msg_id)
     return header
 
 
@@ -46,7 +45,7 @@ cdef class EncryptedMessage:
         self.msg_id = msg_id
 
     cdef header(self):
-        return encrypted_message_header(self.ciphertext, self.msg_id)
+        return encrypted_message_header(self.msg_id)
 
     def __len__(self):
         return len(self.ciphertext) + CY_ENC_MSG_HEADER_SIZE
@@ -90,46 +89,11 @@ cdef class EncryptedMessage:
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed, *, max_msg_size=None):
-        msg_size, msg_id = parse_encrypted_message_header(framed)
-        if max_msg_size is not None and msg_size > max_msg_size:
-            raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
-        if len(framed) < (msg_size + CY_ENC_MSG_HEADER_SIZE):
-            raise OSError("Framed message is too short")
-        return cls(framed[CY_ENC_MSG_HEADER_SIZE:CY_ENC_MSG_HEADER_SIZE + msg_size], msg_id)
-
-    @classmethod
-    def read_from(cls, reader, *, max_msg_size=None):
-        if reader is None:
-            raise ValueError("File object cannot be None")
-        r = make_safe_reader(reader)
-
-        cdef bytearray header_buf = bytearray(CY_ENC_MSG_HEADER_SIZE)
-        if r.readinto(header_buf) < CY_ENC_MSG_HEADER_SIZE:
-            raise OSError("Failed to read next message header")
-        msg_size, msg_id = parse_encrypted_message_header(header_buf)
-        if max_msg_size is not None and msg_size > max_msg_size:
-            raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
-        cdef bytearray msg = bytearray(msg_size)
-        if r.readinto(msg) < msg_size:
-            raise OSError("Failed to read the entire message")
-        return cls(msg, msg_id)
-
-    @classmethod
-    async def aread_from(cls, reader, *, max_msg_size=None):
-        if reader is None:
-            raise ValueError("File object cannot be None")
-        r = make_async_safe_reader(reader)
-        try:
-            header_buf = await r.readexactly(CY_ENC_MSG_HEADER_SIZE)
-        except EOFError as ex:
-            raise OSError("Failed to read next message header") from ex
-        if header_buf[:4] != CY_ENC_MSG_MARKER:
-            raise ValueError("Invalid message header")
-        msg_size, msg_id = parse_encrypted_message_header(header_buf)
-        if max_msg_size is not None and msg_size > <size_t>max_msg_size:
-            raise ValueError("Message size exceeds maximum allowed size, {} > {}".format(msg_size, max_msg_size))
-        try:
-            msg = await r.readexactly(msg_size)
-        except EOFError as ex:
-            raise OSError("Failed to read the entire message") from ex
-        return cls(msg, msg_id)
+        msg_id = parse_encrypted_message_header(framed)
+        ciphertext_size = len(framed) - CY_ENC_MSG_HEADER_SIZE  # positive because parsing succeeded
+        if ciphertext_size < hydro_secretbox_HEADERBYTES:
+            raise ValueError("Ciphertext size is too small")
+        plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
+        if max_msg_size is not None and plaintext_size > max_msg_size:
+            raise ValueError("Plaintext size exceeds maximum allowed size, {} > {}".format(plaintext_size, max_msg_size))
+        return cls(framed[CY_ENC_MSG_HEADER_SIZE:len(framed)], msg_id)

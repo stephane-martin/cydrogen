@@ -5,8 +5,9 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
-from ._datastructs cimport parse_encrypted_message_header, CY_ENC_MSG_HEADER_SIZE
+from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE, CY_ENC_MSG_MARKER
 from ._decls cimport hydro_secretbox_HEADERBYTES
+from ._utils cimport load64
 
 import asyncio
 import logging
@@ -165,23 +166,29 @@ cdef class ReadBuffers:
             self.write_pos = 0
 
     cpdef consume_message(self):
-        header = self.peek_bytes(CY_ENC_MSG_HEADER_SIZE)
-        if header is None:
-            # not enough data to read the header
+        h = self.peek_bytes(10)
+        if h is None:
+            # not enough data to read the start of the message
             return None
-        ciphertext_size, _ = parse_encrypted_message_header(header)
-        plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
-        if plaintext_size > self.received_msg_max_size:
-            # the message is too large, we cannot handle it
-            # it's more efficient to check the message size here rather than after consuming the bytes or decrypting the message
-            # we avoid unnecessary memory allocations and decryption attempts
-            raise MessageTooBigException
+        length = load64(h[0:8])
+        if h[8:10] == CY_ENC_MSG_MARKER:
+            if length < CY_ENC_MSG_HEADER_SIZE:
+                raise ValueError("Message is too short")
+            ciphertext_size = length - CY_ENC_MSG_HEADER_SIZE
+            if ciphertext_size < hydro_secretbox_HEADERBYTES:
+                raise ValueError("Ciphertext is too short")
+            plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
+            if plaintext_size > self.received_msg_max_size:
+                # the message is too large, we cannot handle it
+                # it's more efficient to check the message size here rather than after consuming the bytes or decrypting the message
+                # we avoid unnecessary memory allocations and decryption attempts
+                raise MessageTooBigException
         # try to consume for real
-        b = self.consume_bytes(CY_ENC_MSG_HEADER_SIZE + ciphertext_size)
+        b = self.consume_bytes(length + 8)
         if b is None:
             # not enough data to read the whole message
             return None
-        return b
+        return b[8:len(b)]  # skip the length field
 
     cdef peek_bytes(self, uint16_t nbytes):
         if nbytes > self.read_buffer_size:
