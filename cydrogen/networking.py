@@ -8,6 +8,7 @@ from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ._datastructs import EncryptedMessage, encrypted_message_header
 from ._decls import NOGIL_THRESHOLD_BYTES
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
@@ -25,7 +26,7 @@ from ._kx_n import (
     client_init_kx_n,
 )
 from ._networking import BytearrayBuilder, ReadBuffers
-from ._secretbox import EncryptedMessage, SecretBox, encrypted_message_header
+from ._secretbox import SecretBox
 from .exceptions import InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")

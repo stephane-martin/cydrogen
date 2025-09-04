@@ -21,9 +21,13 @@ cython_c_args = cc.get_supported_arguments(
 
 _cython_tree_cydrogen = [
   fs.copyfile('__init__.py'),
+  fs.copyfile('exceptions.py'),
+  fs.copyfile('async_networking.py'),
+  fs.copyfile('sync_networking.py'),
   fs.copyfile('networking.py'),
   fs.copyfile('_basekey.pxd'),
   fs.copyfile('_context.pxd'),
+  fs.copyfile('_datastructs.pxd'),
   fs.copyfile('_decls.pxd'),
   fs.copyfile('_hash.pxd'),
   fs.copyfile('_masterkey.pxd'),
@@ -37,6 +41,7 @@ _cython_tree_cydrogen = [
 cydrogen_pyx_sources = [
   ['_basekey', ['_basekey.pyx']],
   ['_context', ['_context.pyx']],
+  ['_datastructs', ['_datastructs.pyx']],
   ['_hash', ['_hash.pyx']],
   ['_masterkey', ['_masterkey.pyx']],
   ['_networking', ['_networking.pyx']],
@@ -108,6 +113,8 @@ python_sources = [
   '_basekey.pyi',
   '_context.pxd',
   '_context.pyi',
+  '_datastructs.pxd',
+  '_datastructs.pyi',
   '_decls.pxd',
   '_decls.pyi',
   '_hash.pxd',

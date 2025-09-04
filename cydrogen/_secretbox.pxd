@@ -6,24 +6,11 @@ from ._basekey cimport BaseKey
 from ._context cimport Context
 
 
-cdef bytes _ENC_MSG_HEADER
-cdef const size_t _ENC_MSG_HEADER_SIZE
-
-
 cdef class SecretBoxKey(BaseKey):
     cpdef secretbox(self, ctx=*)
 
 
 cdef make_secretbox_key(key)
-cpdef parse_encrypted_message_header(const unsigned char[:] header)
-cpdef encrypted_message_header(const unsigned char[:] ciphertext, uint64_t msg_id)
-
-cdef class EncryptedMessage:
-    cdef readonly object ciphertext
-    cdef readonly uint64_t msg_id
-    cdef header(self)
-    cpdef writeto(self, fileobj)
-    cpdef decrypt(self, key, ctx=*, out=*)
 
 
 cdef class SecretBox:

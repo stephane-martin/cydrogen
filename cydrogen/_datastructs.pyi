@@ -1,0 +1,190 @@
+from collections.abc import Buffer
+from typing import Self
+
+from ._protocols import AsyncReader, AsyncWriter, Reader, Writer
+
+ENC_MSG_MARKER: bytes
+"""
+ENC_MSG_MARKER is the magic marker for encrypted messages.
+"""
+
+ENC_MSG_HEADER_SIZE: int
+"""
+ENC_MSG_HEADER_SIZE is the size of the header for encrypted messages.
+
+It includes the magic marker (4 bytes), length of the message (8 bytes), and message ID (8 bytes).
+"""
+
+def parse_encrypted_message_header(header: Buffer) -> tuple[int, int]:
+    """
+    Parse the header of a framed encrypted message.
+
+    Args:
+        header: A bytes-like object containing the header.
+
+    Returns:
+        The length of the encrypted message.
+        The message ID.
+
+    Raises:
+        ValueError: If the header is None or if parsing fails.
+        OSError: If the provided header is too short.
+    """
+    ...
+
+def encrypted_message_header(ciphertext: Buffer, msg_id: int) -> bytearray:
+    """
+    Return the header to frame an encrypted message.
+
+    Args:
+        ciphertext: the ciphertext for the encrypted message
+        msg_id: the message ID
+
+    Returns:
+        The header to frame the encrypted message
+    """
+    ...
+
+class EncryptedMessage:
+    """
+    EncryptedMessage represents an encrypted message.
+
+    EncryptedMessage encapsulates the ciphertext and the message ID. It is used to
+    serialize an encrypted message to a bytes object that can be sent over the wire.
+
+    The serialized format is as follows:
+    - The first 4 bytes are a magic header (ENC_MSG_HEADER).
+    - The next 8 bytes are the length (N) of the encrypted message.
+    - The next 8 bytes are the message ID.
+    - The rest is the encrypted message (N bytes).
+
+    All attributes are readonly after initialization.
+
+    Attributes:
+        ciphertext: The encrypted message itself.
+        msg_id: The message ID associated with the encrypted message.
+    """
+
+    ciphertext: Buffer
+    msg_id: int
+
+    def __init__(self, ctext: Buffer, msg_id: int) -> None:
+        """
+        Initialize the encrypted message.
+
+        Args:
+            ctext: The ciphertext of the encrypted message.
+            msg_id: The message ID associated with the encrypted message.
+
+        Raises:
+            ValueError: If ctext is None.
+        """
+        ...
+
+    def __bytes__(self) -> bytes:
+        """
+        Return the serialized form of the encrypted message as bytes.
+
+        Returns:
+            bytes: The serialized encrypted message.
+        """
+        ...
+
+    def __len__(self) -> int:
+        """
+        Return the length of the framed, encrypted message in bytes, including the header and message ID.
+
+        Returns:
+            int: The length of the encrypted message.
+        """
+        ...
+
+    def writeto(self, out: Writer) -> int:
+        """
+        Write the framed encrypted message to a file-like/path-like object.
+
+        Args:
+            out: A file-like object to write the message to.
+
+        Returns:
+            The number of bytes written to the file object.
+
+        Raises:
+            ValueError: If the file object is None.
+            TypeError: If the file object is not a file-like/path-like object.
+            OSError: If the write operation fails.
+        """
+        ...
+
+    async def awriteto(self, out: AsyncWriter) -> None:
+        """
+        Asynchronously write the framed encrypted message to an async writer.
+
+        Args:
+            out: An async writer to write the message to.
+
+        Raises:
+            ValueError: If the async writer is None.
+            TypeError: If the async writer is not an async writer.
+        """
+        ...
+
+    @classmethod
+    def from_bytes(cls, framed: bytes | Buffer, *, max_msg_size: int | None = None) -> Self:
+        """
+        Create an EncryptedMessage from a framed bytes object.
+
+        Args:
+            framed: A bytes-like object containing the framed ciphertext.
+            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
+                          if the message size exceeds this limit.
+
+        Returns:
+            An instance of EncryptedMessage.
+
+        Raises:
+            ValueError: If the framed message is None or if parsing fails.
+            OSError: If reading the message header or message fails.
+        """
+        ...
+
+    @classmethod
+    def read_from(cls, reader: Reader, *, max_msg_size: int | None = None) -> Self:
+        """
+        Read an EncryptedMessage from a file-like/path-like object.
+
+        Args:
+            reader: A file-like object to read the framed ciphertext from.
+            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
+                          if the message size exceeds this limit.
+
+        Returns:
+            An instance of EncryptedMessage.
+
+        Raises:
+            ValueError: If the file object is None or if parsing fails.
+            OSError: If reading the message header or message fails.
+            TypeError: If the file object is not a file-like/path-like object.
+        """
+        ...
+
+    @classmethod
+    async def aread_from(cls, reader: AsyncReader, *, max_msg_size: int | None = None) -> Self:
+        """
+        Read an EncryptedMessage asynchronously from an async reader.
+
+        Args:
+            reader: An async reader to read the framed ciphertext from.
+            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
+                          if the message size exceeds this limit.
+        Returns:
+            An instance of EncryptedMessage.
+
+        Raises:
+            ValueError: If the reader is None or if parsing fails.
+            OSError: If reading the message header or message fails.
+            TypeError: If the reader is not an async reader.
+        """
+        ...
+
+    def __eq__(self, other: object) -> bool: ...
