@@ -12,6 +12,7 @@ internal implementations and may change without notice.
 
 from ._basekey import BaseKey
 from ._context import Context
+from ._datastructs import ENC_MSG_HEADER_SIZE, ENC_MSG_MARKER, EncryptedMessage, encrypted_message_header, parse_encrypted_message_header
 from ._decls import (
     NOGIL_THRESHOLD_BYTES,
     gen_random_buffer,
@@ -45,13 +46,8 @@ from ._kx_n import (
 from ._masterkey import MasterKey
 from ._networking import MsgQueue, ReadBuffers, SyncMsgQueue
 from ._secretbox import (
-    ENC_MSG_HEADER_SIZE,
-    ENC_MSG_MARKER,
-    EncryptedMessage,
     SecretBox,
     SecretBoxKey,
-    encrypted_message_header,
-    parse_encrypted_message_header,
 )
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
 from ._utils import Counter, load16, load32, load64, store16, store32, store64

@@ -5,8 +5,8 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
+from ._datastructs cimport parse_encrypted_message_header, CY_ENC_MSG_HEADER_SIZE
 from ._decls cimport hydro_secretbox_HEADERBYTES
-from ._secretbox cimport parse_encrypted_message_header, _ENC_MSG_HEADER_SIZE
 
 import asyncio
 import logging
@@ -165,7 +165,7 @@ cdef class ReadBuffers:
             self.write_pos = 0
 
     cpdef consume_message(self):
-        header = self.peek_bytes(_ENC_MSG_HEADER_SIZE)
+        header = self.peek_bytes(CY_ENC_MSG_HEADER_SIZE)
         if header is None:
             # not enough data to read the header
             return None
@@ -177,7 +177,7 @@ cdef class ReadBuffers:
             # we avoid unnecessary memory allocations and decryption attempts
             raise MessageTooBigException
         # try to consume for real
-        b = self.consume_bytes(_ENC_MSG_HEADER_SIZE + ciphertext_size)
+        b = self.consume_bytes(CY_ENC_MSG_HEADER_SIZE + ciphertext_size)
         if b is None:
             # not enough data to read the whole message
             return None

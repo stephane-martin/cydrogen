@@ -124,9 +124,6 @@ def test_secretbox_encrypt_decrypt(secretbox_key: cydrogen.SecretBoxKey, message
     # decrypt the message as EncryptedMessage (passing explicitly the msg_id)
     decrypted_msg = box.decrypt(enc_msg, msg_id=3)
     assert decrypted_msg == message
-    # decrypt the message directly from the encrypted message object
-    decrypted_msg = enc_msg.decrypt(secretbox_key)
-    assert decrypted_msg == message
     # try to decrypt the message with a different msg_id (should fail)
     with pytest.raises(cydrogen.DecryptException):
         box.decrypt(ciphertext, msg_id=4)
@@ -135,11 +132,13 @@ def test_secretbox_encrypt_decrypt(secretbox_key: cydrogen.SecretBoxKey, message
     with pytest.raises(cydrogen.DecryptException):
         box.decrypt(enc_msg, msg_id=4)
     # try to decrypt the message with a different key (should fail)
+    box2 = cydrogen.SecretBox(key2)
     with pytest.raises(cydrogen.DecryptException):
-        enc_msg.decrypt(key2)
+        box2.decrypt(enc_msg)
     # try to decrypt the message with a different context (should fail)
+    box3 = cydrogen.SecretBox(secretbox_key, ctx=b"EXAMPLES")
     with pytest.raises(cydrogen.DecryptException):
-        enc_msg.decrypt(secretbox_key, ctx=b"EXAMPLES")
+        box3.decrypt(enc_msg)
     # try to decrypt the message serialized as a frame (should fail)
     with pytest.raises(cydrogen.DecryptException):
         box.decrypt(bytes(enc_msg), msg_id=3)
