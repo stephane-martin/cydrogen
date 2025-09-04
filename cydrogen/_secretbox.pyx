@@ -8,10 +8,10 @@ from ._context cimport make_context
 from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
-from ._utils cimport FileOpener, SafeMemory, TeeWriter, make_safe_reader, make_safe_writer
-from ._utils cimport store32, load32
+from ._utils cimport FileOpener, SafeMemory, make_safe_reader, make_safe_writer
+from ._utils cimport store32, load32, store64, load64
 from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
-from ._datastructs cimport EncryptedMessage, CY_ENC_MSG_MARKER, CY_ENC_MSG_HEADER_SIZE, encrypted_message_header
+from ._datastructs cimport EncryptedMessage, CY_ENC_MSG_MARKER, CY_ENC_MSG_HEADER_SIZE
 
 import base64
 
@@ -82,13 +82,11 @@ cdef class SecretBox:
         self.key = make_secretbox_key(key)
         self.ctx = make_context(ctx)
 
-    cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, out=None, max_msg_size=None):
+    cpdef encrypt(self, const unsigned char[:] plaintext, uint64_t msg_id=0, max_msg_size=None):
         if plaintext is None:
             raise ValueError("Plaintext cannot be None")
         if max_msg_size is not None and len(plaintext) > max_msg_size:
             raise MessageTooBigException
-        if out is not None:
-            make_safe_writer(out)  # ensure out is a file-like object
         cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
         try:
             secretbox_encrypt(plaintext, msg_id, self.ctx, self.key, ciphertext)
@@ -96,23 +94,20 @@ cdef class SecretBox:
             raise
         except Exception as ex:
             raise EncryptException("Encryption failed") from ex
-        if out is not None:
-            # write the framed encrypted message to the output writer
-            w = make_safe_writer(out)
-            w.write(encrypted_message_header(ciphertext, msg_id))
-            w.write(ciphertext)
-        return ciphertext
+        return ciphertext   # TODO: return as bytes
 
-    cpdef decrypt(self, ciphertext, uint64_t msg_id=0, out=None, max_msg_size=None):
+    cpdef decrypt(self, ciphertext, uint64_t msg_id=0, max_msg_size=None):
         if ciphertext is None:
             raise ValueError("Ciphertext cannot be None")
 
         if isinstance(ciphertext, EncryptedMessage):
-            _id = ciphertext.msg_id
-            ciphertext = ciphertext.ciphertext
-            if msg_id != 0U and _id != msg_id:
+            if msg_id == 0U:
+                msg_id = ciphertext.msg_id
+                ciphertext = ciphertext.ciphertext
+            elif msg_id != ciphertext.msg_id:
                 raise DecryptException("The passed message ID does not match the one in the EncryptedMessage")
-            msg_id = _id
+            else:
+                ciphertext = ciphertext.ciphertext
 
         if len(ciphertext) < hydro_secretbox_HEADERBYTES:
             raise ValueError("Ciphertext is too short")
@@ -126,17 +121,15 @@ cdef class SecretBox:
             raise
         except Exception as ex:
             raise DecryptException("Decryption failed") from ex
-        if out is not None:
-            make_safe_writer(out).write(plaintext)
         return bytes(plaintext)
 
-    cpdef encrypt_file(self, src, dst, size_t chunk_size=8192):
+    cpdef encrypt_file(self, src, dst, uint32_t chunk_size=8192):
         if src is None or dst is None:
             raise ValueError("Source and destination file objects cannot be None")
         with FileOpener(src, mode="rb") as src_obj, FileOpener(dst, mode="wb") as dst_obj:
             return self._encrypt_file(src_obj, dst_obj, chunk_size=chunk_size)
 
-    cdef _encrypt_file(self, fileobj, out, size_t chunk_size=8192):
+    cdef _encrypt_file(self, fileobj, out, uint32_t chunk_size=8192):
         if fileobj is None or out is None:
             raise ValueError("Source and destination file objects cannot be None")
         if chunk_size <= hydro_secretbox_HEADERBYTES:
@@ -150,10 +143,10 @@ cdef class SecretBox:
         cdef uint64_t msg_id = 1        # we will increment this for each chunk
 
         # write the max buffer size to the output file so that we can read it at decrypt time
-        cdef bytearray header = bytearray(8)
-        header[0:4] = CY_ENC_MSG_MARKER
+        cdef bytearray header = bytearray(6)
+        header[0:2] = CY_ENC_MSG_MARKER
         cdef unsigned char[:] header_view = header
-        store32(header_view[4:8], chunk_size)  # store the chunk size in the header
+        store32(header_view[2:6], chunk_size)  # store the chunk size in the header
         w.write(header)  # write the header to the output file
         total_bytes_written += 8
 
@@ -162,12 +155,25 @@ cdef class SecretBox:
             if n == 0:
                 break
             hasher.update(buf_view[:n])
-            self.encrypt(buf_view[:n], msg_id=msg_id, out=w)
-            total_bytes_written += n + hydro_secretbox_HEADERBYTES + CY_ENC_MSG_HEADER_SIZE
+            ciphertext = self.encrypt(buf_view[:n], msg_id=msg_id)
+            emsg = EncryptedMessage(ciphertext, msg_id)
+            encoded = bytes(emsg)
+            encoded_len = bytearray(8)
+            store64(encoded_len, len(encoded))
+            w.write(encoded_len)
+            w.write(encoded)
+            total_bytes_written += 8 + len(encoded)
             msg_id += 1
 
         # encrypt and write the hash of the original file
-        self.encrypt(hasher.digest(), msg_id=0, out=w)
+        ciphertext = self.encrypt(hasher.digest(), msg_id=0)
+        emsg = EncryptedMessage(ciphertext, 0)
+        encoded = bytes(emsg)
+        encoded_len = bytearray(8)
+        store64(encoded_len, len(encoded))
+        w.write(encoded_len)
+        w.write(encoded)
+        total_bytes_written += 8 + len(encoded)
         return total_bytes_written
 
     cpdef decrypt_file(self, src, dst):
@@ -181,38 +187,46 @@ cdef class SecretBox:
             raise ValueError("Source and destination file objects cannot be None")
         cdef uint64_t msg_id = 1
         cdef uint64_t total_bytes_written = 0
-        cdef bytearray sbuf = bytearray(8)
-        cdef size_t max_buf_size = 0
+        cdef bytearray sbuf = bytearray(6)
+        cdef uint32_t max_buf_size = 0
         cdef EncryptedMessage enc_msg
         cdef Hash hasher = Hash(ctx=self.ctx, key=bytes(self.key))
-        cdef TeeWriter tee
         cdef bytes transmitted_hash
         cdef bytes computed_hash
 
         r = make_safe_reader(fileobj)
         w = make_safe_writer(out)
 
-        if (<uint32_t>r.readinto(sbuf)) != 8U:
+        if r.readinto(sbuf) < 6:
             raise OSError("Failed to read max buffer size")
-        if sbuf[:4] != CY_ENC_MSG_MARKER:
+        if sbuf[:2] != CY_ENC_MSG_MARKER:
             raise ValueError("Invalid message header")
-        max_buf_size = load32(sbuf[4:8])
-        tee = TeeWriter(w, hasher)
+        max_buf_size = load32(sbuf[2:6])
 
         while True:
-            try:
-                enc_msg = EncryptedMessage.read_from(r, max_msg_size=max_buf_size)
-            except OSError as ex:
-                # we have reached the end of the file without having seen the hash
+            encoded_len = r.read(8)
+            if len(encoded_len) < 8:
                 raise DecryptException("final hash not found")
+            length = load64(encoded_len)
+            if length < CY_ENC_MSG_HEADER_SIZE:
+                raise DecryptException("Invalid message length")
+            ciphertext_len = length - CY_ENC_MSG_HEADER_SIZE
+            if ciphertext_len < hydro_secretbox_HEADERBYTES:
+                raise DecryptException("Ciphertext length is too short")
+            if ciphertext_len > max_buf_size:
+                raise DecryptException("Ciphertext length exceeds maximum buffer size")
+            encoded = r.read(length)
+            enc_msg = EncryptedMessage.from_bytes(encoded)
             if enc_msg.msg_id == 0:
                 # if the message ID is 0, we assume it's the hash of the original file
                 # we don't need to write it to the output file
                 break
             if enc_msg.msg_id != msg_id:
                 raise DecryptException("Invalid message ID")
-            self.decrypt(enc_msg, out=tee)
-            total_bytes_written += len(enc_msg.ciphertext) - hydro_secretbox_HEADERBYTES
+            plaintext = self.decrypt(enc_msg)
+            hasher.update(plaintext)
+            w.write(plaintext)
+            total_bytes_written += len(plaintext)
             msg_id += 1
 
         # the last encrypted message contains hash of the original file

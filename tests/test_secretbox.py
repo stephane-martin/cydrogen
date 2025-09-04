@@ -207,18 +207,6 @@ def test_encrypted_message_equals() -> None:
     assert msg != msg5
 
 
-@pytest.mark.parametrize(("message", "msg_id"), [(MESSAGES[0], 1), (MESSAGES[1], 2), (MESSAGES[2], 3)])
-def test_encrypted_message_read_from(secretbox_key: cydrogen.SecretBoxKey, message: bytes, msg_id: int) -> None:
-    box = cydrogen.SecretBox(secretbox_key)
-    ciphertext = box.encrypt(message, msg_id=msg_id)
-    enc_msg = cydrogen.EncryptedMessage(ciphertext, msg_id=msg_id)
-    buf = io.BytesIO()
-    enc_msg.writeto(buf)
-    buf.seek(0)
-    read_msg = cydrogen.EncryptedMessage.read_from(buf)
-    assert read_msg == enc_msg
-
-
 class AsyncBytesIOReader:
     def __init__(self, data: Buffer) -> None:
         self.b = io.BytesIO(data)
@@ -228,17 +216,6 @@ class AsyncBytesIOReader:
         await asyncio.sleep(0)
         # we read byte by byte to check that we will handle a full read correctly
         return self.b.read(1)
-
-
-@pytest.mark.asyncio(loop_scope="module")
-@pytest.mark.parametrize(("message", "msg_id"), [(MESSAGES[0], 1), (MESSAGES[1], 2), (MESSAGES[2], 3)])
-async def test_encrypted_message_aread_from(secretbox_key: cydrogen.SecretBoxKey, message: bytes, msg_id: int) -> None:
-    box = cydrogen.SecretBox(secretbox_key)
-    ciphertext = box.encrypt(message, msg_id=msg_id)
-    enc_msg = cydrogen.EncryptedMessage(ciphertext, msg_id=msg_id)
-    reader = AsyncBytesIOReader(bytes(enc_msg))
-    read_msg = await cydrogen.EncryptedMessage.aread_from(reader)
-    assert read_msg == enc_msg
 
 
 def test_encrypt_decrypt_file() -> None:

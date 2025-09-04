@@ -6,7 +6,7 @@ cdef bytes CY_ENC_MSG_MARKER
 cdef const size_t CY_ENC_MSG_HEADER_SIZE
 
 cpdef parse_encrypted_message_header(const unsigned char[:] header)
-cpdef encrypted_message_header(const unsigned char[:] ciphertext, uint64_t msg_id)
+cpdef encrypted_message_header(uint64_t msg_id)
 
 cdef class EncryptedMessage:
     cdef readonly object ciphertext

@@ -6,7 +6,6 @@ from ._basekey import BaseKey
 from ._context import Context
 from ._datastructs import EncryptedMessage
 from ._masterkey import MasterKey
-from ._protocols import Writer
 
 class SecretBoxKey(BaseKey):
     """
@@ -99,16 +98,13 @@ class SecretBox:
         """
         ...
 
-    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = 0, out: Writer | None = None, max_msg_size: int | None = None) -> bytearray:
+    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = 0, max_msg_size: int | None = None) -> bytearray:
         """
         Encrypt the plaintext using the secret box key, context and message ID.
-
-        If out is provided, the framed ciphertext will be written to it.
 
         Args:
             plaintext: The plaintext to encrypt.
             msg_id: Optional message ID to associate with the encrypted message. Default is 0.
-            out: Optional file-like object to write the framed encrypted ciphertext to.
             max_msg_size: Optional maximum size of the plaintext. If provided, raises `cydrogen.MessageTooBigException` if the plaintext size exceeds this limit.
 
         Returns:
@@ -122,20 +118,15 @@ class SecretBox:
         """
         ...
 
-    def decrypt(
-        self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = 0, out: Writer | None = None, max_msg_size: int | None = None
-    ) -> bytes:
+    def decrypt(self, ciphertext: bytes | Buffer | EncryptedMessage, msg_id: int = 0, max_msg_size: int | None = None) -> bytes:
         """
         Decrypt the ciphertext using the secret box key, an optional context and message ID.
 
         The optional msg_id must match the one used during encryption.
 
-        If out is provided, the plaintext will be written to it.
-
         Args:
             ciphertext: The ciphertext to decrypt. Can be an EncryptedMessage or a bytes-like object.
             msg_id: Optional message ID to verify against the ciphertext. Default is 0.
-            out: Optional file-like object to write the decrypted plaintext to.
             max_msg_size: Optional maximum size of the plaintext. If provided, raises `cydrogen.MessageTooBigException` if the plaintext size exceeds this limit.
 
         Returns:

@@ -8,7 +8,7 @@ from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ._datastructs import EncryptedMessage, encrypted_message_header
+from ._datastructs import EncryptedMessage
 from ._decls import NOGIL_THRESHOLD_BYTES
 from ._kx_n import (
     KX_KK_PACKET1BYTES,
@@ -27,6 +27,7 @@ from ._kx_n import (
 )
 from ._networking import BytearrayBuilder, ReadBuffers
 from ._secretbox import SecretBox
+from ._utils import store64
 from .exceptions import InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
@@ -449,9 +450,8 @@ class BaseMachine:
             The message ID associated with the decrypted message.
         """
         emsg = EncryptedMessage.from_bytes(msg)
-        msg_id = emsg.msg_id
         plaintext: bytes = self._rbox.decrypt(emsg)
-        return plaintext, msg_id
+        return plaintext, emsg.msg_id
 
     def release_encrypted_message(self, mv: Buffer) -> None:
         self._read_buffers.release_bytearray(mv)
@@ -546,8 +546,12 @@ class BaseMachine:
 
     def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineProducedEvent]:
         # called by Protocol to prepare sending a message to the server
-        self._data_ready_to_send.add(encrypted_message_header(ciphertext, msg_id))
-        self._data_ready_to_send.add(ciphertext)
+        emsg = EncryptedMessage(ciphertext, msg_id)
+        encoded = bytes(emsg)
+        encoded_length = bytearray(8)
+        store64(encoded_length, len(encoded))
+        self._data_ready_to_send.add(encoded_length)
+        self._data_ready_to_send.add(encoded)
         return []
 
     def _connection_made(self) -> list[MachineProducedEvent]:
@@ -597,11 +601,9 @@ class BaseMachine:
             if len(b) >= NOGIL_THRESHOLD_BYTES:
                 logger.warning("_get_small_message: consuming abnormal big message: %s bytes", len(b))
             emsg = EncryptedMessage.from_bytes(b)
-            msg_id = emsg.msg_id
             plaintext: bytes = self._rbox.decrypt(emsg)  # considered immediate
-            del emsg
             self._read_buffers.release_bytearray(b)  # return the mview to the freelist
-            return plaintext, msg_id
+            return plaintext, emsg.msg_id
         except Exception as ex:
             self._fail_kx(ex)
             raise

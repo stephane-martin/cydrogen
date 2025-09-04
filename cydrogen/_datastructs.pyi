@@ -1,7 +1,7 @@
 from collections.abc import Buffer
 from typing import Self
 
-from ._protocols import AsyncReader, AsyncWriter, Reader, Writer
+from ._protocols import AsyncWriter, Writer
 
 ENC_MSG_MARKER: bytes
 """
@@ -15,7 +15,7 @@ ENC_MSG_HEADER_SIZE is the size of the header for encrypted messages.
 It includes the magic marker (4 bytes), length of the message (8 bytes), and message ID (8 bytes).
 """
 
-def parse_encrypted_message_header(header: Buffer) -> tuple[int, int]:
+def parse_encrypted_message_header(header: Buffer) -> int:
     """
     Parse the header of a framed encrypted message.
 
@@ -23,7 +23,6 @@ def parse_encrypted_message_header(header: Buffer) -> tuple[int, int]:
         header: A bytes-like object containing the header.
 
     Returns:
-        The length of the encrypted message.
         The message ID.
 
     Raises:
@@ -32,12 +31,11 @@ def parse_encrypted_message_header(header: Buffer) -> tuple[int, int]:
     """
     ...
 
-def encrypted_message_header(ciphertext: Buffer, msg_id: int) -> bytearray:
+def encrypted_message_header(msg_id: int) -> bytearray:
     """
     Return the header to frame an encrypted message.
 
     Args:
-        ciphertext: the ciphertext for the encrypted message
         msg_id: the message ID
 
     Returns:
@@ -145,45 +143,6 @@ class EncryptedMessage:
         Raises:
             ValueError: If the framed message is None or if parsing fails.
             OSError: If reading the message header or message fails.
-        """
-        ...
-
-    @classmethod
-    def read_from(cls, reader: Reader, *, max_msg_size: int | None = None) -> Self:
-        """
-        Read an EncryptedMessage from a file-like/path-like object.
-
-        Args:
-            reader: A file-like object to read the framed ciphertext from.
-            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
-                          if the message size exceeds this limit.
-
-        Returns:
-            An instance of EncryptedMessage.
-
-        Raises:
-            ValueError: If the file object is None or if parsing fails.
-            OSError: If reading the message header or message fails.
-            TypeError: If the file object is not a file-like/path-like object.
-        """
-        ...
-
-    @classmethod
-    async def aread_from(cls, reader: AsyncReader, *, max_msg_size: int | None = None) -> Self:
-        """
-        Read an EncryptedMessage asynchronously from an async reader.
-
-        Args:
-            reader: An async reader to read the framed ciphertext from.
-            max_msg_size: Optional maximum size of the message. If provided, raises ValueError
-                          if the message size exceeds this limit.
-        Returns:
-            An instance of EncryptedMessage.
-
-        Raises:
-            ValueError: If the reader is None or if parsing fails.
-            OSError: If reading the message header or message fails.
-            TypeError: If the reader is not an async reader.
         """
         ...
 
