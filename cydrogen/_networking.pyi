@@ -186,6 +186,7 @@ class ReadBuffers:
         """
         ...
 
+    def consume_kx_packet(self) -> memoryview | None: ...
     def release_bytearray(self, mv: Buffer) -> None:
         """
         Give back a memoryview previously returned by `consume_bytes` or `consume_message` to the ReadBuffers instance, so

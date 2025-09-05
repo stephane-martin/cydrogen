@@ -265,6 +265,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.can_write_eof()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        logger.debug("KxProtocol connection_made called")
         assert isinstance(transport, asyncio.Transport)
         self._transport = transport
         self.peername = str(transport.get_extra_info("peername", ""))
@@ -468,9 +469,9 @@ async def _connect(
     loop = asyncio.get_running_loop()
     while True:
         try:
-            logger.debug("Connecting to %s:%d...", host, port)
+            logger.info("Connecting to %s:%d...", host, port)
             transport, protocol = await loop.create_connection(protocol_factory, host, port)
-            logger.debug("Connected to %s:%d", host, port)
+            logger.info("Connected to %s:%d", host, port)
             return transport, protocol
         except ConnectionRefusedError:
             if retry == 0:

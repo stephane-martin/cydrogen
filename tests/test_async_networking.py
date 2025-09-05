@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 
 import pytest
@@ -37,6 +38,9 @@ MESSAGES = [
     b"nine",
     b"ten",
 ]
+
+
+logger = logging.getLogger("cydrogen.tests")
 
 
 class H(RequestResponseHandler):
@@ -91,9 +95,11 @@ async def test_msg_queue_waiting() -> None:
 async def test_async_client_async_server_kx_xx() -> None:
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
+    logger.info("server started")
 
     try:
         async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
+            logger.info("client connected")
             for msg in MESSAGES:
                 response = await client.request(msg)
                 assert response == msg.upper()

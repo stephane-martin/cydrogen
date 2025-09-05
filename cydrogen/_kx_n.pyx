@@ -5,6 +5,7 @@ from libc.stdint cimport uint8_t
 from libc.string cimport memcmp, memcpy
 
 from ._basekey cimport BaseKey
+from ._datastructs cimport KX_KK_Packet1, KX_KK_Packet2, KX_N_Packet1, KX_XX_Packet1, KX_XX_Packet2, KX_XX_Packet3
 from ._decls cimport kx_keygen, hydro_kx_keypair
 from ._decls cimport hydro_kx_PUBLICKEYBYTES, hydro_kx_SECRETKEYBYTES
 from ._decls cimport hydro_kx_N_PACKET1BYTES
@@ -74,12 +75,12 @@ cdef class SessionPair:
 
 cdef class KxKkClientState:
     def __init__(self, KxPair client_kp):
-        self.packet1 = b""
+        self.packet1 = None
         self.session_pair = None
         self.client_kp = client_kp
         self.mu = threading.Lock()
 
-    cpdef client_finish_kx_kk(self, const unsigned char[:] packet2):
+    cpdef client_finish_kx_kk(self, KX_KK_Packet2 packet2):
         with self.mu:
             if not self.packet1:
                 raise RuntimeError("client_finish_kx_kk called before client_init_kx_kk")
@@ -87,10 +88,8 @@ cdef class KxKkClientState:
                 raise RuntimeError("client_finish_kx_kk already called")
             if packet2 is None:
                 raise ValueError("packet2 cannot be None")
-            if len(packet2) != hydro_kx_KK_PACKET2BYTES:
-                raise ValueError(f"Packet2 must be {hydro_kx_KK_PACKET2BYTES} bytes long")
             try:
-                rx, tx = kx_kk_3(&self.state, packet2, self.client_kp)
+                rx, tx = kx_kk_3(&self.state, packet2.packet, self.client_kp)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to finish key exchange") from ex
             self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
@@ -98,8 +97,8 @@ cdef class KxKkClientState:
 
 cdef class KxXxClientState:
     def __init__(self, KxPair client_kp, Psk psk=None):
-        self.packet1 = b""
-        self.packet3 = b""
+        self.packet1 = None
+        self.packet3 = None
         self.server_public_key = None
         self.session_pair = None
         self.client_kp = client_kp
@@ -112,7 +111,7 @@ packet3: {self.packet3}
 server_public_key: {self.server_public_key}
 session_pair: {self.session_pair}"""
 
-    cpdef client_process_kx_xx(self, const unsigned char[:] packet2):
+    cpdef client_process_kx_xx(self, KX_XX_Packet2 packet2):
         with self.mu:
             if not self.packet1:
                 raise RuntimeError("client_process_kx_xx called before client_init_kx_xx")
@@ -120,13 +119,11 @@ session_pair: {self.session_pair}"""
                 raise RuntimeError("client_process_kx_xx already called")
             if packet2 is None:
                 raise ValueError("packet2 cannot be None")
-            if len(packet2) != hydro_kx_XX_PACKET2BYTES:
-                raise ValueError(f"Packet2 must be {hydro_kx_XX_PACKET2BYTES} bytes long")
             try:
-                rx, tx, peer_pk, packet3 = kx_xx_3(&self.state, packet2, self.psk, self.client_kp)
+                rx, tx, peer_pk, packet3 = kx_xx_3(&self.state, packet2.packet, self.psk, self.client_kp)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to process second packet for key exchange") from ex
-            self.packet3 = packet3
+            self.packet3 = KX_XX_Packet3(packet3)
             self.server_public_key = KxPublicKey(peer_pk)
             self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
             return self
@@ -134,7 +131,7 @@ session_pair: {self.session_pair}"""
 
 cdef class KxXxServerState:
     def __init__(self, Psk psk=None):
-        self.packet2 = b""
+        self.packet2 = None
         self.client_public_key = None
         self.session_pair = None
         self.psk = psk
@@ -145,7 +142,7 @@ cdef class KxXxServerState:
 client_public_key: {self.client_public_key}
 session_pair: {self.session_pair}
 """
-    cpdef server_finish_kx_xx(self, const unsigned char[:] packet3):
+    cpdef server_finish_kx_xx(self, KX_XX_Packet3 packet3):
         with self.mu:
             if self.session_pair is not None:
                 raise RuntimeError("server_finish_kx_xx already called")
@@ -153,15 +150,14 @@ session_pair: {self.session_pair}
                 raise RuntimeError("server_finish_kx_xx called before server_process_kx_xx")
             if packet3 is None:
                 raise ValueError("packet3 cannot be None")
-            if len(packet3) != hydro_kx_XX_PACKET3BYTES:
-                raise ValueError(f"Packet3 must be {hydro_kx_XX_PACKET3BYTES} bytes long")
             try:
-                rx, tx, client_public_key = kx_xx_4(&self.state, packet3, self.psk)
+                rx, tx, client_public_key = kx_xx_4(&self.state, packet3.packet, self.psk)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to finish key exchange") from ex
             self.client_public_key = KxPublicKey(client_public_key)
             self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
             return self
+
 
 cdef class KxPublicKey:
     def __init__(self, kp):
@@ -345,7 +341,7 @@ cdef class KxPair:
     cpdef secret_key(self):
         return KxSecretKey(self.kp)
 
-    cpdef server_finish_kx_n(self, const unsigned char[:] packet1, Psk psk=None):
+    cpdef server_finish_kx_n(self, KX_N_Packet1 packet1, Psk psk=None):
         return server_finish_kx_n(self, packet1, psk)
 
     cpdef client_init_kx_kk(self, KxPublicKey server_public_key):
@@ -353,40 +349,39 @@ cdef class KxPair:
             raise ValueError("Server public key cannot be None")
         cdef KxKkClientState state = KxKkClientState(self)
         try:
-            state.packet1 = kx_kk_1(&state.state, server_public_key, self)
+            packet1 = kx_kk_1(&state.state, server_public_key, self)
+            state.packet1 = KX_KK_Packet1(packet1)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
         return state
 
-    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, const unsigned char[:] packet1):
+    cpdef server_process_kx_kk(self, KxPublicKey client_public_key, KX_KK_Packet1 packet1):
         if client_public_key is None:
             raise ValueError("Client public key cannot be None")
         if packet1 is None:
             raise ValueError("packet1 cannot be None")
-        if len(packet1) != hydro_kx_KK_PACKET1BYTES:
-            raise ValueError(f"Packet1 must be {hydro_kx_KK_PACKET1BYTES} bytes long")
         try:
-            rx, tx, packet2 = kx_kk_2(packet1, client_public_key, self)
+            rx, tx, packet2 = kx_kk_2(packet1.packet, client_public_key, self)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate session from packet") from ex
-        return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), packet2
+        return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), KX_KK_Packet2(packet2)
 
     cpdef client_init_kx_xx(self, Psk psk=None):
         cdef KxXxClientState state = KxXxClientState(self, psk)
         try:
-            state.packet1 = kx_xx_1(&state.state, psk)
+            packet1 = kx_xx_1(&state.state, psk)
+            state.packet1 = KX_XX_Packet1(packet1)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
         return state
 
-    cpdef server_process_kx_xx(self, const unsigned char[:] packet1, Psk psk=None):
+    cpdef server_process_kx_xx(self, KX_XX_Packet1 packet1, Psk psk=None):
         if packet1 is None:
             raise ValueError("packet1 cannot be None")
         cdef KxXxServerState state = KxXxServerState(psk)
-        if len(packet1) != hydro_kx_XX_PACKET1BYTES:
-            raise ValueError(f"Packet1 must be {hydro_kx_XX_PACKET1BYTES} bytes long")
         try:
-            state.packet2 = kx_xx_2(&state.state, packet1, psk, self)
+            packet2 = kx_xx_2(&state.state, packet1.packet, psk, self)
+            state.packet2 = KX_XX_Packet2(packet2)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate second packet for key exchange") from ex
         return state
@@ -421,18 +416,16 @@ cpdef client_init_kx_n(KxPublicKey server_public_key, Psk psk=None):
         rx, tx, packet1 = kx_n_1(server_public_key, psk)
     except RuntimeError as ex:
         raise KeyExchangeException("failed to generate first packet") from ex
-    return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), packet1
+    return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), KX_N_Packet1(packet1)
 
 
-cpdef server_finish_kx_n(KxPair server_kp, const unsigned char[:] packet1, Psk psk=None):
+cpdef server_finish_kx_n(KxPair server_kp, KX_N_Packet1 packet1, Psk psk=None):
     if server_kp is None:
         raise ValueError("static key pair cannot be None")
     if packet1 is None:
         raise ValueError("packet1 cannot be None")
-    if len(packet1) != hydro_kx_N_PACKET1BYTES:
-        raise ValueError(f"Packet1 must be {hydro_kx_N_PACKET1BYTES} bytes long")
     try:
-        rx, tx = kx_n_2(packet1, psk, server_kp)
+        rx, tx = kx_n_2(packet1.packet, psk, server_kp)
     except RuntimeError as ex:
         raise KeyExchangeException("failed to generate session from packet") from ex
     return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))

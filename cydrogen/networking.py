@@ -8,15 +8,9 @@ from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ._datastructs import EncryptedMessage
+from ._datastructs import EncryptedMessage, KX_KK_Packet1, KX_KK_Packet2, KX_N_Packet1, KX_XX_Packet1, KX_XX_Packet2, KX_XX_Packet3
 from ._decls import NOGIL_THRESHOLD_BYTES
 from ._kx_n import (
-    KX_KK_PACKET1BYTES,
-    KX_KK_PACKET2BYTES,
-    KX_N_PACKET1BYTES,
-    KX_XX_PACKET1BYTES,
-    KX_XX_PACKET2BYTES,
-    KX_XX_PACKET3BYTES,
     KxPair,
     KxPublicKey,
     KxXxClientState,
@@ -654,6 +648,9 @@ class KX_N_ClientStateMachine(BaseMachine):
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
+        self._packet1: KX_N_Packet1
+        self._session_pair: SessionPair
+
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(
@@ -680,6 +677,7 @@ class KX_N_ClientStateMachine(BaseMachine):
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        self._data_ready_to_send.add(encode_length(self._packet1))
         self._data_ready_to_send.add(self._packet1)
         return []
 
@@ -739,11 +737,11 @@ class KX_N_ServerStateMachine(BaseMachine):
 
     def _receive_packet1(self) -> list[MachineProducedEvent]:
         # we expect to receive packet1 from the client, length KX_N_PACKET1BYTES
-        packet1: bytes | None = self._read_buffers.consume_bytes(KX_N_PACKET1BYTES)
+        packet1 = self._read_buffers.consume_kx_packet()
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        self._session_pair = self._server_pair.server_finish_kx_n(packet1, self._psk)
+        self._session_pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
         # send OK message to the client
@@ -803,11 +801,11 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
         # we expect to receive packet2 from the server, length KX_KK_PACKET2BYTES
-        packet2: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET2BYTES)
+        packet2 = self._read_buffers.consume_kx_packet()
         if packet2 is None:
             # not enough data to read the packet2
             return []
-        self._kx_state.client_finish_kx_kk(packet2)
+        self._kx_state.client_finish_kx_kk(KX_KK_Packet2.from_bytes(packet2))
         assert self._kx_state.session_pair is not None
         self._session_pair = self._kx_state.session_pair
         self._rbox = SecretBox(self._session_pair.rx)
@@ -815,6 +813,8 @@ class KX_KK_ClientStateMachine(BaseMachine):
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        assert self._kx_state.packet1 is not None
+        self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
         return []
 
@@ -873,14 +873,15 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
     def _receive_packet1(self) -> list[MachineProducedEvent]:
         # we expect to receive packet1 from the client, length KX_KK_PACKET1BYTES
-        packet1: bytes | None = self._read_buffers.consume_bytes(KX_KK_PACKET1BYTES)
+        packet1 = self._read_buffers.consume_kx_packet()
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, packet1)
+        pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, KX_KK_Packet1.from_bytes(packet1))
         self._session_pair = pair
         self._rbox = SecretBox(self._session_pair.rx)
         self._tbox = SecretBox(self._session_pair.tx)
+        self._data_ready_to_send.add(encode_length(packet2))
         self._data_ready_to_send.add(packet2)
         return [KxProgress()]
 
@@ -949,11 +950,11 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
         # we expect to receive packet2 from the server, length KX_XX_PACKET2BYTES
-        packet2: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET2BYTES)
+        packet2 = self._read_buffers.consume_kx_packet()
         if packet2 is None:
             # not enough data to read the packet2
             return []
-        self._kx_state.client_process_kx_xx(packet2)
+        self._kx_state.client_process_kx_xx(KX_XX_Packet2.from_bytes(packet2))
         assert self._kx_state.packet3
         assert self._kx_state.session_pair is not None
         assert self._kx_state.server_public_key is not None
@@ -972,11 +973,11 @@ class KX_XX_ClientStateMachine(BaseMachine):
                 new_ex.__cause__ = ex
                 return self._fail_kx(new_ex)
         # send packet3 to the server
+        self._data_ready_to_send.add(encode_length(self._kx_state.packet3))
         self._data_ready_to_send.add(self._kx_state.packet3)
         return [KxProgress()]
 
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
-        # self._state == MState.WAITING_FOR_SERVER_ACK:
         two_uple = self._get_small_message()
         if two_uple is None:
             # not enough data to read the message
@@ -986,6 +987,8 @@ class KX_XX_ClientStateMachine(BaseMachine):
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        assert self._kx_state.packet1 is not None
+        self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
         return []
 
@@ -1054,23 +1057,24 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
     def _receive_packet1(self) -> list[MachineProducedEvent]:
         # we expect to receive packet1 from the client, length KX_XX_PACKET1BYTES
-        packet1: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET1BYTES)
+        packet1 = self._read_buffers.consume_kx_packet()
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        self._kx_state = self._server_pair.server_process_kx_xx(packet1, self._psk)
+        self._kx_state = self._server_pair.server_process_kx_xx(KX_XX_Packet1.from_bytes(packet1), self._psk)
         assert self._kx_state.packet2
         # send packet2 to the client
+        self._data_ready_to_send.add(encode_length(self._kx_state.packet2))
         self._data_ready_to_send.add(self._kx_state.packet2)
         return [KxProgress()]
 
     def _receive_packet3(self) -> list[MachineProducedEvent]:
         # self._state == MState.WAITING_FOR_PACKET3
-        packet3: bytes | None = self._read_buffers.consume_bytes(KX_XX_PACKET3BYTES)
+        packet3 = self._read_buffers.consume_kx_packet()
         if packet3 is None:
             # not enough data to read the packet3
             return []
-        self._kx_state.server_finish_kx_xx(packet3)
+        self._kx_state.server_finish_kx_xx(KX_XX_Packet3.from_bytes(packet3))
         assert self._kx_state.session_pair is not None
         assert self._kx_state.client_public_key is not None
         self._session_pair = self._kx_state.session_pair
