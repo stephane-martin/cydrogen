@@ -12,7 +12,7 @@ internal implementations and may change without notice.
 
 from ._basekey import BaseKey
 from ._context import Context
-from ._datastructs import ENC_MSG_HEADER_SIZE, ENC_MSG_MARKER, EncryptedMessage, encrypted_message_header, parse_encrypted_message_header
+from ._datastructs import ENC_MSG_HEADER_SIZE, ENC_MSG_MARKER, EncryptedMessage
 from ._decls import (
     NOGIL_THRESHOLD_BYTES,
     gen_random_buffer,
@@ -110,14 +110,12 @@ __all__ = [
     "VerifyException",
     "client_init_kx_n",
     "encode_length",
-    "encrypted_message_header",
     "gen_random_buffer",
     "hash_file",
     "load16",
     "load32",
     "load64",
     "pad",
-    "parse_encrypted_message_header",
     "random_u32",
     "random_uniform",
     "randomize_buffer",

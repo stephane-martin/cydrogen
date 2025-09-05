@@ -15,34 +15,6 @@ ENC_MSG_HEADER_SIZE is the size of the header for encrypted messages.
 It includes the magic marker (4 bytes), length of the message (8 bytes), and message ID (8 bytes).
 """
 
-def parse_encrypted_message_header(header: Buffer) -> int:
-    """
-    Parse the header of a framed encrypted message.
-
-    Args:
-        header: A bytes-like object containing the header.
-
-    Returns:
-        The message ID.
-
-    Raises:
-        ValueError: If the header is None or if parsing fails.
-        OSError: If the provided header is too short.
-    """
-    ...
-
-def encrypted_message_header(msg_id: int) -> bytearray:
-    """
-    Return the header to frame an encrypted message.
-
-    Args:
-        msg_id: the message ID
-
-    Returns:
-        The header to frame the encrypted message
-    """
-    ...
-
 class EncryptedMessage:
     """
     EncryptedMessage represents an encrypted message.

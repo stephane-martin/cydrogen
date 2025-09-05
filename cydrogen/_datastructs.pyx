@@ -16,7 +16,7 @@ ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)             # to make it available in 
 ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE          # to make it available in Python
 
 
-cpdef parse_encrypted_message_header(const unsigned char[:] header):
+cdef parse_encrypted_message_header(const unsigned char[:] header):
     if header is None:
         raise ValueError("Header cannot be None")
     if len(header) < CY_ENC_MSG_HEADER_SIZE:
@@ -26,14 +26,6 @@ cpdef parse_encrypted_message_header(const unsigned char[:] header):
         raise DecryptException("Invalid message marker")
     cdef uint64_t msg_id = load64(header[2:10])
     return msg_id
-
-
-cpdef encrypted_message_header(uint64_t msg_id):
-    cdef bytearray header = bytearray(CY_ENC_MSG_HEADER_SIZE)
-    header[0:2] = CY_ENC_MSG_MARKER
-    cdef unsigned char[:] header_view = header
-    store64(header_view[2:10], msg_id)
-    return header
 
 
 cdef class EncryptedMessage:
