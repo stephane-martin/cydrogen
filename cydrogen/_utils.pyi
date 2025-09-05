@@ -1,4 +1,4 @@
-from collections.abc import Buffer, Callable
+from collections.abc import Buffer, Callable, Sized
 from os import PathLike
 from typing import BinaryIO, Literal, Self
 
@@ -32,6 +32,20 @@ class Counter:
         Just calls `value()` method.
         """
         ...
+
+def encode_length(obj: Sized) -> bytearray:
+    """
+    Encode the length of a sized object into a bytearray.
+
+    The length is encoded as a 8-byte big-endian unsigned integer.
+
+    Args:
+        obj: A sized object (e.g., bytes, bytearray, list, etc.).
+
+    Returns:
+        A bytearray containing the 8-byte big-endian representation of the length of the object.
+    """
+    ...
 
 def store64(dst: Buffer, src: int) -> None:
     """

@@ -227,6 +227,13 @@ cpdef store16(unsigned char[:] dst, uint16_t src):
     _store16(dst, src)
 
 
+cpdef encode_length(obj):
+    cdef uint64_t length = len(obj)
+    res = bytearray(8)
+    _store64(res, length)
+    return res
+
+
 def have_mman():
     return cyd_have_mman() == 1
 

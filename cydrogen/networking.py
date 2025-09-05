@@ -27,7 +27,7 @@ from ._kx_n import (
 )
 from ._networking import BytearrayBuilder, ReadBuffers
 from ._secretbox import SecretBox
-from ._utils import store64
+from ._utils import encode_length
 from .exceptions import InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
@@ -547,11 +547,8 @@ class BaseMachine:
     def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineProducedEvent]:
         # called by Protocol to prepare sending a message to the server
         emsg = EncryptedMessage(ciphertext, msg_id)
-        encoded = bytes(emsg)
-        encoded_length = bytearray(8)
-        store64(encoded_length, len(encoded))
-        self._data_ready_to_send.add(encoded_length)
-        self._data_ready_to_send.add(encoded)
+        self._data_ready_to_send.add(encode_length(emsg))
+        self._data_ready_to_send.add(emsg)
         return []
 
     def _connection_made(self) -> list[MachineProducedEvent]:

@@ -50,7 +50,7 @@ from ._secretbox import (
     SecretBoxKey,
 )
 from ._sign import Signer, SignKeyPair, SignPublicKey, SignSecretKey, Verifier, sign_file, verify_file
-from ._utils import Counter, load16, load32, load64, store16, store32, store64
+from ._utils import Counter, encode_length, load16, load32, load64, store16, store32, store64
 from .exceptions import (
     ClientClosedError,
     CyException,
@@ -109,6 +109,7 @@ __all__ = [
     "Verifier",
     "VerifyException",
     "client_init_kx_n",
+    "encode_length",
     "encrypted_message_header",
     "gen_random_buffer",
     "hash_file",

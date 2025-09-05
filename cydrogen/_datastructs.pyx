@@ -57,6 +57,9 @@ cdef class EncryptedMessage:
     def __bytes__(self):
         return bytes(self.encoded)
 
+    def __len__(self):
+        return len(self.encoded)
+
     def __eq__(self, other):
         if other is None:
             return False
@@ -70,10 +73,8 @@ cdef class EncryptedMessage:
         return hash(bytes(self.encoded))
 
     cpdef writeto(self, out):
-        if out is None:
-            raise ValueError("File object cannot be None")
         n_written = make_safe_writer(out).write(self.encoded)
-        if n_written < (CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext)):
+        if n_written < len(self.encoded):
             raise OSError("Failed to write the entire message to the file object")
         return n_written
 
@@ -85,6 +86,7 @@ cdef class EncryptedMessage:
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed, *, max_msg_size=None):
+        # TODO: do we really need to re-calculate self.encoded when calling the constructor
         msg_id = parse_encrypted_message_header(framed)
         ciphertext_size = len(framed) - CY_ENC_MSG_HEADER_SIZE  # positive because parsing succeeded
         if ciphertext_size < hydro_secretbox_HEADERBYTES:
