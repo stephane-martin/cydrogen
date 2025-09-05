@@ -9,7 +9,7 @@ from ._hash cimport Hash, HashKey
 from ._masterkey cimport MasterKey, make_masterkey
 from ._sign import SignPublicKey, SignSecretKey, SignKeyPair
 from ._utils cimport FileOpener, SafeMemory, make_safe_reader, make_safe_writer
-from ._utils cimport store32, load32, store64, load64
+from ._utils cimport store32, load32, load64, encode_length
 from ._decls cimport hydro_secretbox_HEADERBYTES, secretbox_encrypt, secretbox_decrypt
 from ._datastructs cimport EncryptedMessage, CY_ENC_MSG_MARKER, CY_ENC_MSG_HEADER_SIZE
 
@@ -155,25 +155,17 @@ cdef class SecretBox:
             if n == 0:
                 break
             hasher.update(buf_view[:n])
-            ciphertext = self.encrypt(buf_view[:n], msg_id=msg_id)
-            emsg = EncryptedMessage(ciphertext, msg_id)
-            encoded = bytes(emsg)
-            encoded_len = bytearray(8)
-            store64(encoded_len, len(encoded))
-            w.write(encoded_len)
-            w.write(encoded)
-            total_bytes_written += 8 + len(encoded)
+            emsg = EncryptedMessage(self.encrypt(buf_view[:n], msg_id=msg_id), msg_id)
+            w.write(encode_length(emsg))
+            w.write(emsg)
+            total_bytes_written += 8 + len(emsg)
             msg_id += 1
 
         # encrypt and write the hash of the original file
-        ciphertext = self.encrypt(hasher.digest(), msg_id=0)
-        emsg = EncryptedMessage(ciphertext, 0)
-        encoded = bytes(emsg)
-        encoded_len = bytearray(8)
-        store64(encoded_len, len(encoded))
-        w.write(encoded_len)
-        w.write(encoded)
-        total_bytes_written += 8 + len(encoded)
+        emsg = EncryptedMessage(self.encrypt(hasher.digest(), msg_id=0), 0)
+        w.write(encode_length(emsg))
+        w.write(emsg)
+        total_bytes_written += 8 + len(emsg)
         return total_bytes_written
 
     cpdef decrypt_file(self, src, dst):

@@ -86,6 +86,9 @@ cpdef load16(const unsigned char[:] src)
 cpdef store16(unsigned char[:] dst, uint16_t src)
 
 
+cpdef encode_length(obj)
+
+
 @cython.final
 cdef class FileOpener:
     cdef object fileobj
