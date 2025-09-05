@@ -11,5 +11,5 @@ cpdef encrypted_message_header(uint64_t msg_id)
 cdef class EncryptedMessage:
     cdef readonly object ciphertext
     cdef readonly uint64_t msg_id
-    cdef header(self)
+    cdef bytearray encoded
     cpdef writeto(self, fileobj)

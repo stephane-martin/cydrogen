@@ -1,6 +1,7 @@
 # cython: language_level=3
 
-from libc.string cimport memcmp
+from cpython.buffer cimport PyBuffer_FillInfo
+from libc.string cimport memcmp, memcpy
 from libc.stdint cimport uint64_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
@@ -39,19 +40,22 @@ cdef class EncryptedMessage:
     def __init__(self, ctext, uint64_t msg_id):
         if ctext is None:
             raise ValueError("Message cannot be None")
-        # check that ctext is a bytes-like object or a memoryview
-        _ = memoryview(ctext)
         self.ciphertext = ctext
         self.msg_id = msg_id
+        self.encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(ctext))
+        self.encoded[0:2] = CY_ENC_MSG_MARKER
+        cdef const unsigned char[:] ctext_view = ctext
+        cdef unsigned char[:] encoded_view = self.encoded
+        cdef unsigned char* encoded_ptr = self.encoded
+        store64(encoded_view[2:10], msg_id)
+        memcpy(encoded_ptr + CY_ENC_MSG_HEADER_SIZE, &ctext_view[0], len(ctext))
 
-    cdef header(self):
-        return encrypted_message_header(self.msg_id)
-
-    def __len__(self):
-        return len(self.ciphertext) + CY_ENC_MSG_HEADER_SIZE
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
-        return bytes(self.header()) + bytes(self.ciphertext)
+        return bytes(self.encoded)
 
     def __eq__(self, other):
         if other is None:
@@ -59,23 +63,16 @@ cdef class EncryptedMessage:
         if not isinstance(other, EncryptedMessage):
             return False
         cdef EncryptedMessage o = <EncryptedMessage>other
-        if self.msg_id != o.msg_id:
-            return False
-        cdef const unsigned char[:] self_view = self.ciphertext
-        cdef const unsigned char[:] o_view = o.ciphertext
-        if len(self_view) != len(o_view):
-            return False
-        return memcmp(&self_view[0], &o_view[0], len(self_view)) == 0
+        return self.encoded == o.encoded
 
     def __hash__(self):
         # TODO: replace with Py_HashBuffer when Python 3.14 is the minimum version
-        return hash(bytes(self))
+        return hash(bytes(self.encoded))
 
     cpdef writeto(self, out):
         if out is None:
             raise ValueError("File object cannot be None")
-        w = make_safe_writer(out)
-        n_written = w.write(self.header()) + w.write(self.ciphertext)
+        n_written = make_safe_writer(out).write(self.encoded)
         if n_written < (CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext)):
             raise OSError("Failed to write the entire message to the file object")
         return n_written
@@ -83,8 +80,7 @@ cdef class EncryptedMessage:
     async def awriteto(self, out):
         if out is None:
             raise ValueError("File object cannot be None")
-        out.write(self.header())
-        out.write(self.ciphertext)
+        out.write(self.encoded)
         await out.drain()
 
     @classmethod
