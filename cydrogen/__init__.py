@@ -1,5 +1,15 @@
 from ._context import Context
-from ._datastructs import ENC_MSG_HEADER_SIZE, ENC_MSG_MARKER, EncryptedMessage
+from ._datastructs import (
+    ENC_MSG_HEADER_SIZE,
+    ENC_MSG_MARKER,
+    EncryptedMessage,
+    KX_KK_Packet1,
+    KX_KK_Packet2,
+    KX_N_Packet1,
+    KX_XX_Packet1,
+    KX_XX_Packet2,
+    KX_XX_Packet3,
+)
 from ._decls import (
     NOGIL_THRESHOLD_BYTES,
     gen_random_buffer,
@@ -72,6 +82,12 @@ __all__ = [
     "EncryptedMessage",
     "Hash",
     "HashKey",
+    "KX_KK_Packet1",
+    "KX_KK_Packet2",
+    "KX_N_Packet1",
+    "KX_XX_Packet1",
+    "KX_XX_Packet2",
+    "KX_XX_Packet3",
     "KeyExchangeException",
     "KxKkClientState",
     "KxPair",

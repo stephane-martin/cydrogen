@@ -5,6 +5,9 @@ from libc.string cimport memcmp, memcpy
 from libc.stdint cimport uint64_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
+from ._decls cimport hydro_kx_N_PACKET1BYTES
+from ._decls cimport hydro_kx_KK_PACKET1BYTES, hydro_kx_KK_PACKET2BYTES
+from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_kx_XX_PACKET3BYTES
 from ._utils cimport make_safe_writer, store64, load64
 
 from .exceptions import DecryptException
@@ -12,8 +15,22 @@ from .exceptions import DecryptException
 
 cdef bytes CY_ENC_MSG_MARKER = b"EM"
 cdef const size_t CY_ENC_MSG_HEADER_SIZE = 10         # 2 bytes marker + 8 bytes for message ID
-ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)             # to make it available in Python
-ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE          # to make it available in Python
+ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)
+ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE
+
+cdef bytes CY_KX_N_PACKET1_MARKER = b"N1"
+cdef bytes CY_KX_KK_PACKET1_MARKER = b"K1"
+cdef bytes CY_KX_KK_PACKET2_MARKER = b"K2"
+cdef bytes CY_KX_XX_PACKET1_MARKER = b"X1"
+cdef bytes CY_KX_XX_PACKET2_MARKER = b"X2"
+cdef bytes CY_KX_XX_PACKET3_MARKER = b"X3"
+
+KX_N_PACKET1_MARKER = bytes(CY_KX_N_PACKET1_MARKER)
+KX_KK_PACKET1_MARKER = bytes(CY_KX_KK_PACKET1_MARKER)
+KX_KK_PACKET2_MARKER = bytes(CY_KX_KK_PACKET2_MARKER)
+KX_XX_PACKET1_MARKER = bytes(CY_KX_XX_PACKET1_MARKER)
+KX_XX_PACKET2_MARKER = bytes(CY_KX_XX_PACKET2_MARKER)
+KX_XX_PACKET3_MARKER = bytes(CY_KX_XX_PACKET3_MARKER)
 
 
 cdef parse_encrypted_message_header(const unsigned char[:] header):
@@ -87,3 +104,224 @@ cdef class EncryptedMessage:
         if max_msg_size is not None and plaintext_size > max_msg_size:
             raise ValueError("Plaintext size exceeds maximum allowed size, {} > {}".format(plaintext_size, max_msg_size))
         return cls(framed[CY_ENC_MSG_HEADER_SIZE:len(framed)], msg_id)
+
+
+cdef class KX_N_Packet1:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_N_PACKET1BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_N_PACKET1_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_N_Packet1):
+            return False
+        cdef KX_N_Packet1 o = <KX_N_Packet1>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_N_PACKET1_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])
+
+
+cdef class KX_KK_Packet1:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_KK_PACKET1BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_KK_PACKET1_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_KK_Packet1):
+            return False
+        cdef KX_KK_Packet1 o = <KX_KK_Packet1>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_KK_PACKET1_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])
+
+cdef class KX_KK_Packet2:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_KK_PACKET2BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_KK_PACKET2_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_KK_Packet2):
+            return False
+        cdef KX_KK_Packet2 o = <KX_KK_Packet2>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_KK_PACKET2_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])
+
+
+cdef class KX_XX_Packet1:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_XX_PACKET1BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_XX_PACKET1_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_XX_Packet1):
+            return False
+        cdef KX_XX_Packet1 o = <KX_XX_Packet1>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_XX_PACKET1_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])
+
+
+cdef class KX_XX_Packet2:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_XX_PACKET2BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_XX_PACKET2_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_XX_Packet2):
+            return False
+        cdef KX_XX_Packet2 o = <KX_XX_Packet2>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_XX_PACKET2_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])
+
+
+cdef class KX_XX_Packet3:
+    def __init__(self, const unsigned char[:] packet):
+        if packet is None:
+            raise ValueError("Packet cannot be None")
+        if len(packet) != hydro_kx_XX_PACKET3BYTES:
+            raise ValueError("Invalid packet size")
+        self.packet = bytes(packet)
+        self.encoded = CY_KX_XX_PACKET3_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if not isinstance(other, KX_XX_Packet3):
+            return False
+        cdef KX_XX_Packet3 o = <KX_XX_Packet3>other
+        return self.packet == o.packet
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_XX_PACKET3_MARKER:
+            raise ValueError("Invalid packet marker")
+        return cls(framed[2:len(framed)])

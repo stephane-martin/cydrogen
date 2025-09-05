@@ -2,6 +2,7 @@ from collections.abc import Buffer
 from typing import Self
 
 from ._basekey import BaseKey
+from ._datastructs import KX_KK_Packet1, KX_KK_Packet2, KX_N_Packet1, KX_XX_Packet1, KX_XX_Packet2, KX_XX_Packet3
 from ._secretbox import SecretBoxKey
 
 KX_N_PACKET1BYTES: int
@@ -134,10 +135,10 @@ class KxKkClientState:
         session_pair: The session pair containing the symmetric keys for the session.
     """
 
-    packet1: bytes
+    packet1: KX_KK_Packet1 | None
     session_pair: SessionPair | None
 
-    def client_finish_kx_kk(self, packet2: Buffer) -> Self:
+    def client_finish_kx_kk(self, packet2: KX_KK_Packet2) -> Self:
         """
         Finalizes the key exchange variant KK from the client side.
 
@@ -153,23 +154,23 @@ class KxKkClientState:
         ...
 
 class KxXxClientState:
-    packet1: bytes
-    packet3: bytes
+    packet1: KX_XX_Packet1 | None
+    packet3: KX_XX_Packet3 | None
     session_pair: SessionPair | None
     server_public_key: KxPublicKey | None
 
     def __init__(self, client_kp: KxPair, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
-    def client_process_kx_xx(self, packet2: Buffer) -> Self: ...
+    def client_process_kx_xx(self, packet2: KX_XX_Packet2) -> Self: ...
 
 class KxXxServerState:
-    packet2: bytes
+    packet2: KX_XX_Packet2 | None
     session_pair: SessionPair | None
     client_public_key: KxPublicKey | None
 
     def __init__(self, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
-    def server_finish_kx_xx(self, packet3: Buffer) -> Self: ...
+    def server_finish_kx_xx(self, packet3: KX_XX_Packet3) -> Self: ...
 
 class KxPair:
     """
@@ -216,7 +217,7 @@ class KxPair:
         """
         ...
 
-    def server_finish_kx_n(self, packet1: Buffer, psk: Psk | None = None) -> SessionPair:
+    def server_finish_kx_n(self, packet1: KX_N_Packet1, psk: Psk | None = None) -> SessionPair:
         """
         See [cydrogen.server_finish_kx_n][]
         """
@@ -236,7 +237,7 @@ class KxPair:
         """
         pass
 
-    def server_process_kx_kk(self, client_public_key: KxPublicKey, packet1: Buffer) -> tuple[SessionPair, bytes]:
+    def server_process_kx_kk(self, client_public_key: KxPublicKey, packet1: KX_KK_Packet1) -> tuple[SessionPair, KX_KK_Packet2]:
         """
         Process a key exchange variant KK from the server side.
 
@@ -246,7 +247,7 @@ class KxPair:
 
         Returns:
             A SessionPair with the symmetric keys for the session.
-            A bytes object representing the packet to send back to the client.
+            An object representing the packet to send back to the client.
 
         Raises:
             KeyExchangeException: If the operation fails. In particular, this exception is raised if the packet is invalid or if the key exchange fails.
@@ -254,7 +255,7 @@ class KxPair:
         ...
 
     def client_init_kx_xx(self, psk: Psk | None = None) -> KxXxClientState: ...
-    def server_process_kx_xx(self, packet1: Buffer, psk: Psk | None = None) -> KxXxServerState: ...
+    def server_process_kx_xx(self, packet1: KX_XX_Packet1, psk: Psk | None = None) -> KxXxServerState: ...
     @classmethod
     def gen(cls) -> Self:
         """
@@ -285,7 +286,7 @@ class KxPair:
     def __repr__(self) -> str: ...
     def __buffer__(self, flags: int, /) -> memoryview: ...
 
-def client_init_kx_n(server_public_key: KxPublicKey, psk: Psk | None = None) -> tuple[SessionPair, bytes]:
+def client_init_kx_n(server_public_key: KxPublicKey, psk: Psk | None = None) -> tuple[SessionPair, KX_N_Packet1]:
     """
     Initiate a key exchange variant N (anonymous client) from the client side.
 
@@ -295,14 +296,14 @@ def client_init_kx_n(server_public_key: KxPublicKey, psk: Psk | None = None) -> 
 
     Returns:
         A tuple containing a SessionPair with the symmetric keys for the session.
-        A bytes object representing the packet to send to the server.
+        The packet to send to the server.
 
     Raises:
         KeyExchangeException: If the operation fails.
     """
     ...
 
-def server_finish_kx_n(server_kp: KxPair, packet1: Buffer, psk: Psk | None = None) -> SessionPair:
+def server_finish_kx_n(server_kp: KxPair, packet1: KX_N_Packet1, psk: Psk | None = None) -> SessionPair:
     """
     Finalize a key exchange variant N (anonymous client) from the server side.
 

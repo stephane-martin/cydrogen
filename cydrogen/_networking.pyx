@@ -165,6 +165,22 @@ cdef class ReadBuffers:
             self.current_read_buffer = None
             self.write_pos = 0
 
+    cpdef consume_kx_packet(self):
+        h = self.peek_bytes(8)
+        if h is None:
+            # not enough data to read the start of the message
+            return None
+        length = load64(h[0:8])
+        packet_size = length - 2
+        if packet_size < 48 or packet_size > 96:
+            raise ValueError("Invalid KX packet size")
+        # try to consume for real
+        b = self.consume_bytes(length + 8)
+        if b is None:
+            # not enough data to read the whole message
+            return None
+        return b[8:len(b)]  # skip the length field
+
     cpdef consume_message(self):
         h = self.peek_bytes(10)
         if h is None:

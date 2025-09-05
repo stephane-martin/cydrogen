@@ -55,6 +55,7 @@ cdef class ReadBuffers:
     cpdef get_buffer(self)
     cpdef buffer_updated(self, uint32_t nbytes)
     cpdef consume_message(self)
+    cpdef consume_kx_packet(self)
     cdef peek_bytes(self, uint16_t nbytes)
     cdef get_bytearray(self, uint64_t nbytes)
     cpdef release_bytearray(self, const unsigned char[:] mv)
