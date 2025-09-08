@@ -5,7 +5,7 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
-from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE, CY_ENC_MSG_MARKER
+from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE
 from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._utils cimport load64
 
@@ -15,6 +15,7 @@ import threading
 from collections import deque
 
 from .exceptions import MessageTooBigException, SyncMsgQueueShutdown
+from ._datastructs import MessageType
 
 
 logger = logging.getLogger("cydrogen")
@@ -165,11 +166,20 @@ cdef class ReadBuffers:
             self.current_read_buffer = None
             self.write_pos = 0
 
-    cpdef consume_kx_packet(self):
-        h = self.peek_bytes(8)
+    cpdef peek_message_type(self):
+        h = self.peek_bytes(10)
         if h is None:
             # not enough data to read the start of the message
             return None
+        return MessageType.from_marker(h[8:10])
+
+    cpdef consume_kx_packet(self):
+        h = self.peek_bytes(10)
+        if h is None:
+            # not enough data to read the start of the message
+            return None
+        if not MessageType.from_marker(h[8:10]).is_kx_packet():
+            raise ValueError("Not a KX packet")
         length = load64(h[0:8])
         packet_size = length - 2
         if packet_size < 48 or packet_size > 96:
@@ -187,18 +197,19 @@ cdef class ReadBuffers:
             # not enough data to read the start of the message
             return None
         length = load64(h[0:8])
-        if h[8:10] == CY_ENC_MSG_MARKER:
-            if length < CY_ENC_MSG_HEADER_SIZE:
-                raise ValueError("Message is too short")
-            ciphertext_size = length - CY_ENC_MSG_HEADER_SIZE
-            if ciphertext_size < hydro_secretbox_HEADERBYTES:
-                raise ValueError("Ciphertext is too short")
-            plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
-            if plaintext_size > self.received_msg_max_size:
-                # the message is too large, we cannot handle it
-                # it's more efficient to check the message size here rather than after consuming the bytes or decrypting the message
-                # we avoid unnecessary memory allocations and decryption attempts
-                raise MessageTooBigException
+        if not MessageType.from_marker(h[8:10]).is_encrypted_message():
+            raise ValueError("Not an encrypted message")
+        if length < CY_ENC_MSG_HEADER_SIZE:
+            raise ValueError("Message is too short")
+        ciphertext_size = length - CY_ENC_MSG_HEADER_SIZE
+        if ciphertext_size < hydro_secretbox_HEADERBYTES:
+            raise ValueError("Ciphertext is too short")
+        plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
+        if plaintext_size > self.received_msg_max_size:
+            # the message is too large, we cannot handle it
+            # it's more efficient to check the message size here rather than after consuming the bytes or decrypting the message
+            # we avoid unnecessary memory allocations and decryption attempts
+            raise MessageTooBigException
         # try to consume for real
         b = self.consume_bytes(length + 8)
         if b is None:

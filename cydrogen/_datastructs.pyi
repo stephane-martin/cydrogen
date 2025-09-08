@@ -1,4 +1,5 @@
 from collections.abc import Buffer
+from enum import StrEnum
 from typing import Self
 
 from ._protocols import AsyncWriter, Writer
@@ -14,6 +15,27 @@ ENC_MSG_HEADER_SIZE is the size of the header for encrypted messages.
 
 It includes the magic marker (4 bytes), length of the message (8 bytes), and message ID (8 bytes).
 """
+
+KX_N_PACKET1_MARKER: bytes
+KX_KK_PACKET1_MARKER: bytes
+KX_KK_PACKET2_MARKER: bytes
+KX_XX_PACKET1_MARKER: bytes
+KX_XX_PACKET2_MARKER: bytes
+KX_XX_PACKET3_MARKER: bytes
+
+class MessageType(StrEnum):
+    ENCRYPTED_MESSAGE = ...
+    KX_N_PACKET1 = ...
+    KX_KK_PACKET1 = ...
+    KX_KK_PACKET2 = ...
+    KX_XX_PACKET1 = ...
+    KX_XX_PACKET2 = ...
+    KX_XX_PACKET3 = ...
+
+    @classmethod
+    def from_marker(cls, marker: bytes | str) -> Self: ...
+    def is_encrypted_message(self) -> bool: ...
+    def is_kx_packet(self) -> bool: ...
 
 class EncryptedMessage:
     """

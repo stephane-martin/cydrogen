@@ -358,7 +358,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
-        evs = self._machine.trigger_receive_data(nbytes)
+        evs = self._machine.receive_data(nbytes)
         self._handle_machine_events(evs)
         self.maybe_pause_reading()  # TODO: move ?
         data = self._machine.data_to_send()

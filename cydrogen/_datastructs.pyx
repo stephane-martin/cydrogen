@@ -10,6 +10,8 @@ from ._decls cimport hydro_kx_KK_PACKET1BYTES, hydro_kx_KK_PACKET2BYTES
 from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_kx_XX_PACKET3BYTES
 from ._utils cimport make_safe_writer, store64, load64
 
+from enum import StrEnum
+
 from .exceptions import DecryptException
 
 
@@ -25,12 +27,41 @@ cdef bytes CY_KX_XX_PACKET1_MARKER = b"X1"
 cdef bytes CY_KX_XX_PACKET2_MARKER = b"X2"
 cdef bytes CY_KX_XX_PACKET3_MARKER = b"X3"
 
-KX_N_PACKET1_MARKER = bytes(CY_KX_N_PACKET1_MARKER)
+KX_N_PACKET1_MARKER = bytes(CY_KX_N_PACKET1_MARKER)     # explicit bytes() to make a copy and ensure the cython markers are not modified
 KX_KK_PACKET1_MARKER = bytes(CY_KX_KK_PACKET1_MARKER)
 KX_KK_PACKET2_MARKER = bytes(CY_KX_KK_PACKET2_MARKER)
 KX_XX_PACKET1_MARKER = bytes(CY_KX_XX_PACKET1_MARKER)
 KX_XX_PACKET2_MARKER = bytes(CY_KX_XX_PACKET2_MARKER)
 KX_XX_PACKET3_MARKER = bytes(CY_KX_XX_PACKET3_MARKER)
+
+
+class MessageType(StrEnum):
+    ENCRYPTED_MESSAGE = ENC_MSG_MARKER.decode("ascii")
+    KX_N_PACKET1 = KX_N_PACKET1_MARKER.decode("ascii")
+    KX_KK_PACKET1 = KX_KK_PACKET1_MARKER.decode("ascii")
+    KX_KK_PACKET2 = KX_KK_PACKET2_MARKER.decode("ascii")
+    KX_XX_PACKET1 = KX_XX_PACKET1_MARKER.decode("ascii")
+    KX_XX_PACKET2 = KX_XX_PACKET2_MARKER.decode("ascii")
+    KX_XX_PACKET3 = KX_XX_PACKET3_MARKER.decode("ascii")
+
+    @classmethod
+    def from_marker(cls, marker):
+        if isinstance(marker, str):
+            return cls(marker)
+        return cls(marker.decode("ascii"))
+
+    def is_encrypted_message(self):
+        return self == MessageType.ENCRYPTED_MESSAGE
+
+    def is_kx_packet(self):
+        return self in {
+            MessageType.KX_N_PACKET1,
+            MessageType.KX_KK_PACKET1,
+            MessageType.KX_KK_PACKET2,
+            MessageType.KX_XX_PACKET1,
+            MessageType.KX_XX_PACKET2,
+            MessageType.KX_XX_PACKET3,
+        }
 
 
 cdef parse_encrypted_message_header(const unsigned char[:] header):
