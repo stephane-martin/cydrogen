@@ -1,6 +1,7 @@
 # cython: language_level=3
 
 from libc.stdint cimport uint64_t
+from libc.stdint cimport uint8_t
 
 cdef bytes CY_ENC_MSG_MARKER
 cdef const size_t CY_ENC_MSG_HEADER_SIZE
@@ -15,6 +16,7 @@ cdef bytes CY_KX_XX_PACKET3_MARKER
 cdef class EncryptedMessage:
     cdef readonly object ciphertext
     cdef readonly uint64_t msg_id
+    cdef readonly uint8_t session_keys_idx
     cdef bytearray encoded
     cpdef writeto(self, fileobj)
 

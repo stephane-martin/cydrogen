@@ -60,7 +60,7 @@ class EncryptedMessage:
     ciphertext: Buffer
     msg_id: int
 
-    def __init__(self, ctext: Buffer, msg_id: int) -> None:
+    def __init__(self, ctext: Buffer, msg_id: int, session_keys_idx: int) -> None:
         """
         Initialize the encrypted message.
 
