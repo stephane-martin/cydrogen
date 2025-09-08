@@ -8,7 +8,16 @@ from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ._datastructs import EncryptedMessage, KX_KK_Packet1, KX_KK_Packet2, KX_N_Packet1, KX_XX_Packet1, KX_XX_Packet2, KX_XX_Packet3
+from ._datastructs import (
+    EncryptedMessage,
+    KX_KK_Packet1,
+    KX_KK_Packet2,
+    KX_N_Packet1,
+    KX_XX_Packet1,
+    KX_XX_Packet2,
+    KX_XX_Packet3,
+    MessageType,
+)
 from ._decls import NOGIL_THRESHOLD_BYTES
 from ._kx_n import (
     KxPair,
@@ -155,9 +164,24 @@ class ExternalEvent(StrEnum):
     Write encrypted message event, triggered when the Protocol wants to send an encrypted message.
     """
 
-    RECEIVE_DATA = "receive_data"
+    RECEIVE_PACKET1 = "receive_packet1"
     """
-    Receive data event, triggered when the Protocol has received data from the peer.
+    Receive first packet during a key exchange (KX_N, KX_KK, KX_XX).
+    """
+
+    RECEIVE_PACKET2 = "receive_packet2"
+    """
+    Receive second packet during a key exchange (KX_KK, KX_XX).
+    """
+
+    RECEIVE_PACKET3 = "receive_packet3"
+    """
+    Receive third packet during a key exchange (KX_XX).
+    """
+
+    RECEIVE_EMESSAGE = "receive_emessage"
+    """
+    Receive an encrypted message from the peer, after the key exchange has completed.
     """
 
     CONNECTION_MADE = "connection_made"
@@ -214,6 +238,9 @@ class Transitions:
     def __init__(self) -> None:
         self._t: dict[ExternalEvent, TransitionsByOrigState] = {
             ExternalEvent.CONNECTION_MADE: {},
+            ExternalEvent.RECEIVE_PACKET1: {},
+            ExternalEvent.RECEIVE_PACKET2: {},
+            ExternalEvent.RECEIVE_PACKET3: {},
         }
 
     def add_many(self, ev: ExternalEvent, transitions: TransitionsByOrigState) -> None:
@@ -317,8 +344,8 @@ class BaseMachine:
     # CONNECTED                 => write_emessage   => CONNECTED
     # READER_CLOSED             => write_emessage   => READER_CLOSED
 
-    # CONNECTED                 => receive_data     => CONNECTED
-    # WRITER_CLOSED             => receive_data     => WRITER_CLOSED
+    # CONNECTED                 => receive_emessage => CONNECTED
+    # WRITER_CLOSED             => receive_emessage => WRITER_CLOSED
 
     _valid_states: frozenset[MachineState] = frozenset()
     """
@@ -399,10 +426,10 @@ class BaseMachine:
         )
 
         self._transitions.add_many(
-            ExternalEvent.RECEIVE_DATA,
+            ExternalEvent.RECEIVE_EMESSAGE,
             {
-                MachineState.CONNECTED: TransitionDestination(MachineState.CONNECTED, self._receive_data_connected),
-                MachineState.WRITER_CLOSED: TransitionDestination(MachineState.WRITER_CLOSED, self._receive_data_connected),
+                MachineState.CONNECTED: TransitionDestination(MachineState.CONNECTED, self._receive_emessage),
+                MachineState.WRITER_CLOSED: TransitionDestination(MachineState.WRITER_CLOSED, self._receive_emessage),
             },
         )
 
@@ -450,8 +477,39 @@ class BaseMachine:
     def release_encrypted_message(self, mv: Buffer) -> None:
         self._read_buffers.release_bytearray(mv)
 
-    def trigger_receive_data(self, nbytes: int) -> list[MachineProducedEvent]:
-        return self._receive_data(nbytes)
+    def receive_data(self, nbytes: int) -> list[MachineProducedEvent]:
+        self._read_buffers.buffer_updated(nbytes)
+        events: list[MachineProducedEvent] = []
+        try:
+            while True:
+                mtype = self._read_buffers.peek_message_type()
+                if mtype is None:
+                    # not enough data to determine the message type
+                    return events
+                old_state = self._state
+                evs: list[MachineProducedEvent] = []
+                match mtype:
+                    case MessageType.KX_N_PACKET1 | MessageType.KX_KK_PACKET1 | MessageType.KX_XX_PACKET1:
+                        evs = self.trigger_receive_packet1()
+                    case MessageType.KX_KK_PACKET2 | MessageType.KX_XX_PACKET2:
+                        evs = self.trigger_receive_packet2()
+                    case MessageType.KX_XX_PACKET3:
+                        evs = self.trigger_receive_packet3()
+                    case MessageType.ENCRYPTED_MESSAGE:
+                        evs = self.trigger_receive_emessage()
+                if not evs:
+                    # there was not enough available data to advance the state
+                    return events
+                events.extend(evs)
+                if old_state.kx_is_pending() and self._state == MachineState.CONNECTED:
+                    events.extend(self._complete_kx())
+
+        except Exception as ex:
+            self._state = MachineState.READER_WRITER_CLOSED
+            if kx_ev := self._fail_kx(ex):
+                events.extend(kx_ev)
+                return events
+            raise
 
     def trigger_connection_lost(self, exc: Exception | None) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.CONNECTION_LOST, exc)
@@ -467,6 +525,18 @@ class BaseMachine:
 
     def trigger_connection_made(self) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.CONNECTION_MADE)
+
+    def trigger_receive_packet1(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.RECEIVE_PACKET1)
+
+    def trigger_receive_packet2(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.RECEIVE_PACKET2)
+
+    def trigger_receive_packet3(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.RECEIVE_PACKET3)
+
+    def trigger_receive_emessage(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.RECEIVE_EMESSAGE)
 
     def _trigger(self, ev: ExternalEvent, *args) -> list[MachineProducedEvent]:  # noqa: ANN002
         """
@@ -492,37 +562,12 @@ class BaseMachine:
         self._state = dest.state
         return events
 
-    def _receive_data(self, nbytes: int) -> list[MachineProducedEvent]:
-        self._read_buffers.buffer_updated(nbytes)
-        events: list[MachineProducedEvent] = []
-        while True:
-            try:
-                dest = self._transitions.get(ExternalEvent.RECEIVE_DATA, self._state)
-                evs = dest.callback()
-            except Exception as ex:
-                self._state = MachineState.READER_WRITER_CLOSED
-                if kx_ev := self._fail_kx(ex):
-                    events.extend(kx_ev)
-                    return events
-                raise
-            if not evs:
-                # when callback returns no event, it means there was not enough available data to advance the state
-                return events
-            events.extend(evs)
-            # update the state as the true result means there was some advancement
-            old_state = self._state
-            self._state = dest.state
-            if old_state.kx_is_pending() and self._state == MachineState.CONNECTED:
-                events.extend(self._complete_kx())
-
-    def _receive_data_connected(self) -> list[MachineProducedEvent]:
+    def _receive_emessage(self) -> list[MachineProducedEvent]:
         # may raise MessageTooBigException if the received message is too big
-        evs: list[MachineProducedEvent] = []
-        while True:
-            msg = self._read_buffers.consume_message()
-            if msg is None:
-                return evs
-            evs.append(ReceivedEncryptedMessage(msg))
+        msg = self._read_buffers.consume_message()
+        if msg is None:
+            return []
+        return [ReceivedEncryptedMessage(msg)]
 
     def _connection_lost(self, exc: Exception | None) -> list[MachineProducedEvent]:
         # _reader_eof may have been called before this method, so we check if the exception is already set
@@ -657,7 +702,7 @@ class KX_N_ClientStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_SERVER_ACK, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+            ExternalEvent.RECEIVE_EMESSAGE, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -727,7 +772,7 @@ class KX_N_ServerStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET1, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
+            ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -790,7 +835,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET2, MachineState.CONNECTED, self._receive_packet2
+            ExternalEvent.RECEIVE_PACKET2, MachineState.WAITING_FOR_PACKET2, MachineState.CONNECTED, self._receive_packet2
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -863,7 +908,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET1, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
+            ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -935,10 +980,10 @@ class KX_XX_ClientStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET2, MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2
+            ExternalEvent.RECEIVE_PACKET2, MachineState.WAITING_FOR_PACKET2, MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+            ExternalEvent.RECEIVE_EMESSAGE, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -1042,10 +1087,10 @@ class KX_XX_ServerStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET1, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET1, MachineState.WAITING_FOR_PACKET3, self._receive_packet1
+            ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.WAITING_FOR_PACKET3, self._receive_packet1
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_DATA, MachineState.WAITING_FOR_PACKET3, MachineState.CONNECTED, self._receive_packet3
+            ExternalEvent.RECEIVE_PACKET3, MachineState.WAITING_FOR_PACKET3, MachineState.CONNECTED, self._receive_packet3
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)

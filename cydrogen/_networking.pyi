@@ -1,5 +1,7 @@
 from collections.abc import Buffer, Sized
 
+from ._datastructs import MessageType
+
 class BytearrayBuilder:
     def __init__(self) -> None: ...
     def add(self, data: Buffer) -> None: ...
@@ -156,6 +158,7 @@ class ReadBuffers:
         """
         ...
 
+    def peek_message_type(self) -> MessageType | None: ...
     def consume_bytes(self, nbytes: int) -> memoryview | None:
         """
         Consume `nbytes` bytes from the ReadBuffers instance.

@@ -104,7 +104,7 @@ class Protocol:
                 self.connection_lost(ex)
                 return
             with self._machine_lock:
-                events = self._machine.trigger_receive_data(n)
+                events = self._machine.receive_data(n)
             # new encrypted messages are typically queued in _received_encrypted_msgs from the returned events
             # but KxFailed events may also be generated here
             self._handle_machine_events(events)
