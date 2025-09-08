@@ -43,7 +43,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: set up python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: 3.13
           cache: pip
@@ -91,7 +91,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: set up python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "${{matrix.python-version}}"
           cache: pip
@@ -128,7 +128,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: set up python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: 3.13.3
           cache: pip
@@ -164,7 +164,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: set up python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "${{matrix.python-version}}"
           cache: pip
@@ -197,7 +197,7 @@ jobs:
           show-progress: false
           persist-credentials: false
       - name: set up python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: 3.13.3
           cache: pip
