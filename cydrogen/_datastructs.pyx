@@ -3,6 +3,7 @@
 from cpython.buffer cimport PyBuffer_FillInfo
 from libc.string cimport memcmp, memcpy
 from libc.stdint cimport uint64_t
+from libc.stdint cimport uint8_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._decls cimport hydro_kx_N_PACKET1BYTES
@@ -16,7 +17,7 @@ from .exceptions import DecryptException
 
 
 cdef bytes CY_ENC_MSG_MARKER = b"EM"
-cdef const size_t CY_ENC_MSG_HEADER_SIZE = 10         # 2 bytes marker + 8 bytes for message ID
+cdef const size_t CY_ENC_MSG_HEADER_SIZE = 11         # 2 bytes marker + 8 bytes for message ID + 1 byte for session keys index
 ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)
 ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE
 
@@ -73,21 +74,26 @@ cdef parse_encrypted_message_header(const unsigned char[:] header):
     if memcmp(&header[0], marker_ptr, 2) != 0:
         raise DecryptException("Invalid message marker")
     cdef uint64_t msg_id = load64(header[2:10])
-    return msg_id
+    return msg_id, header[10]
 
 
 cdef class EncryptedMessage:
-    def __init__(self, ctext, uint64_t msg_id):
+    def __init__(self, ctext, uint64_t msg_id, uint8_t session_keys_idx=0):
         if ctext is None:
             raise ValueError("Message cannot be None")
+
         self.ciphertext = ctext
         self.msg_id = msg_id
+        self.session_keys_idx = session_keys_idx
+
+        # create the encoded message
         self.encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(ctext))
         self.encoded[0:2] = CY_ENC_MSG_MARKER
         cdef const unsigned char[:] ctext_view = ctext
         cdef unsigned char[:] encoded_view = self.encoded
         cdef unsigned char* encoded_ptr = self.encoded
         store64(encoded_view[2:10], msg_id)
+        self.encoded[10] = session_keys_idx
         memcpy(encoded_ptr + CY_ENC_MSG_HEADER_SIZE, &ctext_view[0], len(ctext))
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
@@ -127,14 +133,14 @@ cdef class EncryptedMessage:
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed, *, max_msg_size=None):
         # TODO: do we really need to re-calculate self.encoded when calling the constructor
-        msg_id = parse_encrypted_message_header(framed)
+        msg_id, session_keys_idx = parse_encrypted_message_header(framed)
         ciphertext_size = len(framed) - CY_ENC_MSG_HEADER_SIZE  # positive because parsing succeeded
         if ciphertext_size < hydro_secretbox_HEADERBYTES:
             raise ValueError("Ciphertext size is too small")
         plaintext_size = ciphertext_size - hydro_secretbox_HEADERBYTES
         if max_msg_size is not None and plaintext_size > max_msg_size:
             raise ValueError("Plaintext size exceeds maximum allowed size, {} > {}".format(plaintext_size, max_msg_size))
-        return cls(framed[CY_ENC_MSG_HEADER_SIZE:len(framed)], msg_id)
+        return cls(framed[CY_ENC_MSG_HEADER_SIZE:len(framed)], msg_id, session_keys_idx)
 
 
 cdef class KX_N_Packet1:
