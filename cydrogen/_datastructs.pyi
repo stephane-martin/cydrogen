@@ -55,18 +55,21 @@ class EncryptedMessage:
     Attributes:
         ciphertext: The encrypted message itself.
         msg_id: The message ID associated with the encrypted message.
+        session_keys_idx: the index of the crypto material that was used to encrypt the message.
     """
 
     ciphertext: Buffer
     msg_id: int
+    session_keys_idx: int
 
-    def __init__(self, ctext: Buffer, msg_id: int, session_keys_idx: int) -> None:
+    def __init__(self, ctext: Buffer, msg_id: int, session_keys_idx: int = 0) -> None:
         """
         Initialize the encrypted message.
 
         Args:
             ctext: The ciphertext of the encrypted message.
             msg_id: The message ID associated with the encrypted message.
+            session_keys_idx: the index of the crypto material
 
         Raises:
             ValueError: If ctext is None.

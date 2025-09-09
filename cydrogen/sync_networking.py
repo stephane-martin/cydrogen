@@ -176,9 +176,9 @@ class Protocol:
 
     def write(self, msg: Buffer, *, msg_id: int) -> None:
         # we don't need to hold the machine lock while encrypting, as encrypt_message() does not modify the machine state
-        ciphertext = self._machine.encrypt_message(msg, msg_id)
+        emsg = self._machine.encrypt_message(msg, msg_id)
         with self._machine_lock:
-            events = self._machine.trigger_write_emessage(ciphertext, msg_id)
+            events = self._machine.trigger_write_emessage(emsg)
         self._handle_machine_events(events)  # normally no events
         with self._machine_lock:
             data = self._machine.data_to_send()

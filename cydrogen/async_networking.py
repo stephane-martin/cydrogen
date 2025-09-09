@@ -219,8 +219,8 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def write_cancel_msg(self, target_msg_id: int) -> None:
         cancel_msg = bytearray(8)
         store64(cancel_msg, target_msg_id)
-        ciphertext = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
-        evs = self._machine.trigger_write_emessage(ciphertext, CANCEL_MESSAGE_ID)
+        emsg = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
+        evs = self._machine.trigger_write_emessage(emsg)
         self._handle_machine_events(evs)
         data = self._machine.data_to_send()
         if data:
@@ -248,8 +248,8 @@ class KXProtocol(asyncio.BufferedProtocol):
             raise MessageTooBigException
         # execute encryption in a separate thread to avoid blocking the event loop
         # may raise MessageTooBigException if the message is too big
-        ciphertext = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
-        evs = self._machine.trigger_write_emessage(ciphertext, msg_id)
+        emsg = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
+        evs = self._machine.trigger_write_emessage(emsg)
         self._handle_machine_events(evs)
         data = self._machine.data_to_send()
         if data:

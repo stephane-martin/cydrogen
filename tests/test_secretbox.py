@@ -205,6 +205,8 @@ def test_encrypted_message_equals() -> None:
     assert msg != msg4
     msg5 = cydrogen.EncryptedMessage(b"blabla2", msg_id=2)
     assert msg != msg5
+    msg6 = cydrogen.EncryptedMessage(b"blabla", msg_id=1, session_keys_idx=1)
+    assert msg != msg6
 
 
 class AsyncBytesIOReader:

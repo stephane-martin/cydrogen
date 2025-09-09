@@ -4,6 +4,7 @@
 import logging
 import os
 import sys
+import threading
 from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -31,7 +32,7 @@ from ._kx_n import (
 from ._networking import BytearrayBuilder, ReadBuffers
 from ._secretbox import SecretBox
 from ._utils import encode_length
-from .exceptions import InvalidPeerKeyException, KeyExchangeException
+from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
 
@@ -190,7 +191,7 @@ class ExternalEvent(StrEnum):
     """
 
 
-class InvalidTransitionError(RuntimeError):
+class InvalidTransitionError(CyException):
     """
     Exception raised when an invalid transition is attempted in the state machine.
     """
@@ -296,6 +297,14 @@ class Transitions:
             if not self._t[event]:
                 logger.debug("Removing event: %s", event)
                 del self._t[event]
+
+
+@dataclass(frozen=True, slots=True)
+class CryptoMaterial:
+    idx: int
+    pair: SessionPair
+    tbox: SecretBox
+    rbox: SecretBox
 
 
 class BaseMachine:
@@ -438,11 +447,41 @@ class BaseMachine:
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
         self._read_buffers: ReadBuffers = ReadBuffers(received_msg_max_size=received_msg_max_size)
 
-        self._session_pair: SessionPair
-        self._rbox: SecretBox
-        self._tbox: SecretBox
+        self._material_lock = threading.Lock()
+        self._current_material: CryptoMaterial | None = None
+        self._previous_material: CryptoMaterial | None = None
 
         self.exception: Exception | None = None
+
+    def _replace_current_material(self, new_pair: SessionPair) -> None:
+        with self._material_lock:
+            new_idx: int = 0
+            if self._current_material is not None:
+                new_idx = self._current_material.idx + 1
+                self._previous_material = self._current_material
+            self._current_material = CryptoMaterial(idx=new_idx, pair=new_pair, tbox=SecretBox(new_pair.tx), rbox=SecretBox(new_pair.rx))
+
+    def _get_current_material(self) -> CryptoMaterial:
+        with self._material_lock:
+            if self._current_material is None:
+                raise RuntimeError("session keys not yet calculated")
+            return self._current_material
+
+    def _get_material(self, idx: int) -> CryptoMaterial:
+        with self._material_lock:
+            if self._current_material is None:
+                raise RuntimeError("session keys not yet calculated")
+            if self._current_material.idx == idx:
+                return self._current_material
+            if self._previous_material is None:
+                raise RuntimeError("unknown crypto material")
+            if self._previous_material.idx == idx:
+                return self._previous_material
+            raise RuntimeError("unknown crypto material")
+
+    def _delete_previous_material(self) -> None:
+        with self._material_lock:
+            self._previous_material = None
 
     def get_buffer(self) -> memoryview:
         """
@@ -470,8 +509,9 @@ class BaseMachine:
             The decrypted message as bytes.
             The message ID associated with the decrypted message.
         """
-        emsg = EncryptedMessage.from_bytes(msg)
-        plaintext: bytes = self._rbox.decrypt(emsg)
+        emsg: EncryptedMessage = EncryptedMessage.from_bytes(msg)
+        mat = self._get_material(emsg.session_keys_idx)
+        plaintext: bytes = mat.rbox.decrypt(emsg)
         return plaintext, emsg.msg_id
 
     def release_encrypted_message(self, mv: Buffer) -> None:
@@ -520,8 +560,8 @@ class BaseMachine:
     def trigger_writer_eof(self) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.WRITER_EOF)
 
-    def trigger_write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineProducedEvent]:
-        return self._trigger(ExternalEvent.WRITE_EMESSAGE, ciphertext, msg_id)
+    def trigger_write_emessage(self, emsg: EncryptedMessage) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.WRITE_EMESSAGE, emsg)
 
     def trigger_connection_made(self) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.CONNECTION_MADE)
@@ -583,9 +623,8 @@ class BaseMachine:
     def _writer_eof(self) -> list[MachineProducedEvent]:
         return self._fail_kx(EOF_EXCEPTION)
 
-    def _write_emessage(self, ciphertext: bytes | bytearray, msg_id: int) -> list[MachineProducedEvent]:
+    def _write_emessage(self, emsg: EncryptedMessage) -> list[MachineProducedEvent]:
         # called by Protocol to prepare sending a message to the server
-        emsg = EncryptedMessage(ciphertext, msg_id)
         self._data_ready_to_send.add(encode_length(emsg))
         self._data_ready_to_send.add(emsg)
         return []
@@ -609,7 +648,7 @@ class BaseMachine:
         self._kx_finished = True
         return [KxCompleted()]
 
-    def encrypt_message(self, msg: Buffer, msg_id: int) -> bytearray:
+    def encrypt_message(self, msg: Buffer, msg_id: int) -> EncryptedMessage:
         """
         Encrypts a message using the session keys established during the key exchange.
 
@@ -624,7 +663,9 @@ class BaseMachine:
         Returns:
             A bytearray containing the encrypted message, ready to be sent over the network.
         """
-        return self._tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
+        mat = self._get_current_material()
+        ciphertext = mat.tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
+        return EncryptedMessage(ciphertext, msg_id, mat.idx)
 
     def _get_small_message(self) -> tuple[bytes, int] | None:
         # for small messages that occur during key exchange, we consider the decryption is immediate,
@@ -636,8 +677,9 @@ class BaseMachine:
                 return None
             if len(b) >= NOGIL_THRESHOLD_BYTES:
                 logger.warning("_get_small_message: consuming abnormal big message: %s bytes", len(b))
-            emsg = EncryptedMessage.from_bytes(b)
-            plaintext: bytes = self._rbox.decrypt(emsg)  # considered immediate
+            emsg: EncryptedMessage = EncryptedMessage.from_bytes(b)
+            mat = self._get_material(emsg.session_keys_idx)
+            plaintext: bytes = mat.rbox.decrypt(emsg)  # considered immediate
             self._read_buffers.release_bytearray(b)  # return the mview to the freelist
             return plaintext, emsg.msg_id
         except Exception as ex:
@@ -694,7 +736,6 @@ class KX_N_ClientStateMachine(BaseMachine):
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
         self._packet1: KX_N_Packet1
-        self._session_pair: SessionPair
 
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
@@ -708,9 +749,8 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_public_key: KxPublicKey = server_public_key
-        self._session_pair, self._packet1 = client_init_kx_n(server_public_key, psk)
-        self._rbox: SecretBox = SecretBox(self._session_pair.rx)
-        self._tbox: SecretBox = SecretBox(self._session_pair.tx)
+        pair, self._packet1 = client_init_kx_n(server_public_key, psk)
+        self._replace_current_material(pair)
 
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
         two_uple = self._get_small_message()
@@ -786,11 +826,10 @@ class KX_N_ServerStateMachine(BaseMachine):
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        self._session_pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
-        self._rbox = SecretBox(self._session_pair.rx)
-        self._tbox = SecretBox(self._session_pair.tx)
+        pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
+        self._replace_current_material(pair)
         # send OK message to the client
-        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
+        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))  # TODO: what about idx
         return [KxProgress()]
 
 
@@ -852,9 +891,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
             return []
         self._kx_state.client_finish_kx_kk(KX_KK_Packet2.from_bytes(packet2))
         assert self._kx_state.session_pair is not None
-        self._session_pair = self._kx_state.session_pair
-        self._rbox = SecretBox(self._session_pair.rx)
-        self._tbox = SecretBox(self._session_pair.tx)
+        self._replace_current_material(self._kx_state.session_pair)
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
@@ -923,9 +960,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
             # not enough data to read the packet1
             return []
         pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, KX_KK_Packet1.from_bytes(packet1))
-        self._session_pair = pair
-        self._rbox = SecretBox(self._session_pair.rx)
-        self._tbox = SecretBox(self._session_pair.tx)
+        self._replace_current_material(pair)
         self._data_ready_to_send.add(encode_length(packet2))
         self._data_ready_to_send.add(packet2)
         return [KxProgress()]
@@ -1003,9 +1038,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         assert self._kx_state.packet3
         assert self._kx_state.session_pair is not None
         assert self._kx_state.server_public_key is not None
-        self._session_pair = self._kx_state.session_pair
-        self._rbox = SecretBox(self._session_pair.rx)
-        self._tbox = SecretBox(self._session_pair.tx)
+        self._replace_current_material(self._kx_state.session_pair)
         self._server_public_key = self._kx_state.server_public_key
         if self.validate_peer_key is not None:
             try:
@@ -1122,9 +1155,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._kx_state.server_finish_kx_xx(KX_XX_Packet3.from_bytes(packet3))
         assert self._kx_state.session_pair is not None
         assert self._kx_state.client_public_key is not None
-        self._session_pair = self._kx_state.session_pair
-        self._rbox = SecretBox(self._session_pair.rx)
-        self._tbox = SecretBox(self._session_pair.tx)
+        self._replace_current_material(self._kx_state.session_pair)
         self._client_public_key = self._kx_state.client_public_key
 
         if self.validate_peer_key is not None:
@@ -1138,7 +1169,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
                 new_ex.__cause__ = ex
                 return self._fail_kx(new_ex)
         # send OK message to the client
-        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0), 0)
+        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))
         return [KxProgress()]
 
     def get_peer_key(self) -> KxPublicKey | None:
