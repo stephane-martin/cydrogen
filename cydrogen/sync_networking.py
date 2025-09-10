@@ -35,7 +35,7 @@ logger = logging.getLogger("cydrogen")
 
 
 class Protocol:
-    def __init__(self, sock: socket.socket, machine: BaseMachine) -> None:
+    def __init__(self, sock: socket.socket, machine: BaseMachine, rekey_secs: int | None = 3600) -> None:
         self.socket = sock
         self.peer = sock.getpeername()
         self._machine = machine
@@ -45,7 +45,10 @@ class Protocol:
         self._write_lock = threading.Lock()
         self.read_thread: threading.Thread = threading.Thread(target=self._read)
         self.decrypt_thread: threading.Thread = threading.Thread(target=self._decrypt_received_messages)
+        self.rekey_thread: threading.Thread = threading.Thread(target=self._rekey)
         self.kx_finished = threading.Event()
+        self.rekey_secs = rekey_secs
+        self.connection_lost_ev = threading.Event()
 
     @property
     def exception(self) -> Exception | None:
@@ -55,10 +58,12 @@ class Protocol:
     def start(self) -> None:
         self.read_thread.start()
         self.decrypt_thread.start()
+        self.rekey_thread.start()
 
     def join(self) -> None:
         self.read_thread.join()
         self.decrypt_thread.join()
+        self.rekey_thread.join()
 
     def connection_made(self) -> None:
         with self._machine_lock:
@@ -78,7 +83,27 @@ class Protocol:
         with self._machine_lock:
             events = self._machine.trigger_connection_lost(exc)
         self._handle_machine_events(events)  # KxFailed events may be generated here
+        self.connection_lost_ev.set()
         # not useful to try to send any pending data, the connection is lost
+
+    def _rekey(self) -> None:
+        if self.rekey_secs is None:
+            return
+        while True:
+            if self.connection_lost_ev.wait(timeout=self.rekey_secs):
+                # connection lost, exit the rekey loop
+                return
+            self._rekey1()
+
+    def _rekey1(self) -> None:
+        with self._machine_lock:
+            events = self._machine.trigger_rekey()
+        self._handle_machine_events(events)
+        with self._machine_lock:
+            data = self._machine.data_to_send()
+        if data:
+            with self._write_lock:
+                self.socket.sendall(data)
 
     def _read(self) -> None:
         # this is executed in a separate thread
@@ -433,7 +458,16 @@ class KX_XX_TCPServer(BaseTCPServer):
 
 
 class BaseTCPClient:
-    def __init__(self, host: str, port: int, machine: BaseMachine, *, connect_retry: int = 3, connect_retry_wait: int = 30) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        machine: BaseMachine,
+        *,
+        connect_retry: int = 3,
+        connect_retry_wait: int = 30,
+        rekey_secs: int | None = 3600,
+    ) -> None:
         self.server_address: tuple[str, int] = (host, port)
         self.retry = connect_retry
         self.retry_wait = connect_retry_wait
@@ -445,6 +479,7 @@ class BaseTCPClient:
 
         self.socket: socket.socket | None = None
         self.protocol: Protocol | None = None
+        self.rekey_secs = rekey_secs
 
     def connect(self) -> None:
         with self.state_lock:
@@ -458,7 +493,7 @@ class BaseTCPClient:
         try:
             self.socket = self._create_connection()
             set_keepalive(self.socket)
-            self.protocol = Protocol(self.socket, self.machine)
+            self.protocol = Protocol(self.socket, self.machine, rekey_secs=self.rekey_secs)
             self.protocol.connection_made()
             self.protocol.start()
             with self.state_lock:
@@ -520,8 +555,7 @@ class BaseTCPClient:
         if not self.protocol.kx_finished.is_set():
             raise RuntimeError("Key exchange not completed")
         try:
-            msg, msg_id = self.protocol.received_decrypted_msgs.get()
-            return msg, msg_id
+            return self.protocol.received_decrypted_msgs.get()
         except SyncMsgQueueShutdown:
             raise ClientClosedError from None
 
@@ -548,9 +582,10 @@ class KX_N_TCPClient(BaseTCPClient):
         psk: Psk | None = None,
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
+        rekey_secs: int | None = 3600,
     ) -> None:
         machine = KX_N_ClientStateMachine(server_public_key, psk=psk)
-        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait, rekey_secs=rekey_secs)
 
 
 class KX_KK_TCPClient(BaseTCPClient):
@@ -562,12 +597,13 @@ class KX_KK_TCPClient(BaseTCPClient):
         server_public_key: KxPublicKey,
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
+        rekey_secs: int | None = 3600,
     ) -> None:
         machine = KX_KK_ClientStateMachine(
             client_keypair,
             server_public_key,
         )
-        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait, rekey_secs=rekey_secs)
 
 
 class KX_XX_TCPClient(BaseTCPClient):
@@ -581,9 +617,10 @@ class KX_XX_TCPClient(BaseTCPClient):
         connect_retry: int = 3,
         connect_retry_wait: int = 30,
         validate_server_public_key: Callable[[KxPublicKey], None] | None = None,
+        rekey_secs: int | None = 3600,
     ) -> None:
         machine = KX_XX_ClientStateMachine(client_keypair, psk=psk, validate_peer_key=validate_server_public_key)
-        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait)
+        super().__init__(host, port, machine, connect_retry=connect_retry, connect_retry_wait=connect_retry_wait, rekey_secs=rekey_secs)
 
 
 def set_keepalive_linux(sock: socket.socket, after_idle_sec: int, interval_sec: int, max_fails: int) -> None:
