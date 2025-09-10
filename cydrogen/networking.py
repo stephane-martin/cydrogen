@@ -123,6 +123,21 @@ class MachineState(StrEnum):
     Waiting for the server to acknowledge the key exchange.
     """
 
+    CONNECTED_WAITING_FOR_SERVER_ACK = "connected_waiting_for_server_ack"
+    """
+    Client is connected, and waiting for the server to acknowledge the rekeying operation.
+    """
+
+    CONNECTED_WAITING_FOR_PACKET2 = "connected_waiting_for_packet2"
+    """
+    Client or server is connected, and waiting for packet2 to be sent by peer.
+    """
+
+    CONNECTED_WAITING_FOR_PACKET3 = "connected_waiting_for_packet3"
+    """
+    Server is connected, and waiting for packet3 to be sent by peer.
+    """
+
     def kx_is_pending(self) -> bool:
         """
         Returns True if the state is one of the states where the key exchange is pending.
@@ -187,7 +202,12 @@ class ExternalEvent(StrEnum):
 
     CONNECTION_MADE = "connection_made"
     """
-    When the network connection with the peer was made
+    When the network connection with the peer was made.
+    """
+
+    REKEY = "rekey"
+    """
+    Trigger a rekeying operation at the client.
     """
 
 
@@ -243,6 +263,7 @@ class Transitions:
             ExternalEvent.RECEIVE_PACKET2: {},
             ExternalEvent.RECEIVE_PACKET3: {},
             ExternalEvent.RECEIVE_SERVER_ACK: {},
+            ExternalEvent.REKEY: {},
         }
 
     def add_many(self, ev: ExternalEvent, transitions: TransitionsByOrigState) -> None:
@@ -351,11 +372,17 @@ class BaseMachine:
     # WAITING_FOR_PACKET3       => writer_eof       => READER_WRITER_CLOSED
     # WAITING_FOR_SERVER_ACK    => writer_eof       => READER_WRITER_CLOSED
 
-    # CONNECTED                 => write_emessage   => CONNECTED
-    # READER_CLOSED             => write_emessage   => READER_CLOSED
+    # CONNECTED                        => write_emessage => CONNECTED
+    # CONNECTED_WAITING_FOR_SERVER_ACK => write_emessage => CONNECTED_WAITING_FOR_SERVER_ACK
+    # CONNECTED_WAITING_FOR_PACKET2    => write_emessage => CONNECTED_WAITING_FOR_PACKET2
+    # CONNECTED_WAITING_FOR_PACKET3    => write_emessage => CONNECTED_WAITING_FOR_PACKET3
+    # READER_CLOSED                    => write_emessage => READER_CLOSED
 
-    # CONNECTED                 => receive_emessage => CONNECTED
-    # WRITER_CLOSED             => receive_emessage => WRITER_CLOSED
+    # CONNECTED                        => receive_emessage => CONNECTED
+    # CONNECTED_WAITING_FOR_SERVER_ACK => receive_emessage => CONNECTED_WAITING_FOR_SERVER_ACK
+    # CONNECTED_WAITING_FOR_PACKET2    => receive_emessage => CONNECTED_WAITING_FOR_PACKET2
+    # CONNECTED_WAITING_FOR_PACKET3    => receive_emessage => CONNECTED_WAITING_FOR_PACKET3
+    # WRITER_CLOSED                    => receive_emessage => WRITER_CLOSED
 
     _valid_states: frozenset[MachineState] = frozenset()
     """
@@ -427,6 +454,15 @@ class BaseMachine:
             ExternalEvent.WRITE_EMESSAGE,
             {
                 MachineState.CONNECTED: TransitionDestination(MachineState.CONNECTED, self._write_emessage),
+                MachineState.CONNECTED_WAITING_FOR_SERVER_ACK: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_SERVER_ACK, self._write_emessage
+                ),
+                MachineState.CONNECTED_WAITING_FOR_PACKET2: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_PACKET2, self._write_emessage
+                ),
+                MachineState.CONNECTED_WAITING_FOR_PACKET3: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_PACKET3, self._write_emessage
+                ),
                 MachineState.READER_CLOSED: TransitionDestination(MachineState.READER_CLOSED, self._write_emessage),
                 MachineState.WAITING_FOR_PACKET1: TransitionDestination(MachineState.WAITING_FOR_PACKET1, self._write_emessage),
                 MachineState.WAITING_FOR_PACKET2: TransitionDestination(MachineState.WAITING_FOR_PACKET2, self._write_emessage),
@@ -439,6 +475,15 @@ class BaseMachine:
             ExternalEvent.RECEIVE_EMESSAGE,
             {
                 MachineState.CONNECTED: TransitionDestination(MachineState.CONNECTED, self._receive_emessage),
+                MachineState.CONNECTED_WAITING_FOR_SERVER_ACK: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_SERVER_ACK, self._receive_emessage
+                ),
+                MachineState.CONNECTED_WAITING_FOR_PACKET2: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_PACKET2, self._receive_emessage
+                ),
+                MachineState.CONNECTED_WAITING_FOR_PACKET3: TransitionDestination(
+                    MachineState.CONNECTED_WAITING_FOR_PACKET3, self._receive_emessage
+                ),
                 MachineState.WRITER_CLOSED: TransitionDestination(MachineState.WRITER_CLOSED, self._receive_emessage),
             },
         )
@@ -465,6 +510,7 @@ class BaseMachine:
                 idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
             )
             self._candidate_pair = None
+            logger.info("Switched to new session keys (index %d)", new_idx)
 
     def _get_material(self, idx: int | None = None) -> CryptoMaterial:
         if idx is None:
@@ -693,14 +739,17 @@ class KX_N_ClientStateMachine(BaseMachine):
     KX_N_ClientStateMachine implements the client side of the KX_N key exchange protocol.
     """
 
-    # INITIAL                   => connection_made    => WAITING_FOR_SERVER_ACK
-    # WAITING_FOR_SERVER_ACK    => receive_server_ack => CONNECTED
+    # INITIAL                          => connection_made    => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK           => receive_server_ack => CONNECTED
+    # CONNECTED                        => rekey              => CONNECTED_WAITING_FOR_SERVER_ACK
+    # CONNECTED_WAITING_FOR_SERVER_ACK => receive_server_ack => CONNECTED
 
     _valid_states = frozenset(
         {
             MachineState.INITIAL,  # initial state, we can send packet1
             MachineState.WAITING_FOR_SERVER_ACK,  # waiting for server ACK after it has processed packet1
             MachineState.CONNECTED,  # key exchange completed successfully
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,  # rekeying, waiting for server ACK
             MachineState.READER_CLOSED,  # reader closed, we can still send data
             MachineState.WRITER_CLOSED,  # writer closed, we can still read data
             MachineState.READER_WRITER_CLOSED,  # both reader and writer closed, final state
@@ -729,21 +778,34 @@ class KX_N_ClientStateMachine(BaseMachine):
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
         self._transitions.add_one(
-            ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_SERVER_ACK, self._connection_made
+            ExternalEvent.CONNECTION_MADE,
+            MachineState.INITIAL,
+            MachineState.WAITING_FOR_SERVER_ACK,
+            self._kx_start,
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_SERVER_ACK, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+            ExternalEvent.REKEY,
+            MachineState.CONNECTED,
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
+            self._kx_start,
+        )
+        self._transitions.add_one(
+            ExternalEvent.RECEIVE_SERVER_ACK,
+            MachineState.WAITING_FOR_SERVER_ACK,
+            MachineState.CONNECTED,
+            self._receive_server_ack,
+        )
+        self._transitions.add_one(
+            ExternalEvent.RECEIVE_SERVER_ACK,
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
+            MachineState.CONNECTED,
+            self._receive_server_ack,
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_public_key: KxPublicKey = server_public_key
         self._psk = psk
-
-    def _start_rekeying(self) -> None:
-        if self._candidate_pair is not None or self._packet1 is not None:
-            raise RuntimeError("Rekeying already in progress")
-        self._candidate_pair, self._packet1 = client_init_kx_n(self._server_public_key, self._psk)
 
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
         if self._candidate_pair is None:
@@ -757,14 +819,18 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._packet1 = None
         return [KxProgress()]
 
-    def _connection_made(self) -> list[MachineProducedEvent]:
-        self._start_rekeying()
-        assert self._packet1 is not None
+    def _kx_start(self) -> list[MachineProducedEvent]:
+        if self._candidate_pair is not None or self._packet1 is not None:
+            raise RuntimeError("Rekeying already in progress")
+        self._candidate_pair, self._packet1 = client_init_kx_n(self._server_public_key, self._psk)
         self._data_ready_to_send.add(self._packet1)
         return []
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
+
+    def trigger_rekey(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.REKEY)
 
 
 class KX_N_ServerStateMachine(BaseMachine):
@@ -773,7 +839,8 @@ class KX_N_ServerStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED
+    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED (initial key exchange)
+    # CONNECTED             => receive_packet1 => CONNECTED (rekeying)
 
     _valid_states = frozenset(
         {
@@ -811,7 +878,7 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._transitions.add_one(
             ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
         )
-
+        self._transitions.add_one(ExternalEvent.RECEIVE_PACKET1, MachineState.CONNECTED, MachineState.CONNECTED, self._receive_packet1)
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_pair: KxPair = server_pair
@@ -839,13 +906,16 @@ class KX_KK_ClientStateMachine(BaseMachine):
     KX_KK_ClientStateMachine implements the client side of the KX_KK key exchange protocol.
     """
 
-    # INITIAL               => connection_made => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2   => receive_packet2 => CONNECTED
+    # INITIAL                       => connection_made => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2           => receive_packet2 => CONNECTED
+    # CONNECTED                     => rekey           => CONNECTED_WAITING_FOR_PACKET2
+    # CONNECTED_WAITING_FOR_PACKET2 => receive_packet2 => CONNECTED
 
     _valid_states = frozenset(
         {
             MachineState.INITIAL,
             MachineState.CONNECTED,
+            MachineState.CONNECTED_WAITING_FOR_PACKET2,
             MachineState.READER_CLOSED,
             MachineState.WRITER_CLOSED,
             MachineState.READER_WRITER_CLOSED,
@@ -871,11 +941,13 @@ class KX_KK_ClientStateMachine(BaseMachine):
         """
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
-        self._transitions.add_one(
-            ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._connection_made
-        )
+        self._transitions.add_one(ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._kx_start)
+        self._transitions.add_one(ExternalEvent.REKEY, MachineState.CONNECTED, MachineState.CONNECTED_WAITING_FOR_PACKET2, self._kx_start)
         self._transitions.add_one(
             ExternalEvent.RECEIVE_PACKET2, MachineState.WAITING_FOR_PACKET2, MachineState.CONNECTED, self._receive_packet2
+        )
+        self._transitions.add_one(
+            ExternalEvent.RECEIVE_PACKET2, MachineState.CONNECTED_WAITING_FOR_PACKET2, MachineState.CONNECTED, self._receive_packet2
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -883,11 +955,6 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._client_pair: KxPair = client_pair
         self._server_public_key: KxPublicKey = server_public_key
         self._kx_state: KxKkClientState | None = None
-
-    def _start_rekeying(self) -> None:
-        if self._kx_state is not None:
-            raise RuntimeError("Rekeying already in progress")
-        self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
         if self._kx_state is None:
@@ -905,8 +972,10 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._kx_state = None
         return [KxProgress()]
 
-    def _connection_made(self) -> list[MachineProducedEvent]:
-        self._start_rekeying()
+    def _kx_start(self) -> list[MachineProducedEvent]:
+        if self._kx_state is not None:
+            raise RuntimeError("Rekeying already in progress")
+        self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
         self._data_ready_to_send.add(self._kx_state.packet1)
@@ -915,6 +984,9 @@ class KX_KK_ClientStateMachine(BaseMachine):
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
 
+    def trigger_rekey(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.REKEY)
+
 
 class KX_KK_ServerStateMachine(BaseMachine):
     """
@@ -922,7 +994,8 @@ class KX_KK_ServerStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED
+    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED (initial key exchange)
+    # CONNECTED             => receive_packet1 => CONNECTED (rekeying)
 
     _valid_states = frozenset(
         {
@@ -959,6 +1032,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self._transitions.add_one(
             ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.CONNECTED, self._receive_packet1
         )
+        self._transitions.add_one(ExternalEvent.RECEIVE_PACKET1, MachineState.CONNECTED, MachineState.CONNECTED, self._receive_packet1)
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
@@ -987,14 +1061,19 @@ class KX_XX_ClientStateMachine(BaseMachine):
     KX_XX_ClientStateMachine implements the client side of the KX_XX key exchange protocol.
     """
 
-    # INITIAL                => connection_made    => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2    => receive_packet2    => WAITING_FOR_SERVER_ACK
-    # WAITING_FOR_SERVER_ACK => receive_server_ack => CONNECTED
+    # INITIAL                          => connection_made    => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2              => receive_packet2    => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK           => receive_server_ack => CONNECTED
+    # CONNECTED                        => rekey              => CONNECTED_WAITING_FOR_PACKET2
+    # CONNECTED_WAITING_FOR_PACKET2    => receive_packet2    => CONNECTED_WAITING_FOR_SERVER_ACK
+    # CONNECTED_WAITING_FOR_SERVER_ACK => receive_server_ack => CONNECTED
 
     _valid_states = frozenset(
         {
             MachineState.INITIAL,
             MachineState.CONNECTED,
+            MachineState.CONNECTED_WAITING_FOR_PACKET2,
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
             MachineState.READER_CLOSED,
             MachineState.WRITER_CLOSED,
             MachineState.READER_WRITER_CLOSED,
@@ -1024,14 +1103,25 @@ class KX_XX_ClientStateMachine(BaseMachine):
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
         self.validate_peer_key = validate_peer_key
 
-        self._transitions.add_one(
-            ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._connection_made
-        )
+        self._transitions.add_one(ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_PACKET2, self._kx_start)
+        self._transitions.add_one(ExternalEvent.REKEY, MachineState.CONNECTED, MachineState.CONNECTED_WAITING_FOR_PACKET2, self._kx_start)
         self._transitions.add_one(
             ExternalEvent.RECEIVE_PACKET2, MachineState.WAITING_FOR_PACKET2, MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2
         )
         self._transitions.add_one(
+            ExternalEvent.RECEIVE_PACKET2,
+            MachineState.CONNECTED_WAITING_FOR_PACKET2,
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
+            self._receive_packet2,
+        )
+        self._transitions.add_one(
             ExternalEvent.RECEIVE_SERVER_ACK, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+        )
+        self._transitions.add_one(
+            ExternalEvent.RECEIVE_SERVER_ACK,
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
+            MachineState.CONNECTED,
+            self._receive_server_ack,
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -1040,11 +1130,6 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._psk: Psk | None = psk
         self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
         self._kx_state: KxXxClientState | None = None
-
-    def _start_rekeying(self) -> None:
-        if self._kx_state is not None:
-            raise RuntimeError("Rekeying already in progress")
-        self._kx_state = self._client_pair.client_init_kx_xx(self._psk)
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
         if self._kx_state is None:
@@ -1087,8 +1172,10 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._kx_state = None
         return [KxProgress()]
 
-    def _connection_made(self) -> list[MachineProducedEvent]:
-        self._start_rekeying()
+    def _kx_start(self) -> list[MachineProducedEvent]:
+        if self._kx_state is not None:
+            raise RuntimeError("Rekeying already in progress")
+        self._kx_state = self._client_pair.client_init_kx_xx(self._psk)
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
         self._data_ready_to_send.add(self._kx_state.packet1)
@@ -1097,20 +1184,26 @@ class KX_XX_ClientStateMachine(BaseMachine):
     def get_peer_key(self) -> KxPublicKey | None:
         return self._server_public_key
 
+    def trigger_rekey(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.REKEY)
+
 
 class KX_XX_ServerStateMachine(BaseMachine):
     """
     KX_XX_ServerStateMachine implements the server side of the KX_XX key exchange protocol.
     """
 
-    # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_packet1 => WAITING_FOR_PACKET3
-    # WAITING_FOR_PACKET3   => receive_packet3 => CONNECTED
+    # INITIAL                       => connection_made => WAITING_FOR_PACKET1
+    # WAITING_FOR_PACKET1           => receive_packet1 => WAITING_FOR_PACKET3 (initial key exchange)
+    # CONNECTED                     => receive_packet1 => CONNECTED_WAITING_FOR_PACKET3 (rekeying)
+    # WAITING_FOR_PACKET3           => receive_packet3 => CONNECTED
+    # CONNECTED_WAITING_FOR_PACKET3 => receive_packet3 => CONNECTED
 
     _valid_states = frozenset(
         {
             MachineState.INITIAL,
             MachineState.CONNECTED,
+            MachineState.CONNECTED_WAITING_FOR_PACKET3,
             MachineState.READER_CLOSED,
             MachineState.WRITER_CLOSED,
             MachineState.READER_WRITER_CLOSED,
@@ -1147,7 +1240,19 @@ class KX_XX_ServerStateMachine(BaseMachine):
             ExternalEvent.RECEIVE_PACKET1, MachineState.WAITING_FOR_PACKET1, MachineState.WAITING_FOR_PACKET3, self._receive_packet1
         )
         self._transitions.add_one(
+            ExternalEvent.RECEIVE_PACKET1,
+            MachineState.CONNECTED,
+            MachineState.CONNECTED_WAITING_FOR_PACKET3,
+            self._receive_packet1,
+        )
+        self._transitions.add_one(
             ExternalEvent.RECEIVE_PACKET3, MachineState.WAITING_FOR_PACKET3, MachineState.CONNECTED, self._receive_packet3
+        )
+        self._transitions.add_one(
+            ExternalEvent.RECEIVE_PACKET3,
+            MachineState.CONNECTED_WAITING_FOR_PACKET3,
+            MachineState.CONNECTED,
+            self._receive_packet3,
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
