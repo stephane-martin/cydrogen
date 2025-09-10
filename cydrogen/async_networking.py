@@ -428,16 +428,20 @@ class KXProtocol(asyncio.BufferedProtocol):
                     else:
                         dfut.set_exception(exc)
 
+        if self._rekey_task is not None:
+            self._rekey_task.cancel()
+            self._rekey_task = None
+
         if self._decrypt_task is not None and self._client_handler is None:
             # because we received connection_lost, it is not possible anymore to send encrypted messages
             # because self._client_handler is None, we know we are client side
             # because the queue of encrypted messages has been closed, we know that the decrypt task will finish soon
             # when _decrypt_task finishes, we also know we wont be decrypting any more message
             # so in that case we can shutdown the executor as no encryption/decryption will happen anymore
-            def callback(_: asyncio.Future) -> None:
+            def shutdown_client_executor(_: asyncio.Future) -> None:
                 self._executor.shutdown(wait=False)
 
-            self._decrypt_task.add_done_callback(callback)
+            self._decrypt_task.add_done_callback(shutdown_client_executor)
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
