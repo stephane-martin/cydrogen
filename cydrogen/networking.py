@@ -1053,7 +1053,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
         self._client_pair: KxPair = client_pair
         self._psk: Psk | None = psk
-        self._server_public_key: KxPublicKey  # will be set after receiving packet2 from the server
+        self._server_public_key: KxPublicKey | None  # will be set after receiving packet2 from the server
         self._kx_state: KxXxClientState | None = None
 
     def _start_rekeying(self) -> None:
@@ -1074,17 +1074,18 @@ class KX_XX_ClientStateMachine(BaseMachine):
         assert self._kx_state.session_pair is not None
         assert self._kx_state.server_public_key is not None
         self._candidate_pair = self._kx_state.session_pair
-        self._server_public_key = self._kx_state.server_public_key
-        if self.validate_peer_key is not None:
-            try:
-                self.validate_peer_key(self._server_public_key)
-            except InvalidPeerKeyException as ex:
-                return self._fail_kx(ex)
-            except Exception as ex:  # noqa: BLE001
-                # ensure the exception is of type InvalidPeerKeyException
-                new_ex = InvalidPeerKeyException()
-                new_ex.__cause__ = ex
-                return self._fail_kx(new_ex)
+        if self._server_public_key is None:  # only validate the server public key once
+            self._server_public_key = self._kx_state.server_public_key
+            if self.validate_peer_key is not None:
+                try:
+                    self.validate_peer_key(self._server_public_key)
+                except InvalidPeerKeyException as ex:
+                    return self._fail_kx(ex)
+                except Exception as ex:  # noqa: BLE001
+                    # ensure the exception is of type InvalidPeerKeyException
+                    new_ex = InvalidPeerKeyException()
+                    new_ex.__cause__ = ex
+                    return self._fail_kx(new_ex)
         # send packet3 to the server
         self._data_ready_to_send.add(encode_length(self._kx_state.packet3))
         self._data_ready_to_send.add(self._kx_state.packet3)
@@ -1169,7 +1170,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
-        self._client_public_key: KxPublicKey  # will be set after receiving packet1 from the client
+        self._client_public_key: KxPublicKey | None = None  # will be set after receiving packet1 from the client
         self._kx_state: KxXxServerState | None = None
 
     def _receive_packet1(self) -> list[MachineProducedEvent]:
@@ -1199,18 +1200,18 @@ class KX_XX_ServerStateMachine(BaseMachine):
         assert self._kx_state.session_pair is not None
         assert self._kx_state.client_public_key is not None
         self._candidate_pair = self._kx_state.session_pair
-        self._client_public_key = self._kx_state.client_public_key
-
-        if self.validate_peer_key is not None:
-            try:
-                self.validate_peer_key(self._client_public_key)
-            except InvalidPeerKeyException as ex:
-                return self._fail_kx(ex)
-            except Exception as ex:  # noqa: BLE001
-                # ensure the exception is of type InvalidPeerKeyException
-                new_ex = InvalidPeerKeyException()
-                new_ex.__cause__ = ex
-                return self._fail_kx(new_ex)
+        if self._client_public_key is None:  # only validate the client public key once
+            self._client_public_key = self._kx_state.client_public_key
+            if self.validate_peer_key is not None:
+                try:
+                    self.validate_peer_key(self._client_public_key)
+                except InvalidPeerKeyException as ex:
+                    return self._fail_kx(ex)
+                except Exception as ex:  # noqa: BLE001
+                    # ensure the exception is of type InvalidPeerKeyException
+                    new_ex = InvalidPeerKeyException()
+                    new_ex.__cause__ = ex
+                    return self._fail_kx(new_ex)
 
         self._replace_current_material()
         self._kx_state = None
