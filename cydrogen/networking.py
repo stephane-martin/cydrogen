@@ -19,8 +19,8 @@ from ._datastructs import (
     KX_XX_Packet3,
     MessageType,
 )
-from ._decls import NOGIL_THRESHOLD_BYTES
 from ._kx_n import (
+    KxKkClientState,
     KxPair,
     KxPublicKey,
     KxXxClientState,
@@ -450,16 +450,22 @@ class BaseMachine:
         self._material_lock = threading.Lock()
         self._current_material: CryptoMaterial | None = None
         self._previous_material: CryptoMaterial | None = None
+        self._candidate_pair: SessionPair | None = None
 
         self.exception: Exception | None = None
 
-    def _replace_current_material(self, new_pair: SessionPair) -> None:
+    def _replace_current_material(self) -> None:
         with self._material_lock:
+            if self._candidate_pair is None:
+                raise RuntimeError("candidate pair not set")
             new_idx: int = 0
             if self._current_material is not None:
                 new_idx = self._current_material.idx + 1
                 self._previous_material = self._current_material
-            self._current_material = CryptoMaterial(idx=new_idx, pair=new_pair, tbox=SecretBox(new_pair.tx), rbox=SecretBox(new_pair.rx))
+            self._current_material = CryptoMaterial(
+                idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
+            )
+            self._candidate_pair = None
 
     def _get_current_material(self) -> CryptoMaterial:
         with self._material_lock:
@@ -537,6 +543,8 @@ class BaseMachine:
                         evs = self.trigger_receive_packet3()
                     case MessageType.ENCRYPTED_MESSAGE:
                         evs = self.trigger_receive_emessage()
+                    case _:
+                        raise RuntimeError(f"Unknown message type: {mtype}")  # noqa: TRY301
                 if not evs:
                     # there was not enough available data to advance the state
                     return events
@@ -670,16 +678,15 @@ class BaseMachine:
     def _get_small_message(self) -> tuple[bytes, int] | None:
         # for small messages that occur during key exchange, we consider the decryption is immediate,
         # so we don't need to go through the two queues.
+        if self._candidate_pair is None:
+            raise RuntimeError("session keys not yet calculated")
         try:
             b = self._read_buffers.consume_message()
             if b is None:
                 # not enough data to read the message
                 return None
-            if len(b) >= NOGIL_THRESHOLD_BYTES:
-                logger.warning("_get_small_message: consuming abnormal big message: %s bytes", len(b))
             emsg: EncryptedMessage = EncryptedMessage.from_bytes(b)
-            mat = self._get_material(emsg.session_keys_idx)
-            plaintext: bytes = mat.rbox.decrypt(emsg)  # considered immediate
+            plaintext: bytes = SecretBox(self._candidate_pair.rx).decrypt(emsg)  # considered immediate
             self._read_buffers.release_bytearray(b)  # return the mview to the freelist
             return plaintext, emsg.msg_id
         except Exception as ex:
@@ -735,7 +742,7 @@ class KX_N_ClientStateMachine(BaseMachine):
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
         """
-        self._packet1: KX_N_Packet1
+        self._packet1: KX_N_Packet1 | None = None
 
         super().__init__(sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size)
 
@@ -749,19 +756,29 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._server_public_key: KxPublicKey = server_public_key
-        pair, self._packet1 = client_init_kx_n(server_public_key, psk)
-        self._replace_current_material(pair)
+        self._psk = psk
+
+    def _start_rekeying(self) -> None:
+        if self._candidate_pair is not None or self._packet1 is not None:
+            raise RuntimeError("Rekeying already in progress")
+        self._candidate_pair, self._packet1 = client_init_kx_n(self._server_public_key, self._psk)
 
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
+        if self._candidate_pair is None:
+            raise RuntimeError("candidate pair not set")
         two_uple = self._get_small_message()
         if two_uple is None:
             # not enough data to read the message
             return []
         if two_uple[0] != OK_MESSAGE:
             raise RuntimeError("Server did not respond with OK")
+        self._replace_current_material()
+        self._packet1 = None
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        self._start_rekeying()
+        assert self._packet1 is not None
         self._data_ready_to_send.add(encode_length(self._packet1))
         self._data_ready_to_send.add(self._packet1)
         return []
@@ -826,8 +843,8 @@ class KX_N_ServerStateMachine(BaseMachine):
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
-        self._replace_current_material(pair)
+        self._candidate_pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
+        self._replace_current_material()
         # send OK message to the client
         self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))  # TODO: what about idx
         return [KxProgress()]
@@ -881,9 +898,16 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
         self._client_pair: KxPair = client_pair
         self._server_public_key: KxPublicKey = server_public_key
+        self._kx_state: KxKkClientState | None = None
+
+    def _start_rekeying(self) -> None:
+        if self._kx_state is not None:
+            raise RuntimeError("Rekeying already in progress")
         self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
+        if self._kx_state is None:
+            raise RuntimeError("kx state not set")
         # we expect to receive packet2 from the server, length KX_KK_PACKET2BYTES
         packet2 = self._read_buffers.consume_kx_packet()
         if packet2 is None:
@@ -891,10 +915,14 @@ class KX_KK_ClientStateMachine(BaseMachine):
             return []
         self._kx_state.client_finish_kx_kk(KX_KK_Packet2.from_bytes(packet2))
         assert self._kx_state.session_pair is not None
-        self._replace_current_material(self._kx_state.session_pair)
+        self._candidate_pair = self._kx_state.session_pair
+        self._replace_current_material()
+        self._kx_state = None
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        self._start_rekeying()
+        assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
         self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
@@ -959,10 +987,10 @@ class KX_KK_ServerStateMachine(BaseMachine):
         if packet1 is None:
             # not enough data to read the packet1
             return []
-        pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, KX_KK_Packet1.from_bytes(packet1))
-        self._replace_current_material(pair)
+        self._candidate_pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, KX_KK_Packet1.from_bytes(packet1))
         self._data_ready_to_send.add(encode_length(packet2))
         self._data_ready_to_send.add(packet2)
+        self._replace_current_material()
         return [KxProgress()]
 
     def get_peer_key(self) -> KxPublicKey | None:
@@ -1025,10 +1053,17 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
         self._client_pair: KxPair = client_pair
         self._psk: Psk | None = psk
-        self._kx_state: KxXxClientState = self._client_pair.client_init_kx_xx(self._psk)
         self._server_public_key: KxPublicKey  # will be set after receiving packet2 from the server
+        self._kx_state: KxXxClientState | None = None
+
+    def _start_rekeying(self) -> None:
+        if self._kx_state is not None:
+            raise RuntimeError("Rekeying already in progress")
+        self._kx_state = self._client_pair.client_init_kx_xx(self._psk)
 
     def _receive_packet2(self) -> list[MachineProducedEvent]:
+        if self._kx_state is None:
+            raise RuntimeError("kx state not set")
         # we expect to receive packet2 from the server, length KX_XX_PACKET2BYTES
         packet2 = self._read_buffers.consume_kx_packet()
         if packet2 is None:
@@ -1038,7 +1073,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         assert self._kx_state.packet3
         assert self._kx_state.session_pair is not None
         assert self._kx_state.server_public_key is not None
-        self._replace_current_material(self._kx_state.session_pair)
+        self._candidate_pair = self._kx_state.session_pair
         self._server_public_key = self._kx_state.server_public_key
         if self.validate_peer_key is not None:
             try:
@@ -1062,9 +1097,13 @@ class KX_XX_ClientStateMachine(BaseMachine):
             return []
         if two_uple[0] != OK_MESSAGE:
             raise RuntimeError("Server did not respond with OK")
+        self._replace_current_material()
+        self._kx_state = None
         return [KxProgress()]
 
     def _connection_made(self) -> list[MachineProducedEvent]:
+        self._start_rekeying()
+        assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
         self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
@@ -1131,9 +1170,11 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
         self._client_public_key: KxPublicKey  # will be set after receiving packet1 from the client
-        self._kx_state: KxXxServerState
+        self._kx_state: KxXxServerState | None = None
 
     def _receive_packet1(self) -> list[MachineProducedEvent]:
+        if self._kx_state is not None:
+            raise RuntimeError("kx state already set")
         # we expect to receive packet1 from the client, length KX_XX_PACKET1BYTES
         packet1 = self._read_buffers.consume_kx_packet()
         if packet1 is None:
@@ -1147,6 +1188,8 @@ class KX_XX_ServerStateMachine(BaseMachine):
         return [KxProgress()]
 
     def _receive_packet3(self) -> list[MachineProducedEvent]:
+        if self._kx_state is None:
+            raise RuntimeError("kx state not set")
         # self._state == MState.WAITING_FOR_PACKET3
         packet3 = self._read_buffers.consume_kx_packet()
         if packet3 is None:
@@ -1155,7 +1198,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._kx_state.server_finish_kx_xx(KX_XX_Packet3.from_bytes(packet3))
         assert self._kx_state.session_pair is not None
         assert self._kx_state.client_public_key is not None
-        self._replace_current_material(self._kx_state.session_pair)
+        self._candidate_pair = self._kx_state.session_pair
         self._client_public_key = self._kx_state.client_public_key
 
         if self.validate_peer_key is not None:
@@ -1168,6 +1211,10 @@ class KX_XX_ServerStateMachine(BaseMachine):
                 new_ex = InvalidPeerKeyException()
                 new_ex.__cause__ = ex
                 return self._fail_kx(new_ex)
+
+        self._replace_current_material()
+        self._kx_state = None
+
         # send OK message to the client
         self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))
         return [KxProgress()]
