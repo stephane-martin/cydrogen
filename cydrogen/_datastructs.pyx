@@ -27,6 +27,7 @@ cdef bytes CY_KX_KK_PACKET2_MARKER = b"K2"
 cdef bytes CY_KX_XX_PACKET1_MARKER = b"X1"
 cdef bytes CY_KX_XX_PACKET2_MARKER = b"X2"
 cdef bytes CY_KX_XX_PACKET3_MARKER = b"X3"
+cdef bytes CY_KX_SERVER_ACK_MARKER = b"SA"
 
 KX_N_PACKET1_MARKER = bytes(CY_KX_N_PACKET1_MARKER)     # explicit bytes() to make a copy and ensure the cython markers are not modified
 KX_KK_PACKET1_MARKER = bytes(CY_KX_KK_PACKET1_MARKER)
@@ -34,6 +35,7 @@ KX_KK_PACKET2_MARKER = bytes(CY_KX_KK_PACKET2_MARKER)
 KX_XX_PACKET1_MARKER = bytes(CY_KX_XX_PACKET1_MARKER)
 KX_XX_PACKET2_MARKER = bytes(CY_KX_XX_PACKET2_MARKER)
 KX_XX_PACKET3_MARKER = bytes(CY_KX_XX_PACKET3_MARKER)
+KX_SERVER_ACK_MARKER = bytes(CY_KX_SERVER_ACK_MARKER)
 
 
 class MessageType(StrEnum):
@@ -44,6 +46,7 @@ class MessageType(StrEnum):
     KX_XX_PACKET1 = KX_XX_PACKET1_MARKER.decode("ascii")
     KX_XX_PACKET2 = KX_XX_PACKET2_MARKER.decode("ascii")
     KX_XX_PACKET3 = KX_XX_PACKET3_MARKER.decode("ascii")
+    KX_SERVER_ACK = KX_SERVER_ACK_MARKER.decode("ascii")
 
     @classmethod
     def from_marker(cls, marker):
@@ -53,6 +56,9 @@ class MessageType(StrEnum):
 
     def is_encrypted_message(self):
         return self == MessageType.ENCRYPTED_MESSAGE
+
+    def is_server_ack(self):
+        return self == MessageType.KX_SERVER_ACK
 
     def is_kx_packet(self):
         return self in {
@@ -362,3 +368,35 @@ cdef class KX_XX_Packet3:
         if bytes(framed[0:2]) != KX_XX_PACKET3_MARKER:
             raise ValueError("Invalid packet marker")
         return cls(framed[2:len(framed)])
+
+
+cdef class KX_Server_Ack:
+    def __init__(self):
+        self.packet = b"OK"
+        self.encoded = CY_KX_SERVER_ACK_MARKER + self.packet
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        cdef const unsigned char* encoded_ptr = self.encoded
+        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+
+    def __bytes__(self):
+        return bytes(self.encoded)
+
+    def __len__(self):
+        return len(self.encoded)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        return isinstance(other, KX_Server_Ack)
+
+    def __hash__(self):
+        return hash(self.packet)
+
+    @classmethod
+    def from_bytes(cls, const unsigned char[:] framed):
+        if bytes(framed[0:2]) != KX_SERVER_ACK_MARKER:
+            raise ValueError("Invalid packet marker")
+        if bytes(framed[2:len(framed)]) != b"OK":
+            raise ValueError("Invalid server ack packet")
+        return cls()

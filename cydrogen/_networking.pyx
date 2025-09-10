@@ -7,7 +7,7 @@ from libc.stdint cimport uint64_t
 
 from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE
 from ._decls cimport hydro_secretbox_HEADERBYTES
-from ._utils cimport load64
+from ._utils cimport load64, encode_length
 
 import asyncio
 import logging
@@ -27,13 +27,16 @@ cdef class BytearrayBuilder:
         self.offset = 0
 
     cpdef add(self, const unsigned char[:] data):
-        if self.offset + len(data) > len(self.b):
+        # we need 8 bytes (to encode the length of data) + len(data) bytes
+        needed = len(data) + 8
+        if self.offset + needed > len(self.b):
             # we don't have enough space in the bytearray, resize it
-            if PyByteArray_Resize(self.b, self.offset + len(data)) < 0:
+            if PyByteArray_Resize(self.b, self.offset + needed) < 0:
                 raise MemoryError("Failed to resize bytearray")
+        self.b[self.offset : self.offset + 8] = encode_length(data)
         cdef unsigned char[:] mv = self.b
-        mv[self.offset : self.offset + len(data)] = data[0 : len(data)]
-        self.offset += len(data)
+        mv[self.offset + 8 : self.offset + needed] = data[0 : len(data)]
+        self.offset += needed
 
     cpdef get(self):
         cdef bytearray result = self.b[: self.offset]   # this is an actual copy
@@ -184,6 +187,21 @@ cdef class ReadBuffers:
         packet_size = length - 2
         if packet_size < 48 or packet_size > 96:
             raise ValueError("Invalid KX packet size")
+        # try to consume for real
+        b = self.consume_bytes(length + 8)
+        if b is None:
+            # not enough data to read the whole message
+            return None
+        return b[8:len(b)]  # skip the length field
+
+    cpdef consume_server_ack(self):
+        h = self.peek_bytes(10)
+        if h is None:
+            # not enough data to read the start of the message
+            return None
+        if not MessageType.from_marker(h[8:10]).is_server_ack():
+            raise ValueError("Not a server ACK")
+        length = load64(h[0:8])
         # try to consume for real
         b = self.consume_bytes(length + 8)
         if b is None:

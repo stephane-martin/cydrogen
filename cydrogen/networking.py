@@ -14,6 +14,7 @@ from ._datastructs import (
     KX_KK_Packet1,
     KX_KK_Packet2,
     KX_N_Packet1,
+    KX_Server_Ack,
     KX_XX_Packet1,
     KX_XX_Packet2,
     KX_XX_Packet3,
@@ -31,15 +32,9 @@ from ._kx_n import (
 )
 from ._networking import BytearrayBuilder, ReadBuffers
 from ._secretbox import SecretBox
-from ._utils import encode_length
 from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
 
 logger = logging.getLogger("cydrogen")
-
-OK_MESSAGE: bytes = b"OK"
-"""
-A message sent by the (some of) our servers to the client to acknowledge the successful completion of the key exchange.
-"""
 
 CANCEL_MESSAGE_ID: int = 0
 """
@@ -185,6 +180,11 @@ class ExternalEvent(StrEnum):
     Receive an encrypted message from the peer, after the key exchange has completed.
     """
 
+    RECEIVE_SERVER_ACK = "receive_server_ack"
+    """
+    Receive server ACK.
+    """
+
     CONNECTION_MADE = "connection_made"
     """
     When the network connection with the peer was made
@@ -242,6 +242,7 @@ class Transitions:
             ExternalEvent.RECEIVE_PACKET1: {},
             ExternalEvent.RECEIVE_PACKET2: {},
             ExternalEvent.RECEIVE_PACKET3: {},
+            ExternalEvent.RECEIVE_SERVER_ACK: {},
         }
 
     def add_many(self, ev: ExternalEvent, transitions: TransitionsByOrigState) -> None:
@@ -458,22 +459,21 @@ class BaseMachine:
         with self._material_lock:
             if self._candidate_pair is None:
                 raise RuntimeError("candidate pair not set")
-            new_idx: int = 0
-            if self._current_material is not None:
-                new_idx = self._current_material.idx + 1
-                self._previous_material = self._current_material
+            new_idx: int = 0 if self._current_material is None else (self._current_material.idx + 1) % 256
+            self._previous_material = self._current_material
             self._current_material = CryptoMaterial(
                 idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
             )
             self._candidate_pair = None
 
-    def _get_current_material(self) -> CryptoMaterial:
-        with self._material_lock:
-            if self._current_material is None:
-                raise RuntimeError("session keys not yet calculated")
-            return self._current_material
-
-    def _get_material(self, idx: int) -> CryptoMaterial:
+    def _get_material(self, idx: int | None = None) -> CryptoMaterial:
+        if idx is None:
+            # return the current material
+            with self._material_lock:
+                if self._current_material is None:
+                    raise RuntimeError("session keys not yet calculated")
+                return self._current_material
+        # return the material with the given index
         with self._material_lock:
             if self._current_material is None:
                 raise RuntimeError("session keys not yet calculated")
@@ -484,10 +484,6 @@ class BaseMachine:
             if self._previous_material.idx == idx:
                 return self._previous_material
             raise RuntimeError("unknown crypto material")
-
-    def _delete_previous_material(self) -> None:
-        with self._material_lock:
-            self._previous_material = None
 
     def get_buffer(self) -> memoryview:
         """
@@ -541,6 +537,8 @@ class BaseMachine:
                         evs = self.trigger_receive_packet2()
                     case MessageType.KX_XX_PACKET3:
                         evs = self.trigger_receive_packet3()
+                    case MessageType.KX_SERVER_ACK:
+                        evs = self.trigger_receive_server_ack()
                     case MessageType.ENCRYPTED_MESSAGE:
                         evs = self.trigger_receive_emessage()
                     case _:
@@ -585,6 +583,9 @@ class BaseMachine:
 
     def trigger_receive_emessage(self) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.RECEIVE_EMESSAGE)
+
+    def trigger_receive_server_ack(self) -> list[MachineProducedEvent]:
+        return self._trigger(ExternalEvent.RECEIVE_SERVER_ACK)
 
     def _trigger(self, ev: ExternalEvent, *args) -> list[MachineProducedEvent]:  # noqa: ANN002
         """
@@ -633,7 +634,6 @@ class BaseMachine:
 
     def _write_emessage(self, emsg: EncryptedMessage) -> list[MachineProducedEvent]:
         # called by Protocol to prepare sending a message to the server
-        self._data_ready_to_send.add(encode_length(emsg))
         self._data_ready_to_send.add(emsg)
         return []
 
@@ -671,27 +671,9 @@ class BaseMachine:
         Returns:
             A bytearray containing the encrypted message, ready to be sent over the network.
         """
-        mat = self._get_current_material()
+        mat = self._get_material()
         ciphertext = mat.tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
         return EncryptedMessage(ciphertext, msg_id, mat.idx)
-
-    def _get_small_message(self) -> tuple[bytes, int] | None:
-        # for small messages that occur during key exchange, we consider the decryption is immediate,
-        # so we don't need to go through the two queues.
-        if self._candidate_pair is None:
-            raise RuntimeError("session keys not yet calculated")
-        try:
-            b = self._read_buffers.consume_message()
-            if b is None:
-                # not enough data to read the message
-                return None
-            emsg: EncryptedMessage = EncryptedMessage.from_bytes(b)
-            plaintext: bytes = SecretBox(self._candidate_pair.rx).decrypt(emsg)  # considered immediate
-            self._read_buffers.release_bytearray(b)  # return the mview to the freelist
-            return plaintext, emsg.msg_id
-        except Exception as ex:
-            self._fail_kx(ex)
-            raise
 
     def data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()
@@ -711,8 +693,8 @@ class KX_N_ClientStateMachine(BaseMachine):
     KX_N_ClientStateMachine implements the client side of the KX_N key exchange protocol.
     """
 
-    # INITIAL                   => connection_made => WAITING_FOR_SERVER_ACK
-    # WAITING_FOR_SERVER_ACK    => receive_data    => CONNECTED
+    # INITIAL                   => connection_made    => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK    => receive_server_ack => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -750,7 +732,7 @@ class KX_N_ClientStateMachine(BaseMachine):
             ExternalEvent.CONNECTION_MADE, MachineState.INITIAL, MachineState.WAITING_FOR_SERVER_ACK, self._connection_made
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_EMESSAGE, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+            ExternalEvent.RECEIVE_SERVER_ACK, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
@@ -766,12 +748,11 @@ class KX_N_ClientStateMachine(BaseMachine):
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
         if self._candidate_pair is None:
             raise RuntimeError("candidate pair not set")
-        two_uple = self._get_small_message()
-        if two_uple is None:
-            # not enough data to read the message
+        b = self._read_buffers.consume_server_ack()
+        if b is None:
             return []
-        if two_uple[0] != OK_MESSAGE:
-            raise RuntimeError("Server did not respond with OK")
+        KX_Server_Ack.from_bytes(b)  # just to verify the message is well formed
+        # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._packet1 = None
         return [KxProgress()]
@@ -779,7 +760,6 @@ class KX_N_ClientStateMachine(BaseMachine):
     def _connection_made(self) -> list[MachineProducedEvent]:
         self._start_rekeying()
         assert self._packet1 is not None
-        self._data_ready_to_send.add(encode_length(self._packet1))
         self._data_ready_to_send.add(self._packet1)
         return []
 
@@ -793,7 +773,7 @@ class KX_N_ServerStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data    => CONNECTED
+    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -844,9 +824,13 @@ class KX_N_ServerStateMachine(BaseMachine):
             # not enough data to read the packet1
             return []
         self._candidate_pair = self._server_pair.server_finish_kx_n(KX_N_Packet1.from_bytes(packet1), self._psk)
+        # switch to the new session keys:
+        # - next messages the server sends will be encrypted with the new session keys
+        # - we will be able to decrypt messages from the client encrypted with the new session keys
+        # - we are still able to decrypt messages from the client encrypted with the old session keys
         self._replace_current_material()
-        # send OK message to the client
-        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))  # TODO: what about idx
+        # Send ACK to the client. When the client receives the ACK, it will switch to the new session keys.
+        self._data_ready_to_send.add(KX_Server_Ack())
         return [KxProgress()]
 
 
@@ -856,7 +840,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET2 if not enough data)
+    # WAITING_FOR_PACKET2   => receive_packet2 => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -916,6 +900,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._kx_state.client_finish_kx_kk(KX_KK_Packet2.from_bytes(packet2))
         assert self._kx_state.session_pair is not None
         self._candidate_pair = self._kx_state.session_pair
+        # switch to the new session keys. the server has already switched to them at this point.
         self._replace_current_material()
         self._kx_state = None
         return [KxProgress()]
@@ -924,7 +909,6 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._start_rekeying()
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
-        self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
         return []
 
@@ -938,7 +922,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET1 if not enough data)
+    # WAITING_FOR_PACKET1   => receive_packet1 => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -988,8 +972,9 @@ class KX_KK_ServerStateMachine(BaseMachine):
             # not enough data to read the packet1
             return []
         self._candidate_pair, packet2 = self._server_pair.server_process_kx_kk(self._client_public_key, KX_KK_Packet1.from_bytes(packet1))
-        self._data_ready_to_send.add(encode_length(packet2))
+        # when the client receives packet2, it will switch to the new session keys
         self._data_ready_to_send.add(packet2)
+        # switch to the new session keys server side
         self._replace_current_material()
         return [KxProgress()]
 
@@ -1002,9 +987,9 @@ class KX_XX_ClientStateMachine(BaseMachine):
     KX_XX_ClientStateMachine implements the client side of the KX_XX key exchange protocol.
     """
 
-    # INITIAL                => connection_made => WAITING_FOR_PACKET2
-    # WAITING_FOR_PACKET2    => receive_data    => WAITING_FOR_SERVER_ACK (or stay in WAITING_FOR_PACKET2 if not enough data)
-    # WAITING_FOR_SERVER_ACK => receive_data    => CONNECTED (or stay in WAITING_FOR_SERVER_ACK if not enough data)
+    # INITIAL                => connection_made    => WAITING_FOR_PACKET2
+    # WAITING_FOR_PACKET2    => receive_packet2    => WAITING_FOR_SERVER_ACK
+    # WAITING_FOR_SERVER_ACK => receive_server_ack => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -1046,14 +1031,14 @@ class KX_XX_ClientStateMachine(BaseMachine):
             ExternalEvent.RECEIVE_PACKET2, MachineState.WAITING_FOR_PACKET2, MachineState.WAITING_FOR_SERVER_ACK, self._receive_packet2
         )
         self._transitions.add_one(
-            ExternalEvent.RECEIVE_EMESSAGE, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
+            ExternalEvent.RECEIVE_SERVER_ACK, MachineState.WAITING_FOR_SERVER_ACK, MachineState.CONNECTED, self._receive_server_ack
         )
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
         self._client_pair: KxPair = client_pair
         self._psk: Psk | None = psk
-        self._server_public_key: KxPublicKey | None  # will be set after receiving packet2 from the server
+        self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
         self._kx_state: KxXxClientState | None = None
 
     def _start_rekeying(self) -> None:
@@ -1087,17 +1072,17 @@ class KX_XX_ClientStateMachine(BaseMachine):
                     new_ex.__cause__ = ex
                     return self._fail_kx(new_ex)
         # send packet3 to the server
-        self._data_ready_to_send.add(encode_length(self._kx_state.packet3))
         self._data_ready_to_send.add(self._kx_state.packet3)
         return [KxProgress()]
 
     def _receive_server_ack(self) -> list[MachineProducedEvent]:
-        two_uple = self._get_small_message()
-        if two_uple is None:
-            # not enough data to read the message
+        if self._kx_state is None:
+            raise RuntimeError("kx state not set")
+        b = self._read_buffers.consume_server_ack()
+        if b is None:
             return []
-        if two_uple[0] != OK_MESSAGE:
-            raise RuntimeError("Server did not respond with OK")
+        KX_Server_Ack.from_bytes(b)  # just to verify the message is well formed
+        # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._kx_state = None
         return [KxProgress()]
@@ -1106,7 +1091,6 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._start_rekeying()
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
-        self._data_ready_to_send.add(encode_length(self._kx_state.packet1))
         self._data_ready_to_send.add(self._kx_state.packet1)
         return []
 
@@ -1120,8 +1104,8 @@ class KX_XX_ServerStateMachine(BaseMachine):
     """
 
     # INITIAL               => connection_made => WAITING_FOR_PACKET1
-    # WAITING_FOR_PACKET1   => receive_data    => WAITING_FOR_PACKET3 (or stay in WAITING_FOR_PACKET1 if not enough data)
-    # WAITING_FOR_PACKET3   => receive_data    => CONNECTED (or stay in WAITING_FOR_PACKET3 if not enough data)
+    # WAITING_FOR_PACKET1   => receive_packet1 => WAITING_FOR_PACKET3
+    # WAITING_FOR_PACKET3   => receive_packet3 => CONNECTED
 
     _valid_states = frozenset(
         {
@@ -1184,7 +1168,6 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._kx_state = self._server_pair.server_process_kx_xx(KX_XX_Packet1.from_bytes(packet1), self._psk)
         assert self._kx_state.packet2
         # send packet2 to the client
-        self._data_ready_to_send.add(encode_length(self._kx_state.packet2))
         self._data_ready_to_send.add(self._kx_state.packet2)
         return [KxProgress()]
 
@@ -1213,11 +1196,13 @@ class KX_XX_ServerStateMachine(BaseMachine):
                     new_ex.__cause__ = ex
                     return self._fail_kx(new_ex)
 
+        # switch to the new session keys.
         self._replace_current_material()
         self._kx_state = None
 
-        # send OK message to the client
-        self._write_emessage(self.encrypt_message(OK_MESSAGE, msg_id=0))
+        # send ACK to the client
+        # when the client receives the ACK, it will switch to the new session keys
+        self._data_ready_to_send.add(KX_Server_Ack())
         return [KxProgress()]
 
     def get_peer_key(self) -> KxPublicKey | None:
