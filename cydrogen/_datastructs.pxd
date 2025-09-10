@@ -11,6 +11,7 @@ cdef bytes CY_KX_KK_PACKET2_MARKER
 cdef bytes CY_KX_XX_PACKET1_MARKER
 cdef bytes CY_KX_XX_PACKET2_MARKER
 cdef bytes CY_KX_XX_PACKET3_MARKER
+cdef bytes CY_KX_SERVER_ACK_MARKER
 
 
 cdef class EncryptedMessage:
@@ -47,5 +48,10 @@ cdef class KX_XX_Packet2:
 
 
 cdef class KX_XX_Packet3:
+    cdef readonly bytes packet
+    cdef bytes encoded
+
+
+cdef class KX_Server_Ack:
     cdef readonly bytes packet
     cdef bytes encoded
