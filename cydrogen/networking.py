@@ -633,6 +633,9 @@ class BaseMachine:
     def trigger_receive_server_ack(self) -> list[MachineProducedEvent]:
         return self._trigger(ExternalEvent.RECEIVE_SERVER_ACK)
 
+    def trigger_rekey(self) -> list[MachineProducedEvent]:
+        return []
+
     def _trigger(self, ev: ExternalEvent, *args) -> list[MachineProducedEvent]:  # noqa: ANN002
         """
         Triggers a state transition in the state machine based on the given event and arguments.
@@ -830,6 +833,7 @@ class KX_N_ClientStateMachine(BaseMachine):
         return self._server_public_key
 
     def trigger_rekey(self) -> list[MachineProducedEvent]:
+        logger.info("Rekeying requested")
         return self._trigger(ExternalEvent.REKEY)
 
 
