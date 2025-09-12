@@ -351,3 +351,95 @@ cdef class SyncMsgQueue:
             self.is_shutdown = 1
             # All getters need to re-check queue-empty to raise ShutDown
             self.not_empty.notify_all()
+
+
+cdef class RWLockROProperty:
+    def __init__(self, RWLock rwlock):
+        self.rwlock = rwlock
+
+    def __enter__(self):
+        self.rwlock.acquire_readonly()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.rwlock.release_readonly()
+
+
+cdef class RWLockRWProperty:
+    def __init__(self, RWLock rwlock):
+        self.rwlock = rwlock
+
+    def __enter__(self):
+        self.rwlock.acquire_readwrite()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.rwlock.release_readwrite()
+
+
+cdef class RWLock:
+    def __init__(self):
+        # flag to indicate if a writer is active
+        self._writing = False
+        # flag to indicate if a writer is waiting
+        self._pending_writer = False
+        # number of active readers
+        self._nb_readers = 0
+        # lock to protect access to the internal state
+        self._lock = threading.Lock()
+        # condition variable to wait for readers to finish
+        self._no_reader = threading.Condition(self._lock)
+        # condition variable to wait for writer to finish
+        self._no_writer = threading.Condition(self._lock)
+
+    cpdef acquire_readonly(self):
+        with self._lock:
+            # wait that there is no writer and no pending writer
+            while self._writing or self._pending_writer:
+                self._no_writer.wait()
+            self._nb_readers += 1
+
+    cpdef release_readonly(self):
+        with self._lock:
+            if self._nb_readers == 0:
+                raise RuntimeError("Cannot release readonly lock that is not held")
+            if self._writing:
+                raise RuntimeError("Cannot release readonly lock while a writer is active")
+            self._nb_readers -= 1
+            if self._nb_readers == 0:
+                # notify potential writer waiting for readers to finish
+                self._no_reader.notify()
+
+    cpdef acquire_readwrite(self):
+        with self._lock:
+            if self._writing:
+                raise RuntimeError("Cannot acquire readwrite lock that is already held")
+            if self._pending_writer:
+                raise RuntimeError("Cannot acquire readwrite lock while another writer is pending")
+            # the pending writer flag prevents new readers from starting, giving priority to writer
+            self._pending_writer = True
+            # wait for all readers to finish
+            while self._nb_readers > 0:
+                self._no_reader.wait()
+            # mark the _writing flag so that no new reader can start
+            self._writing = True
+            # clear the pending writer flag
+            self._pending_writer = False
+
+    cpdef release_readwrite(self):
+        with self._lock:
+            if self._nb_readers > 0:
+                raise RuntimeError("Cannot release readwrite lock while there are active readers")
+            if not self._writing:
+                raise RuntimeError("Cannot release readwrite lock that is not held")
+            if self._pending_writer:
+                raise RuntimeError("Cannot release readwrite lock while another writer is pending")
+            self._writing = False
+            # notify all readers waiting for writer to finish
+            self._no_writer.notify_all()
+
+    @property
+    def readonly(self):
+        return RWLockROProperty(self)
+
+    @property
+    def readwrite(self):
+        return RWLockRWProperty(self)

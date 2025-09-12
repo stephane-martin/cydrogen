@@ -118,13 +118,13 @@ cdef secretbox_decrypt(
     cdef int res = 0
     if ciphertext_len < nogil_threshold:
         # Keep the GIL for small ciphertexts
-        res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+        with cython.boundscheck(False), cython.wraparound(False):
+            res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
     else:
         # Release the GIL for larger ciphertexts
         with nogil:
-            with cython.boundscheck(False):
-                with cython.wraparound(False):
-                    res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
+            with cython.boundscheck(False), cython.wraparound(False):
+                res = hydro_secretbox_decrypt(&plaintext[0], &ciphertext[0], ciphertext_len, msg_id, <const char*>(&ctx[0]), &key[0])
     if res != 0:
         raise RuntimeError("Failed to decrypt message")
 
