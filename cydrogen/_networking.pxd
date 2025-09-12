@@ -62,3 +62,28 @@ cdef class ReadBuffers:
     cdef get_bytearray(self, uint64_t nbytes)
     cpdef release_bytearray(self, const unsigned char[:] mv)
     cpdef consume_bytes(self, uint64_t nbytes)
+
+
+@cython.final
+cdef class RWLock:
+    cdef bint _writing
+    cdef bint _pending_writer
+    cdef uint32_t _nb_readers
+    cdef object _lock
+    cdef object _no_reader
+    cdef object _no_writer
+
+    cpdef acquire_readonly(self)
+    cpdef release_readonly(self)
+    cpdef acquire_readwrite(self)
+    cpdef release_readwrite(self)
+
+
+@cython.final
+cdef class RWLockROProperty:
+    cdef RWLock rwlock
+
+
+@cython.final
+cdef class RWLockRWProperty:
+    cdef RWLock rwlock

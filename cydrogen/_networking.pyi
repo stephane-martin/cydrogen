@@ -200,3 +200,51 @@ class ReadBuffers:
             mv: The memoryview to release.
         """
         ...
+
+class RWLockROProperty:
+    def __init__(self, rwlock: RWLock) -> None: ...
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...  # noqa: ANN001
+
+class RWLockRWProperty:
+    def __init__(self, rwlock: RWLock) -> None: ...
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...  # noqa: ANN001
+
+class RWLock:
+    """
+    A reader-writer lock giving priority to writers. Multiple simultaneous readers are allowed, but only one writer at a time.
+
+    Multiple readers can hold the lock simultaneously, as long as there is no writer.
+    When a writer is waiting, new readers are blocked until the writer has acquired and released the lock.
+    Only one writer can hold the lock at a time, and no readers can hold the lock while a writer is active.
+    """
+    def __init__(self) -> None: ...
+    def acquire_readonly(self) -> None:
+        """
+        Acquire the lock for reading. Multiple readers can hold the lock simultaneously, as long as there is no writer.
+        """
+        ...
+
+    def release_readonly(self) -> None:
+        """
+        Release the lock for reading.
+        """
+        ...
+
+    def acquire_readwrite(self) -> None:
+        """
+        Acquire the lock for writing. Only one writer can hold the lock at a time, and no readers can hold the lock while a writer is active.
+        """
+        ...
+
+    def release_readwrite(self) -> None:
+        """
+        Release the lock for writing.
+        """
+        ...
+
+    @property
+    def readonly(self) -> RWLockROProperty: ...
+    @property
+    def readwrite(self) -> RWLockRWProperty: ...
