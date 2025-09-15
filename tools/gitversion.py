@@ -35,7 +35,7 @@ def git_version(version: str) -> tuple[str, str]:
     except FileNotFoundError:
         pass
     else:
-        out, err = p.communicate()
+        out, _ = p.communicate()
         if p.returncode == 0:
             git_hash, git_date = out.decode("utf-8").strip().replace('"', "").split("T")[0].replace("-", "").split()
 

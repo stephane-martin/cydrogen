@@ -244,7 +244,51 @@ class RWLock:
         """
         ...
 
+    def try_acquire_readonly(self) -> bool:
+        """
+        Try to acquire the lock for reading without blocking.
+
+        Returns:
+            True if the lock was acquired, False otherwise.
+        """
+
+    def try_acquire_readwrite(self) -> bool:
+        """
+        Try to acquire the lock for writing without blocking.
+
+        Returns:
+            True if the lock was acquired, False otherwise.
+        """
+
     @property
-    def readonly(self) -> RWLockROProperty: ...
+    def readonly(self) -> RWLockROProperty:
+        """
+        Property to acquire and release the lock for reading using a context manager.
+        """
+        ...
+
     @property
-    def readwrite(self) -> RWLockRWProperty: ...
+    def readwrite(self) -> RWLockRWProperty:
+        """
+        Property to acquire and release the lock for writing using a context manager.
+        """
+        ...
+
+    @property
+    def nb_readers(self) -> int:
+        """
+        Get the number of readers currently holding the lock.
+
+        Returns:
+            The number of readers currently holding the lock.
+        """
+        ...
+    @property
+    def is_writing(self) -> bool:
+        """
+        Check if the lock is currently held by a writer.
+
+        Returns:
+            True if the lock is held by a writer, False otherwise.
+        """
+        ...

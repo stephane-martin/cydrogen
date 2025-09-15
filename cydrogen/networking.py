@@ -4,7 +4,6 @@
 import logging
 import os
 import sys
-import threading
 from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,7 +29,7 @@ from ._kx_n import (
     SessionPair,
     client_init_kx_n,
 )
-from ._networking import BytearrayBuilder, ReadBuffers
+from ._networking import BytearrayBuilder, ReadBuffers, RWLock
 from ._secretbox import SecretBox
 from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
 
@@ -493,7 +492,7 @@ class BaseMachine:
         self._data_ready_to_send: BytearrayBuilder = BytearrayBuilder()
         self._read_buffers: ReadBuffers = ReadBuffers(received_msg_max_size=received_msg_max_size)
 
-        self._material_lock = threading.Lock()
+        self._material_lock = RWLock()
         self._current_material: CryptoMaterial | None = None
         self._previous_material: CryptoMaterial | None = None
         self._candidate_pair: SessionPair | None = None
@@ -501,7 +500,8 @@ class BaseMachine:
         self.exception: Exception | None = None
 
     def _replace_current_material(self) -> None:
-        with self._material_lock:
+        # we lock _material_lock, so this method is thread-safe
+        with self._material_lock.readwrite:
             if self._candidate_pair is None:
                 raise RuntimeError("candidate pair not set")
             new_idx: int = 0 if self._current_material is None else (self._current_material.idx + 1) % 256
@@ -513,23 +513,23 @@ class BaseMachine:
             logger.info("Switched to new session keys (index %d)", new_idx)
 
     def _get_material(self, idx: int | None = None) -> CryptoMaterial:
+        # we don't lock _material_lock, so this method is not thread-safe
+        # be sure to lock _material_lock (read-only) before calling this method
         if idx is None:
             # return the current material
-            with self._material_lock:
-                if self._current_material is None:
-                    raise RuntimeError("session keys not yet calculated")
-                return self._current_material
-        # return the material with the given index
-        with self._material_lock:
             if self._current_material is None:
                 raise RuntimeError("session keys not yet calculated")
-            if self._current_material.idx == idx:
-                return self._current_material
-            if self._previous_material is None:
-                raise RuntimeError("unknown crypto material")
-            if self._previous_material.idx == idx:
-                return self._previous_material
+            return self._current_material
+        # return the material with the given index
+        if self._current_material is None:
+            raise RuntimeError("session keys not yet calculated")
+        if self._current_material.idx == idx:
+            return self._current_material
+        if self._previous_material is None:
             raise RuntimeError("unknown crypto material")
+        if self._previous_material.idx == idx:
+            return self._previous_material
+        raise RuntimeError("unknown crypto material")
 
     def get_buffer(self) -> memoryview:
         """
@@ -547,8 +547,9 @@ class BaseMachine:
         Decrypts a message using the session keys established during the key exchange.
 
         Decryption may take some time, so it is recommended to call this method in a separate thread
-        to avoid to block the event loop. As the decryption only depends on the session keys,
-        and the session keys are constant after the key exchange is completed, this method is thread-safe.
+        to avoid to block the event loop.
+
+        This method is thread-safe.
 
         Args:
             msg: The encrypted message to decrypt, as a bytes-like object.
@@ -558,8 +559,8 @@ class BaseMachine:
             The message ID associated with the decrypted message.
         """
         emsg: EncryptedMessage = EncryptedMessage.from_bytes(msg)
-        mat = self._get_material(emsg.session_keys_idx)
-        plaintext: bytes = mat.rbox.decrypt(emsg)
+        with self._material_lock.readonly:
+            plaintext: bytes = self._get_material(emsg.session_keys_idx).rbox.decrypt(emsg)
         return plaintext, emsg.msg_id
 
     def release_encrypted_message(self, mv: Buffer) -> None:
@@ -710,8 +711,9 @@ class BaseMachine:
         Encrypts a message using the session keys established during the key exchange.
 
         Encryption may take some time, so it is recommended to call this method in a separate thread
-        to avoid to block the event loop. As the encryption only depends on the session keys,
-        and the session keys are constant after the key exchange is completed, this method is thread-safe.
+        to avoid to block the event loop.
+
+        This method is thread-safe.
 
         Args:
             msg: The message to encrypt, as a bytes-like object.
@@ -720,9 +722,11 @@ class BaseMachine:
         Returns:
             A bytearray containing the encrypted message, ready to be sent over the network.
         """
-        mat = self._get_material()
-        ciphertext = mat.tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
-        return EncryptedMessage(ciphertext, msg_id, mat.idx)
+        with self._material_lock.readonly:
+            mat = self._get_material()
+            mat_idx = mat.idx
+            ciphertext = mat.tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
+        return EncryptedMessage(ciphertext, msg_id, mat_idx)
 
     def data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()

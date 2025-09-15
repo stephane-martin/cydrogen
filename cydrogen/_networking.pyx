@@ -380,7 +380,7 @@ cdef class RWLock:
         # flag to indicate if a writer is active
         self._writing = False
         # flag to indicate if a writer is waiting
-        self._pending_writer = False
+        self._pending_writers = 0
         # number of active readers
         self._nb_readers = 0
         # lock to protect access to the internal state
@@ -392,49 +392,69 @@ cdef class RWLock:
 
     cpdef acquire_readonly(self):
         with self._lock:
-            # wait that there is no writer and no pending writer
-            while self._writing or self._pending_writer:
+            # wait that there is no active writer and no pending writer
+            while self._writing or self._pending_writers > 0:
                 self._no_writer.wait()
             self._nb_readers += 1
+
+    cpdef try_acquire_readonly(self):
+        # try to acquire the readonly lock without blocking
+        # returns True if the lock was acquired, False otherwise
+        with self._lock:
+            if self._writing or self._pending_writers > 0:
+                return False
+            self._nb_readers += 1
+            return True
 
     cpdef release_readonly(self):
         with self._lock:
             if self._nb_readers == 0:
                 raise RuntimeError("Cannot release readonly lock that is not held")
-            if self._writing:
-                raise RuntimeError("Cannot release readonly lock while a writer is active")
             self._nb_readers -= 1
             if self._nb_readers == 0:
-                # notify potential writer waiting for readers to finish
-                self._no_reader.notify()
+                # notify writers waiting for readers to finish
+                self._no_reader.notify_all()
 
     cpdef acquire_readwrite(self):
         with self._lock:
-            if self._writing:
-                raise RuntimeError("Cannot acquire readwrite lock that is already held")
-            if self._pending_writer:
-                raise RuntimeError("Cannot acquire readwrite lock while another writer is pending")
             # the pending writer flag prevents new readers from starting, giving priority to writer
-            self._pending_writer = True
+            self._pending_writers += 1
             # wait for all readers to finish
             while self._nb_readers > 0:
                 self._no_reader.wait()
-            # mark the _writing flag so that no new reader can start
+            # wait for any active writer to finish
+            while self._writing:
+                self._no_writer.wait()
+            # mark the _writing flag so that no new reader/new writer can start
             self._writing = True
-            # clear the pending writer flag
-            self._pending_writer = False
+            self._pending_writers -= 1
+
+    cpdef try_acquire_readwrite(self):
+        # try to acquire the readwrite lock without blocking
+        # returns True if the lock was acquired, False otherwise
+        with self._lock:
+            if self._writing or self._pending_writers > 0 or self._nb_readers > 0:
+                return False
+            self._writing = True
+            return True
 
     cpdef release_readwrite(self):
         with self._lock:
-            if self._nb_readers > 0:
-                raise RuntimeError("Cannot release readwrite lock while there are active readers")
             if not self._writing:
                 raise RuntimeError("Cannot release readwrite lock that is not held")
-            if self._pending_writer:
-                raise RuntimeError("Cannot release readwrite lock while another writer is pending")
             self._writing = False
-            # notify all readers waiting for writer to finish
+            # notify all readers/writers waiting for writer to finish
             self._no_writer.notify_all()
+
+    @property
+    def nb_readers(self):
+        with self._lock:
+            return self._nb_readers
+
+    @property
+    def is_writing(self):
+        with self._lock:
+            return self._writing
 
     @property
     def readonly(self):
