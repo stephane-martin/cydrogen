@@ -67,7 +67,7 @@ cdef class ReadBuffers:
 @cython.final
 cdef class RWLock:
     cdef bint _writing
-    cdef bint _pending_writer
+    cdef uint32_t _pending_writers
     cdef uint32_t _nb_readers
     cdef object _lock
     cdef object _no_reader
@@ -77,6 +77,8 @@ cdef class RWLock:
     cpdef release_readonly(self)
     cpdef acquire_readwrite(self)
     cpdef release_readwrite(self)
+    cpdef try_acquire_readonly(self)
+    cpdef try_acquire_readwrite(self)
 
 
 @cython.final
