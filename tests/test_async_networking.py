@@ -313,30 +313,33 @@ async def test_client_receives_too_big_message() -> None:
 
 @pytest.mark.asyncio
 async def test_client_server_kx_xx_rekeying() -> None:
-    stopping = False
+    stopping = asyncio.Event()
 
     async def wait_and_stop() -> None:
-        nonlocal stopping
-        await asyncio.sleep(15)
+        await asyncio.sleep(5)
         logger.info("telling the client to stop")
-        stopping = True
+        stopping.set()
 
     server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     await server.start_serving()
     logger.info("server started")
 
     try:
-        # rekey every 15 seconds, and we will take more than that to send all messages
-        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=10) as client:
+        # rekey every 2 seconds, and we will take more than that to send all messages
+        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2) as client:
             logger.info("client connected")
             assert client.key_material_idx == 0
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(wait_and_stop())
-                while not stopping:
+                while not stopping.is_set():
+                    # spawn requests like crazy, to make sure we have multiple requests in flight when rekeying happens
                     tg.create_task(client.request(b"ping"))
                     await asyncio.sleep(0)
-            assert client.key_material_idx == 1
+            logger.info("client has finished")
+            assert client.key_material_idx > 1
+        logger.info("client disconnected")
 
     finally:
         server.close()
         await server.wait_closed()
+        logger.info("server closed")

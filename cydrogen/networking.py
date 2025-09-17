@@ -493,8 +493,7 @@ class BaseMachine:
         self._read_buffers: ReadBuffers = ReadBuffers(received_msg_max_size=received_msg_max_size)
 
         self._material_lock = RWLock()
-        self._current_material: CryptoMaterial | None = None
-        self._previous_material: CryptoMaterial | None = None
+        self._materials: list[CryptoMaterial] = []
         self._candidate_pair: SessionPair | None = None
 
         self.exception: Exception | None = None
@@ -507,17 +506,18 @@ class BaseMachine:
         This property is thread-safe.
         """
         with self._material_lock.readonly:
-            return None if self._current_material is None else self._current_material.idx
+            return None if not self._materials else len(self._materials) - 1
 
     def _replace_current_material(self) -> None:
         # we lock _material_lock, so this method is thread-safe
         with self._material_lock.readwrite:
             if self._candidate_pair is None:
                 raise RuntimeError("candidate pair not set")
-            new_idx: int = 0 if self._current_material is None else (self._current_material.idx + 1) % 256
-            self._previous_material = self._current_material
-            self._current_material = CryptoMaterial(
-                idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
+            new_idx: int = len(self._materials)
+            self._materials.append(
+                CryptoMaterial(
+                    idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
+                )
             )
             self._candidate_pair = None
             logger.info("Switched to new session keys (index %d)", new_idx)
@@ -525,21 +525,16 @@ class BaseMachine:
     def _get_material(self, idx: int | None = None) -> CryptoMaterial:
         # we don't lock _material_lock, so this method is not thread-safe
         # be sure to lock _material_lock (read-only) before calling this method
+        if not self._materials:
+            raise RuntimeError("session keys not yet calculated")
         if idx is None:
             # return the current material
-            if self._current_material is None:
-                raise RuntimeError("session keys not yet calculated")
-            return self._current_material
+            return self._materials[-1]
         # return the material with the given index
-        if self._current_material is None:
-            raise RuntimeError("session keys not yet calculated")
-        if self._current_material.idx == idx:
-            return self._current_material
-        if self._previous_material is None:
-            raise RuntimeError("unknown crypto material")
-        if self._previous_material.idx == idx:
-            return self._previous_material
-        raise RuntimeError("unknown crypto material")
+        try:
+            return self._materials[idx]
+        except IndexError as ex:
+            raise RuntimeError("unknown crypto material") from ex
 
     def get_buffer(self) -> memoryview:
         """
