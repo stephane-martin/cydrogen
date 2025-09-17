@@ -309,3 +309,34 @@ async def test_client_receives_too_big_message() -> None:
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_client_server_kx_xx_rekeying() -> None:
+    stopping = False
+
+    async def wait_and_stop() -> None:
+        nonlocal stopping
+        await asyncio.sleep(15)
+        logger.info("telling the client to stop")
+        stopping = True
+
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+    logger.info("server started")
+
+    try:
+        # rekey every 15 seconds, and we will take more than that to send all messages
+        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=10) as client:
+            logger.info("client connected")
+            assert client.key_material_idx == 0
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(wait_and_stop())
+                while not stopping:
+                    tg.create_task(client.request(b"ping"))
+                    await asyncio.sleep(0)
+            assert client.key_material_idx == 1
+
+    finally:
+        server.close()
+        await server.wait_closed()

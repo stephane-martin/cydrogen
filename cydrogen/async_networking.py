@@ -142,6 +142,13 @@ class StreamReaderWriter:
         """
         return self._protocol.get_extra_info(name, default)
 
+    @property
+    def key_material_idx(self) -> int | None:
+        """
+        Returns the index of the current key material in use, or None if the key exchange has not completed yet.
+        """
+        return self._protocol.key_material_idx
+
 
 class KXProtocol(asyncio.BufferedProtocol):
     def __init__(
@@ -176,6 +183,10 @@ class KXProtocol(asyncio.BufferedProtocol):
         self.peername: str = ""
 
         self._transport: asyncio.Transport
+
+    @property
+    def key_material_idx(self) -> int | None:
+        return self._machine.key_material_idx
 
     @property
     def received_size(self) -> int:
@@ -624,6 +635,10 @@ class BaseAsyncRequestResponseClient:
 
     async def connect(self) -> None:
         self._read_task = asyncio.create_task(self._read_responses())
+
+    @property
+    def key_material_idx(self) -> int | None:
+        return self._rw.key_material_idx
 
     def close(self, ex: BaseException | None = None) -> None:
         self._rw.close()
