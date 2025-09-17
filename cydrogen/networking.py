@@ -499,6 +499,16 @@ class BaseMachine:
 
         self.exception: Exception | None = None
 
+    @property
+    def key_material_idx(self) -> int | None:
+        """
+        Returns the index of the current key material, or None if no key material is set.
+
+        This property is thread-safe.
+        """
+        with self._material_lock.readonly:
+            return None if self._current_material is None else self._current_material.idx
+
     def _replace_current_material(self) -> None:
         # we lock _material_lock, so this method is thread-safe
         with self._material_lock.readwrite:
