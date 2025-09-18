@@ -72,6 +72,10 @@ class ReceivedEncryptedMessage(MachineProducedEvent):
         self.emsg = emsg
 
 
+kx_completed = KxCompleted()
+kx_progress = KxProgress()
+
+
 class MachineState(StrEnum):
     """
     MState represents the different states of the state machine used in the key exchange protocol.
@@ -702,7 +706,7 @@ class BaseMachine:
         if self._kx_finished:
             return None
         self._kx_finished = True
-        return KxCompleted()
+        return kx_completed
 
     def encrypt_message(self, msg: Buffer, msg_id: int) -> EncryptedMessage:
         """
@@ -821,7 +825,7 @@ class KX_N_ClientStateMachine(BaseMachine):
         # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._packet1 = None
-        return KxProgress()
+        return kx_progress
 
     def _kx_start(self) -> None:
         if self._candidate_pair is not None or self._packet1 is not None:
@@ -902,7 +906,7 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._replace_current_material()
         # Send ACK to the client. When the client receives the ACK, it will switch to the new session keys.
         self._data_ready_to_send.add(KX_Server_Ack())
-        return KxProgress()
+        return kx_progress
 
 
 class KX_KK_ClientStateMachine(BaseMachine):
@@ -974,7 +978,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
         # switch to the new session keys. the server has already switched to them at this point.
         self._replace_current_material()
         self._kx_state = None
-        return KxProgress()
+        return kx_progress
 
     def _kx_start(self) -> None:
         if self._kx_state is not None:
@@ -1053,7 +1057,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self._data_ready_to_send.add(packet2)
         # switch to the new session keys server side
         self._replace_current_material()
-        return KxProgress()
+        return kx_progress
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key
@@ -1161,7 +1165,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
                     return self._fail_kx(new_ex)
         # send packet3 to the server
         self._data_ready_to_send.add(self._kx_state.packet3)
-        return KxProgress()
+        return kx_progress
 
     def _receive_server_ack(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1173,7 +1177,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._kx_state = None
-        return KxProgress()
+        return kx_progress
 
     def _kx_start(self) -> None:
         if self._kx_state is not None:
@@ -1276,7 +1280,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         assert self._kx_state.packet2
         # send packet2 to the client
         self._data_ready_to_send.add(self._kx_state.packet2)
-        return KxProgress()
+        return kx_progress
 
     def _receive_packet3(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1310,7 +1314,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         # send ACK to the client
         # when the client receives the ACK, it will switch to the new session keys
         self._data_ready_to_send.add(KX_Server_Ack())
-        return KxProgress()
+        return kx_progress
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key
