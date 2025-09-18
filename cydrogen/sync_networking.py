@@ -35,7 +35,9 @@ logger = logging.getLogger("cydrogen")
 
 
 class Protocol:
-    def __init__(self, sock: socket.socket, machine: BaseMachine, rekey_secs: int | None = 3600) -> None:
+    def __init__(
+        self, sock: socket.socket, machine: BaseMachine, rekey_secs: int | None = 3600, rekey_grace_secs: int | None = 1800
+    ) -> None:
         self.socket = sock
         self.peer = sock.getpeername()
         self._machine = machine
@@ -46,8 +48,10 @@ class Protocol:
         self.read_thread: threading.Thread = threading.Thread(target=self._read)
         self.decrypt_thread: threading.Thread = threading.Thread(target=self._decrypt_received_messages)
         self.rekey_thread: threading.Thread = threading.Thread(target=self._rekey)
+        self.remove_old_keys_thread: threading.Thread = threading.Thread(target=self._remove_old_keys)
         self.kx_finished = threading.Event()
         self.rekey_secs = rekey_secs
+        self.rekey_grace_secs = rekey_grace_secs
         self.connection_lost_ev = threading.Event()
 
     @property
@@ -59,11 +63,13 @@ class Protocol:
         self.read_thread.start()
         self.decrypt_thread.start()
         self.rekey_thread.start()
+        self.remove_old_keys_thread.start()
 
     def join(self) -> None:
         self.read_thread.join()
         self.decrypt_thread.join()
         self.rekey_thread.join()
+        self.remove_old_keys_thread.join()
 
     def connection_made(self) -> None:
         with self._machine_lock:
@@ -102,6 +108,19 @@ class Protocol:
         if data:
             with self._write_lock:
                 self.socket.sendall(data)
+
+    def _remove_old_keys(self) -> None:
+        if self.rekey_grace_secs is None:
+            return
+        while True:
+            if self.connection_lost_ev.wait(timeout=self.rekey_grace_secs):
+                # connection lost, exit the remove old keys loop
+                return
+            self._remove_old_keys1()
+
+    def _remove_old_keys1(self) -> None:
+        with self._machine_lock:
+            self._machine.remove_oldest_material()
 
     def _read(self) -> None:
         # this is executed in a separate thread

@@ -160,6 +160,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         limit: int = _DEFAULT_LIMIT,
         executor: ThreadPoolExecutor,
         rekey_secs: int | None = 3600,
+        rekey_grace_secs: int | None = 1800,
     ) -> None:
         self._loop = loop
         self._reading_paused = False
@@ -174,8 +175,10 @@ class KXProtocol(asyncio.BufferedProtocol):
         self._task: asyncio.Task | None = None
         self._decrypt_task: asyncio.Task | None = None
         self._rekey_task: asyncio.Task | None = None
+        self._remove_old_keys_task: asyncio.Task | None = None
         self._executor = executor
         self._rekey_secs = rekey_secs
+        self._rekey_grace_secs = rekey_grace_secs
 
         self._received_encrypted_msgs: MsgQueue[memoryview] = MsgQueue()
         self._received_decrypted_msgs: MsgQueue[bytes] = MsgQueue()
@@ -357,6 +360,7 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def continuous_rekey(self) -> None:
         if self._rekey_secs is None:
             return
+        logger.info("starting continuous rekey task, rekey every %d seconds", self._rekey_secs)
         try:
             while True:
                 await asyncio.sleep(self._rekey_secs)
@@ -368,11 +372,24 @@ class KXProtocol(asyncio.BufferedProtocol):
             logger.exception("Continuous rekey task failed")
             self._transport.abort()
 
+    async def continuous_remove_old_keys(self) -> None:
+        if self._rekey_grace_secs is None:
+            return
+        logger.info("starting continuous remove old keys task, remove oldest key every %d seconds", self._rekey_grace_secs)
+        try:
+            while True:
+                await asyncio.sleep(self._rekey_grace_secs)
+                self._machine.remove_oldest_material()
+        except Exception:
+            logger.exception("Continuous remove old keys task failed")
+            self._transport.abort()
+
     async def validate_and_handle(self) -> None:
         self._decrypt_task = self._loop.create_task(self.continuous_decrypt())
-        # only trigger rekey if we are client side
-        if self._rekey_secs is not None and self._client_handler is None:
+        if self._rekey_secs is not None and self._client_handler is None:  # only trigger rekey if we are client side
             self._rekey_task = self._loop.create_task(self.continuous_rekey())
+        if self._rekey_grace_secs is not None:  # both client and server side
+            self._remove_old_keys_task = self._loop.create_task(self.continuous_remove_old_keys())
         if self._client_handler is not None:
             # server side
             try:
@@ -446,6 +463,10 @@ class KXProtocol(asyncio.BufferedProtocol):
         if self._rekey_task is not None:
             self._rekey_task.cancel()
             self._rekey_task = None
+
+        if self._remove_old_keys_task is not None:
+            self._remove_old_keys_task.cancel()
+            self._remove_old_keys_task = None
 
         if self._decrypt_task is not None and self._client_handler is None:
             # because we received connection_lost, it is not possible anymore to send encrypted messages
@@ -530,13 +551,14 @@ async def _open_connection(
     retry_wait: int,
     loop: asyncio.AbstractEventLoop,
     rekey_secs: int | None = 3600,
+    rekey_grace_secs: int | None = 1800,
 ) -> StreamReaderWriter:
     # one executor per client
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
     def protocol_factory() -> KXProtocol:
         machine = machine_factory()
-        return KXProtocol(machine, loop, limit=limit, executor=executor, rekey_secs=rekey_secs)
+        return KXProtocol(machine, loop, limit=limit, executor=executor, rekey_secs=rekey_secs, rekey_grace_secs=rekey_grace_secs)
 
     try:
         transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
@@ -566,6 +588,7 @@ async def open_kx_n_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
     rekey_secs: int | None = 3600,
+    rekey_grace_secs: int | None = 1800,
 ) -> StreamReaderWriter:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
@@ -574,7 +597,17 @@ async def open_kx_n_connection(
             server_public_key, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
-    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop, rekey_secs=rekey_secs)
+    return await _open_connection(
+        host,
+        port,
+        machine_factory,
+        limit,
+        connect_retry,
+        connect_retry_wait,
+        loop,
+        rekey_secs=rekey_secs,
+        rekey_grace_secs=rekey_grace_secs,
+    )
 
 
 async def open_kx_kk_connection(
@@ -589,6 +622,7 @@ async def open_kx_kk_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
     rekey_secs: int | None = 3600,
+    rekey_grace_secs: int | None = 1800,
 ) -> StreamReaderWriter:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
@@ -597,7 +631,17 @@ async def open_kx_kk_connection(
             client_pair, server_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
 
-    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop, rekey_secs=rekey_secs)
+    return await _open_connection(
+        host,
+        port,
+        machine_factory,
+        limit,
+        connect_retry,
+        connect_retry_wait,
+        loop,
+        rekey_secs=rekey_secs,
+        rekey_grace_secs=rekey_grace_secs,
+    )
 
 
 async def open_kx_xx_connection(
@@ -613,6 +657,7 @@ async def open_kx_xx_connection(
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
     rekey_secs: int | None = 3600,
+    rekey_grace_secs: int | None = 1800,
 ) -> StreamReaderWriter:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
 
@@ -625,7 +670,17 @@ async def open_kx_xx_connection(
             validate_peer_key=validate_server_key,
         )
 
-    return await _open_connection(host, port, machine_factory, limit, connect_retry, connect_retry_wait, loop, rekey_secs=rekey_secs)
+    return await _open_connection(
+        host,
+        port,
+        machine_factory,
+        limit,
+        connect_retry,
+        connect_retry_wait,
+        loop,
+        rekey_secs=rekey_secs,
+        rekey_grace_secs=rekey_grace_secs,
+    )
 
 
 class BaseAsyncRequestResponseClient:
@@ -766,6 +821,8 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         connect_retry_wait: int = 30,
         sent_msg_max_size: int = 2**20,
         received_msg_max_size: int = 2**20,
+        rekey_secs: int | None = 3600,
+        rekey_grace_secs: int | None = 1800,
     ) -> None:
         super().__init__(request_timeout_secs=request_timeout_secs)
         self._host = host
@@ -777,6 +834,8 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self._connect_retry_wait = connect_retry_wait
         self.sent_msg_max_size = sent_msg_max_size
         self.received_msg_max_size = received_msg_max_size
+        self._rekey_secs = rekey_secs
+        self._rekey_grace_secs = rekey_grace_secs
 
     async def connect(self) -> None:
         self._rw = await open_kx_n_connection(
@@ -789,6 +848,8 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             connect_retry_wait=self._connect_retry_wait,
             sent_msg_max_size=self.sent_msg_max_size,
             received_msg_max_size=self.received_msg_max_size,
+            rekey_secs=self._rekey_secs,
+            rekey_grace_secs=self._rekey_grace_secs,
         )
         await super().connect()
 
@@ -808,6 +869,7 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         sent_msg_max_size: int = 2**20,
         received_msg_max_size: int = 2**20,
         rekey_secs: int | None = 3600,
+        rekey_grace_secs: int | None = 1800,
     ) -> None:
         super().__init__(request_timeout_secs=request_timeout_secs)
         self._host = host
@@ -820,6 +882,7 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self.sent_msg_max_size = sent_msg_max_size
         self.received_msg_max_size = received_msg_max_size
         self._rekey_secs = rekey_secs
+        self._rekey_grace_secs = rekey_grace_secs
 
     async def connect(self) -> None:
         self._rw = await open_kx_kk_connection(
@@ -833,6 +896,7 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             sent_msg_max_size=self.sent_msg_max_size,
             received_msg_max_size=self.received_msg_max_size,
             rekey_secs=self._rekey_secs,
+            rekey_grace_secs=self._rekey_grace_secs,
         )
         await super().connect()
 
@@ -853,6 +917,7 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         sent_msg_max_size: int = 2**20,
         received_msg_max_size: int = 2**20,
         rekey_secs: int | None = 3600,
+        rekey_grace_secs: int | None = 1800,
     ) -> None:
         super().__init__(request_timeout_secs=request_timeout_secs)
         self._host = host
@@ -866,6 +931,7 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self.sent_msg_max_size = sent_msg_max_size
         self.received_msg_max_size = received_msg_max_size
         self._rekey_secs = rekey_secs
+        self._rekey_grace_secs = rekey_grace_secs
 
     async def connect(self) -> None:
         self._rw = await open_kx_xx_connection(
@@ -880,6 +946,7 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
             sent_msg_max_size=self.sent_msg_max_size,
             received_msg_max_size=self.received_msg_max_size,
             rekey_secs=self._rekey_secs,
+            rekey_grace_secs=self._rekey_grace_secs,
         )
         await super().connect()
 
@@ -1034,6 +1101,7 @@ async def start_kx_n_server(
     limit: int = _DEFAULT_LIMIT,
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
+    rekey_grace_secs: int | None = 1800,
 ) -> asyncio.Server:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     # a single executor per server, shared by all clients
@@ -1043,7 +1111,7 @@ async def start_kx_n_server(
         machine = KX_N_ServerStateMachine(
             server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
@@ -1062,6 +1130,7 @@ async def start_kx_kk_server(
     limit: int = _DEFAULT_LIMIT,
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
+    rekey_grace_secs: int | None = 1800,
 ) -> asyncio.Server:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
@@ -1070,7 +1139,7 @@ async def start_kx_kk_server(
         machine = KX_KK_ServerStateMachine(
             server_pair, client_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
@@ -1090,6 +1159,7 @@ async def start_kx_xx_server(
     validate_client_key: Callable[[KxPublicKey], None] | None = None,
     sent_msg_max_size: int = 2**20,
     received_msg_max_size: int = 2**20,
+    rekey_grace_secs: int | None = 1800,
 ) -> asyncio.Server:
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
@@ -1102,7 +1172,7 @@ async def start_kx_xx_server(
             received_msg_max_size=received_msg_max_size,
             validate_peer_key=validate_client_key,
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor)
+        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
