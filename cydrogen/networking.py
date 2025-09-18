@@ -322,7 +322,6 @@ class Transitions:
 
 @dataclass(frozen=True, slots=True)
 class CryptoMaterial:
-    idx: int
     pair: SessionPair
     tbox: SecretBox
     rbox: SecretBox
@@ -515,24 +514,22 @@ class BaseMachine:
                 raise RuntimeError("candidate pair not set")
             new_idx: int = len(self._materials)
             self._materials.append(
-                CryptoMaterial(
-                    idx=new_idx, pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx)
-                )
+                CryptoMaterial(pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx))
             )
             self._candidate_pair = None
             logger.info("Switched to new session keys (index %d)", new_idx)
 
-    def _get_material(self, idx: int | None = None) -> CryptoMaterial:
+    def _get_material(self, idx: int | None = None) -> tuple[CryptoMaterial, int]:
         # we don't lock _material_lock, so this method is not thread-safe
         # be sure to lock _material_lock (read-only) before calling this method
         if not self._materials:
             raise RuntimeError("session keys not yet calculated")
         if idx is None:
             # return the current material
-            return self._materials[-1]
+            return self._materials[-1], len(self._materials) - 1
         # return the material with the given index
         try:
-            return self._materials[idx]
+            return self._materials[idx], idx
         except IndexError as ex:
             raise RuntimeError("unknown crypto material") from ex
 
@@ -565,7 +562,8 @@ class BaseMachine:
         """
         emsg: EncryptedMessage = EncryptedMessage.from_bytes(msg)
         with self._material_lock.readonly:
-            plaintext: bytes = self._get_material(emsg.session_keys_idx).rbox.decrypt(emsg)
+            material, _ = self._get_material(emsg.session_keys_idx)
+            plaintext = material.rbox.decrypt(emsg)
         return plaintext, emsg.msg_id
 
     def release_encrypted_message(self, mv: Buffer) -> None:
@@ -728,10 +726,9 @@ class BaseMachine:
             A bytearray containing the encrypted message, ready to be sent over the network.
         """
         with self._material_lock.readonly:
-            mat = self._get_material()
-            mat_idx = mat.idx
+            mat, idx = self._get_material()
             ciphertext = mat.tbox.encrypt(msg, msg_id=msg_id, max_msg_size=self.sent_msg_max_size)
-        return EncryptedMessage(ciphertext, msg_id, mat_idx)
+        return EncryptedMessage(ciphertext, msg_id, idx)
 
     def data_to_send(self) -> bytearray:
         return self._data_ready_to_send.get()
