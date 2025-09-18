@@ -215,7 +215,12 @@ class KXProtocol(asyncio.BufferedProtocol):
     async def get_next_msg(self) -> tuple[bytes, int]:
         return await self._received_decrypted_msgs.get()
 
-    def _handle_machine_events(self, events: list[MachineProducedEvent]) -> None:
+    def _handle_machine_events(self, events: list[MachineProducedEvent] | MachineProducedEvent | None) -> None:
+        if events is None:
+            return
+        if isinstance(events, MachineProducedEvent):
+            self._handle_machine_event(events)
+            return
         for event in events:
             self._handle_machine_event(event)
 
@@ -355,8 +360,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         try:
             while True:
                 await asyncio.sleep(self._rekey_secs)
-                evs = self._machine.trigger_rekey()
-                self._handle_machine_events(evs)
+                self._machine.trigger_rekey()
                 data = self._machine.data_to_send()
                 if data:
                     self._transport.write(data)

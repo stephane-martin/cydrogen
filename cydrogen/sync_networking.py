@@ -97,9 +97,7 @@ class Protocol:
 
     def _rekey1(self) -> None:
         with self._machine_lock:
-            events = self._machine.trigger_rekey()
-        self._handle_machine_events(events)
-        with self._machine_lock:
+            self._machine.trigger_rekey()
             data = self._machine.data_to_send()
         if data:
             with self._write_lock:
@@ -175,8 +173,13 @@ class Protocol:
                 with self._machine_lock:
                     self._machine.release_encrypted_message(incoming)  # return the mview to the freelist
 
-    def _handle_machine_events(self, events: list[MachineProducedEvent]) -> None:
+    def _handle_machine_events(self, events: list[MachineProducedEvent] | MachineProducedEvent | None) -> None:
+        if events is None:
+            return
         try:
+            if isinstance(events, MachineProducedEvent):
+                self._handle_machine_event(events)
+                return
             for event in events:
                 self._handle_machine_event(event)
         except KeyExchangeException as ex:
