@@ -496,7 +496,7 @@ class BaseMachine:
         self._read_buffers: ReadBuffers = ReadBuffers(received_msg_max_size=received_msg_max_size)
 
         self._material_lock = RWLock()
-        self._materials: list[CryptoMaterial] = []
+        self._materials: list[CryptoMaterial | None] = []
         self._candidate_pair: SessionPair | None = None
 
         self.exception: Exception | None = None
@@ -526,14 +526,15 @@ class BaseMachine:
     def _get_material(self, idx: int | None = None) -> tuple[CryptoMaterial, int]:
         # we don't lock _material_lock, so this method is not thread-safe
         # be sure to lock _material_lock (read-only) before calling this method
-        if not self._materials:
+        if len(self._materials) == 0:
             raise RuntimeError("session keys not yet calculated")
         if idx is None:
-            # return the current material
-            return self._materials[-1], len(self._materials) - 1
-        # return the material with the given index
+            idx = len(self._materials) - 1
         try:
-            return self._materials[idx], idx
+            mat = self._materials[idx]
+            if mat is None:
+                raise RuntimeError("crypto material has been removed")
+            return mat, idx
         except IndexError as ex:
             raise RuntimeError("unknown crypto material") from ex
 
@@ -643,6 +644,18 @@ class BaseMachine:
 
     def trigger_rekey(self) -> None:
         pass
+
+    def remove_oldest_material(self) -> None:
+        with self._material_lock.readwrite:
+            if len(self._materials) <= 1:
+                logger.warning("Cannot remove the only available crypto material")
+                return
+            # find first non-None material
+            for i, mat in enumerate(self._materials):
+                if mat is not None:
+                    self._materials[i] = None
+                    logger.info("Removed crypto material at index %d", i)
+                    return
 
     def _trigger(self, ev: ExternalEvent, *args) -> MachineProducedEvent | None:  # noqa: ANN002
         """

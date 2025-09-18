@@ -3,13 +3,13 @@
 from cpython.buffer cimport PyBuffer_FillInfo
 from libc.string cimport memcmp, memcpy
 from libc.stdint cimport uint64_t
-from libc.stdint cimport uint8_t
+from libc.stdint cimport uint32_t
 
 from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._decls cimport hydro_kx_N_PACKET1BYTES
 from ._decls cimport hydro_kx_KK_PACKET1BYTES, hydro_kx_KK_PACKET2BYTES
 from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_kx_XX_PACKET3BYTES
-from ._utils cimport make_safe_writer, store64, load64
+from ._utils cimport make_safe_writer, store64, load64, store32, load32
 
 from enum import StrEnum
 
@@ -17,7 +17,7 @@ from .exceptions import DecryptException
 
 
 cdef bytes CY_ENC_MSG_MARKER = b"EM"
-cdef const size_t CY_ENC_MSG_HEADER_SIZE = 11         # 2 bytes marker + 8 bytes for message ID + 1 byte for session keys index
+cdef const size_t CY_ENC_MSG_HEADER_SIZE = 14         # 2 bytes marker + 8 bytes for message ID + 4 byte for session keys index
 ENC_MSG_MARKER = bytes(CY_ENC_MSG_MARKER)
 ENC_MSG_HEADER_SIZE = CY_ENC_MSG_HEADER_SIZE
 
@@ -80,11 +80,12 @@ cdef parse_encrypted_message_header(const unsigned char[:] header):
     if memcmp(&header[0], marker_ptr, 2) != 0:
         raise DecryptException("Invalid message marker")
     cdef uint64_t msg_id = load64(header[2:10])
-    return msg_id, header[10]
+    cdef uint32_t session_keys_idx = load32(header[10:14])
+    return msg_id, session_keys_idx
 
 
 cdef class EncryptedMessage:
-    def __init__(self, ctext, uint64_t msg_id, uint8_t session_keys_idx=0):
+    def __init__(self, ctext, uint64_t msg_id, uint32_t session_keys_idx=0):
         if ctext is None:
             raise ValueError("Message cannot be None")
 
@@ -99,7 +100,7 @@ cdef class EncryptedMessage:
         cdef unsigned char[:] encoded_view = self.encoded
         cdef unsigned char* encoded_ptr = self.encoded
         store64(encoded_view[2:10], msg_id)
-        self.encoded[10] = session_keys_idx
+        store32(encoded_view[10:14], session_keys_idx)
         memcpy(encoded_ptr + CY_ENC_MSG_HEADER_SIZE, &ctext_view[0], len(ctext))
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
