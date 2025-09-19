@@ -5,9 +5,9 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
-from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE
+from ._datastructs cimport CY_ENC_MSG_HEADER_SIZE, EncryptedMessage
 from ._decls cimport hydro_secretbox_HEADERBYTES
-from ._utils cimport load64, encode_length
+from ._utils cimport load64, encode_length, store64
 
 import asyncio
 import logging
@@ -25,6 +25,21 @@ cdef class BytearrayBuilder:
     def __init__(self):
         self.b = bytearray(65536)
         self.offset = 0
+
+    cpdef add_encrypted_message(self, EncryptedMessage msg):
+        header = msg.header()
+        lendata = len(header) + len(msg.ciphertext)
+        needed = lendata + 8
+        if self.offset + needed > len(self.b):
+            if PyByteArray_Resize(self.b, self.offset + needed) < 0:
+                raise MemoryError("Failed to resize bytearray")
+        cdef unsigned char[:] mv = self.b
+        cdef const unsigned char[:] hv = header
+        cdef const unsigned char[:] cv = msg.ciphertext
+        store64(mv[self.offset : self.offset + 8], lendata)
+        mv[self.offset + 8 : self.offset + 8 + len(header)] = hv[0 : len(header)]
+        mv[self.offset + 8 + len(header) : self.offset + needed] = cv[0 : len(msg.ciphertext)]
+        self.offset += needed
 
     cpdef add(self, const unsigned char[:] data):
         # we need 8 bytes (to encode the length of data) + len(data) bytes

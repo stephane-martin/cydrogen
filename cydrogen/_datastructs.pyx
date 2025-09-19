@@ -91,6 +91,14 @@ cdef class EncryptedMessage:
         # Keep a reference to the ciphertext
         self.ciphertext = ctext_view
 
+    cpdef header(self):
+        cdef bytearray h = bytearray(CY_ENC_MSG_HEADER_SIZE)
+        cdef unsigned char[:] hv = h
+        h[0:2] = CY_ENC_MSG_MARKER
+        store64(hv[2:10], self.msg_id)
+        store32(hv[10:14], self.session_keys_idx)
+        return h
+
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         # Create the encoded message. This actually copies the ciphertext.
         encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext))

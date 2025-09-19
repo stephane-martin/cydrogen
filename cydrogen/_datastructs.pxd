@@ -19,6 +19,7 @@ cdef class EncryptedMessage:
     cdef readonly uint64_t msg_id
     cdef readonly uint32_t session_keys_idx
     cpdef writeto(self, fileobj)
+    cpdef header(self)
 
 
 cdef class KX_N_Packet1:

@@ -701,7 +701,7 @@ class BaseMachine:
 
     def _write_emessage(self, emsg: EncryptedMessage) -> None:
         # called by Protocol to prepare sending a message to the server
-        self._data_ready_to_send.add(emsg)
+        self._data_ready_to_send.add_encrypted_message(emsg)
 
     def _connection_made(self) -> None:
         pass

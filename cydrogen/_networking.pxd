@@ -5,12 +5,15 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
+from ._datastructs cimport EncryptedMessage
+
 
 @cython.final
 cdef class BytearrayBuilder:
     cdef bytearray b
     cdef size_t offset
 
+    cpdef add_encrypted_message(self, EncryptedMessage msg)
     cpdef add(self, const unsigned char[:] data)
     cpdef get(self)
 
