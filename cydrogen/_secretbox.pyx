@@ -91,14 +91,17 @@ cdef class SecretBox:
             raise ValueError("Plaintext cannot be None")
         if max_msg_size is not None and len(plaintext) > max_msg_size:
             raise MessageTooBigException
-        cdef bytearray ciphertext = bytearray(len(plaintext) + hydro_secretbox_HEADERBYTES)
+        ciphertext_len = len(plaintext) + hydro_secretbox_HEADERBYTES
+        ciphertext = PyBytes_FromStringAndSize(NULL, ciphertext_len)
+        cdef char* ciphertext_ptr = ciphertext
+        ciphertext_view = PyMemoryView_FromMemory(ciphertext_ptr, ciphertext_len, PyBUF_WRITE)
         try:
-            secretbox_encrypt(plaintext, msg_id, self.ctx, self.key, ciphertext)
+            secretbox_encrypt(plaintext, msg_id, self.ctx, self.key, ciphertext_view)
         except ValueError:
             raise
         except Exception as ex:
             raise EncryptException("Encryption failed") from ex
-        return ciphertext   # TODO: return as bytes
+        return ciphertext
 
     cpdef decrypt(self, ciphertext, uint64_t msg_id=0, max_msg_size=None):
         if ciphertext is None:
