@@ -1,7 +1,7 @@
 # cython: language_level=3
 
 from cpython.buffer cimport PyBuffer_FillInfo
-from libc.string cimport memcmp, memcpy
+from libc.string cimport memcmp
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 
@@ -85,23 +85,23 @@ cdef parse_encrypted_message_header(const unsigned char[:] header):
 
 
 cdef class EncryptedMessage:
-    def __init__(self, ctext, uint64_t msg_id, uint32_t session_keys_idx=0):
-        if ctext is None:
+    def __init__(self, const unsigned char[:] ctext_view, uint64_t msg_id, uint32_t session_keys_idx=0):
+        if ctext_view is None:
             raise ValueError("Message cannot be None")
 
-        self.ciphertext = ctext
         self.msg_id = msg_id
         self.session_keys_idx = session_keys_idx
 
-        # create the encoded message
-        self.encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(ctext))
+        # Create the encoded message. This actually copies the ciphertext.
+        self.encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(ctext_view))
         self.encoded[0:2] = CY_ENC_MSG_MARKER
-        cdef const unsigned char[:] ctext_view = ctext
         cdef unsigned char[:] encoded_view = self.encoded
-        cdef unsigned char* encoded_ptr = self.encoded
         store64(encoded_view[2:10], msg_id)
         store32(encoded_view[10:14], session_keys_idx)
-        memcpy(encoded_ptr + CY_ENC_MSG_HEADER_SIZE, &ctext_view[0], len(ctext))
+        encoded_view[CY_ENC_MSG_HEADER_SIZE:len(self.encoded)] = ctext_view[0:len(ctext_view)]
+
+        # Keep a reference to the ciphertext (a slice of the encoded message)
+        self.ciphertext = encoded_view[CY_ENC_MSG_HEADER_SIZE:len(self.encoded)]
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
@@ -139,7 +139,6 @@ cdef class EncryptedMessage:
 
     @classmethod
     def from_bytes(cls, const unsigned char[:] framed, *, max_msg_size=None):
-        # TODO: do we really need to re-calculate self.encoded when calling the constructor
         msg_id, session_keys_idx = parse_encrypted_message_header(framed)
         ciphertext_size = len(framed) - CY_ENC_MSG_HEADER_SIZE  # positive because parsing succeeded
         if ciphertext_size < hydro_secretbox_HEADERBYTES:
