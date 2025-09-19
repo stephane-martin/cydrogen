@@ -98,7 +98,7 @@ class SecretBox:
         """
         ...
 
-    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = 0, max_msg_size: int | None = None) -> bytearray:
+    def encrypt(self, plaintext: bytes | Buffer, msg_id: int = 0, max_msg_size: int | None = None) -> bytes:
         """
         Encrypt the plaintext using the secret box key, context and message ID.
 

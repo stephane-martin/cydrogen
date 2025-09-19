@@ -74,6 +74,7 @@ class ReceivedEncryptedMessage(MachineProducedEvent):
 
 kx_completed = KxCompleted()
 kx_progress = KxProgress()
+kx_server_ack = KX_Server_Ack()
 
 
 class MachineState(StrEnum):
@@ -918,7 +919,7 @@ class KX_N_ServerStateMachine(BaseMachine):
         # - we are still able to decrypt messages from the client encrypted with the old session keys
         self._replace_current_material()
         # Send ACK to the client. When the client receives the ACK, it will switch to the new session keys.
-        self._data_ready_to_send.add(KX_Server_Ack())
+        self._data_ready_to_send.add(kx_server_ack)
         return kx_progress
 
 
@@ -1326,7 +1327,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
         # send ACK to the client
         # when the client receives the ACK, it will switch to the new session keys
-        self._data_ready_to_send.add(KX_Server_Ack())
+        self._data_ready_to_send.add(kx_server_ack)
         return kx_progress
 
     def get_peer_key(self) -> KxPublicKey | None:
