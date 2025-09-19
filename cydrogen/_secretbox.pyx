@@ -1,5 +1,9 @@
 # cython: language_level=3
 
+from cpython.bytes cimport PyBytes_FromStringAndSize
+from cpython.memoryview cimport PyMemoryView_FromMemory
+from cpython.buffer cimport PyBUF_WRITE
+
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 
@@ -114,14 +118,16 @@ cdef class SecretBox:
         plaintext_len = len(ciphertext) - hydro_secretbox_HEADERBYTES
         if max_msg_size is not None and plaintext_len > max_msg_size:
             raise MessageTooBigException
-        cdef bytearray plaintext = bytearray(plaintext_len)
+        plaintext = PyBytes_FromStringAndSize(NULL, plaintext_len)
+        cdef char* plaintext_ptr = plaintext
+        plaintext_view = PyMemoryView_FromMemory(plaintext_ptr, plaintext_len, PyBUF_WRITE)
         try:
-            secretbox_decrypt(ciphertext, msg_id, self.ctx, self.key, plaintext)
+            secretbox_decrypt(ciphertext, msg_id, self.ctx, self.key, plaintext_view)
         except ValueError:
             raise
         except Exception as ex:
             raise DecryptException("Decryption failed") from ex
-        return bytes(plaintext)
+        return plaintext
 
     cpdef encrypt_file(self, src, dst, uint32_t chunk_size=8192):
         if src is None or dst is None:
