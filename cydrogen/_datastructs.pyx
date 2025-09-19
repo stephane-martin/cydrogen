@@ -86,32 +86,25 @@ cdef parse_encrypted_message_header(const unsigned char[:] header):
 
 cdef class EncryptedMessage:
     def __init__(self, const unsigned char[:] ctext_view, uint64_t msg_id, uint32_t session_keys_idx=0):
-        if ctext_view is None:
-            raise ValueError("Message cannot be None")
-
         self.msg_id = msg_id
         self.session_keys_idx = session_keys_idx
-
-        # Create the encoded message. This actually copies the ciphertext.
-        self.encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(ctext_view))
-        self.encoded[0:2] = CY_ENC_MSG_MARKER
-        cdef unsigned char[:] encoded_view = self.encoded
-        store64(encoded_view[2:10], msg_id)
-        store32(encoded_view[10:14], session_keys_idx)
-        encoded_view[CY_ENC_MSG_HEADER_SIZE:len(self.encoded)] = ctext_view[0:len(ctext_view)]
-
-        # Keep a reference to the ciphertext (a slice of the encoded message)
-        self.ciphertext = encoded_view[CY_ENC_MSG_HEADER_SIZE:len(self.encoded)]
+        # Keep a reference to the ciphertext
+        self.ciphertext = ctext_view
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
-        cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
-
-    def __bytes__(self):
-        return bytes(self.encoded)
+        # Create the encoded message. This actually copies the ciphertext.
+        encoded = bytearray(CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext))
+        encoded[0:2] = CY_ENC_MSG_MARKER
+        cdef unsigned char[:] ciphertext_view = self.ciphertext
+        cdef unsigned char[:] encoded_view = encoded
+        store64(encoded_view[2:10], self.msg_id)
+        store32(encoded_view[10:14], self.session_keys_idx)
+        encoded_view[CY_ENC_MSG_HEADER_SIZE:len(encoded)] = ciphertext_view[0:len(self.ciphertext)]
+        cdef const unsigned char* encoded_ptr = encoded
+        PyBuffer_FillInfo(buffer, encoded, encoded_ptr, len(encoded), 1, flags)
 
     def __len__(self):
-        return len(self.encoded)
+        return CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext)
 
     def __eq__(self, other):
         if other is None:
@@ -119,22 +112,32 @@ cdef class EncryptedMessage:
         if not isinstance(other, EncryptedMessage):
             return False
         cdef EncryptedMessage o = <EncryptedMessage>other
-        return self.encoded == o.encoded
+        if self.msg_id != o.msg_id:
+            return False
+        if self.session_keys_idx != o.session_keys_idx:
+            return False
+        if len(self.ciphertext) != len(o.ciphertext):
+            return False
+        cdef const unsigned char[:] self_ctext_view = self.ciphertext
+        cdef const unsigned char[:] o_ctext_view = o.ciphertext
+        cdef const unsigned char* self_ptr = &self_ctext_view[0]
+        cdef const unsigned char* o_ptr = &o_ctext_view[0]
+        return memcmp(self_ptr, o_ptr, len(self.ciphertext)) == 0
 
     def __hash__(self):
         # TODO: replace with Py_HashBuffer when Python 3.14 is the minimum version
-        return hash(bytes(self.encoded))
+        return hash(bytes(self))
 
     cpdef writeto(self, out):
-        n_written = make_safe_writer(out).write(self.encoded)
-        if n_written < len(self.encoded):
+        n_written = make_safe_writer(out).write(self)
+        if n_written < len(self):
             raise OSError("Failed to write the entire message to the file object")
         return n_written
 
     async def awriteto(self, out):
         if out is None:
             raise ValueError("File object cannot be None")
-        out.write(self.encoded)
+        out.write(self)
         await out.drain()
 
     @classmethod

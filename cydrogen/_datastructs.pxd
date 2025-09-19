@@ -18,7 +18,6 @@ cdef class EncryptedMessage:
     cdef readonly object ciphertext
     cdef readonly uint64_t msg_id
     cdef readonly uint32_t session_keys_idx
-    cdef bytearray encoded
     cpdef writeto(self, fileobj)
 
 
