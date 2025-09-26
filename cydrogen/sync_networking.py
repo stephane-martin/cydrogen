@@ -299,8 +299,8 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
             if not self.handle_message(msg, msg_id):
                 logger.info("Stopping message handling for %s", self.peer)
                 return False  # if handle_message returns False, we stop handling messages
-        except Exception:
-            logger.exception("Handling message from %s", self.peer)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Handling message from %s: %s", self.peer, ex)
             return False
         finally:
             self.current_msg_id = 0

@@ -153,6 +153,12 @@ class MachineState(StrEnum):
             MachineState.WAITING_FOR_SERVER_ACK,
         )
 
+    def writer_closed(self) -> bool:
+        """
+        Returns True if the writer is closed in this state.
+        """
+        return self in (MachineState.WRITER_CLOSED, MachineState.READER_WRITER_CLOSED)
+
 
 class ExternalEvent(StrEnum):
     """
@@ -231,6 +237,12 @@ class InvalidTransitionError(CyException):
         super().__init__(f"Invalid transition {orig_state} => {event}")
         self.event = event
         self.orig_state = orig_state
+
+    def writer_closed(self) -> bool:
+        """
+        Returns True if we tried to write an encrypted message when the writer was closed.
+        """
+        return self.orig_state.writer_closed() and self.event == ExternalEvent.WRITE_EMESSAGE
 
 
 ALL_STATES: set[MachineState] = set(MachineState)
