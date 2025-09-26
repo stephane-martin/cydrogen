@@ -368,8 +368,8 @@ class KXProtocol(asyncio.BufferedProtocol):
                 data = self._machine.data_to_send()
                 if data:
                     self._transport.write(data)
-        except Exception:
-            logger.exception("Continuous rekey task failed")
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Continuous rekey task failed: %s", ex)
             self._transport.abort()
 
     async def continuous_remove_old_keys(self) -> None:
@@ -1035,6 +1035,12 @@ class BaseServerHandler(ABC):
             logger.error("Server response is too big (incoming msg_id: %d)", msg_id)  # noqa: TRY400
             self._stopping = True
             self.rw.close()
+        except InvalidTransitionError as ex:
+            if ex.writer_closed():
+                # don't want to spam the logs with the full stack traces if the client closed the connection
+                logger.warning("Cannot write response for %s: connection closed", msg_id)
+            else:
+                logger.exception("Error while handling message %s", msg_id)
         except Exception:
             logger.exception("Error while handling message %s", msg_id)
 
