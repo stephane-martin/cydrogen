@@ -9,6 +9,22 @@ from libc.stdint cimport uint16_t
 from libc.stdint cimport uint8_t
 
 
+cdef extern from "<stdatomic.h>" nogil:
+    ctypedef uint64_t atomic_ullong
+
+    ctypedef enum memory_order:
+        memory_order_relaxed
+        memory_order_consume
+        memory_order_acquire
+        memory_order_release
+        memory_order_acq_rel
+        memory_order_seq_cst
+
+    void atomic_store_explicit(atomic_ullong* object, uint64_t desired, memory_order order)
+    uint64_t atomic_fetch_add_explicit(atomic_ullong* object, uint64_t operand, memory_order order)
+    uint64_t atomic_load_explicit(atomic_ullong* object, memory_order order)
+
+
 cdef extern from "cyutils.h" nogil:
     int cyd_is_zero(const unsigned char *n, const size_t nlen)
     int cyd_mlock(void * const addr, const size_t len)
@@ -42,20 +58,13 @@ cdef extern from "cyutils.h" nogil:
     int cyd_is_big_endian()
 
 
-cdef extern from "atomic.h" nogil:
-    ctypedef uint64_t psnip_atomic_uint64
-    ctypedef uint64_t psnip_uint64_t
-    void psnip_atomic_uint64_store(psnip_atomic_uint64* ptr, psnip_uint64_t value)
-    psnip_uint64_t psnip_atomic_uint64_add(psnip_atomic_uint64* ptr, psnip_uint64_t value)
-
-
 cdef extern from "fnv.h" nogil:
     int64_t fnv_impl(const void *src, uint64_t len, uint32_t prefix, uint32_t suffix)
 
 
 @cython.auto_pickle(False)
 cdef class Counter:
-    cdef psnip_atomic_uint64 count
+    cdef atomic_ullong count
 
     cpdef uint64_t value(self) noexcept
 
