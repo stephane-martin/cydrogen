@@ -40,8 +40,7 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
-.tox/
-.nox/
+/.nox/
 .coverage
 .coverage.*
 .cache
@@ -56,10 +55,6 @@ cover/
 # Translations
 *.mo
 *.pot
-
-# Environments
-.env
-.venv
 
 # mkdocs documentation
 /site
@@ -81,3 +76,6 @@ cython_debug/
 /package-lock.json
 /package.json
 /compile_commands.json
+
+# Gemini config files
+/.gemini/
