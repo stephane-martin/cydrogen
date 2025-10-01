@@ -63,6 +63,9 @@ class KxFailed(MachineProducedEvent):
         self.exc = exc
 
 
+# TODO: KxRekeyFailed
+
+
 class KxProgress(MachineProducedEvent):
     pass
 

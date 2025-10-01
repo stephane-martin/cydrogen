@@ -994,24 +994,21 @@ class BaseServerHandler(ABC):
         self.rw = rw
         try:
             while not self._stopping:
-                msg, msg_id = await rw.get_next_msg()
-                self._process_msg(msg, msg_id)
+                msg, msg_id = await rw.get_next_msg()  # may raise when no more messages
+                self._process_msg(msg, msg_id)  # can't raise
         except EOFError:
             logger.info("EOF received")
         except Exception as ex:  # noqa: BLE001
             logger.warning("While reading next message: %s", ex)
         finally:
-            self._stopping = True
-            nb = self._tasks.cancel_all()
+            nb = self._tasks.cancel_all()  # cancel any pending tasks
             logger.info("Cancelled pending tasks: %s", nb)
             rw.close()
             await rw.wait_closed()
 
     def _process_msg(self, msg: bytes, msg_id: int) -> None:
         if msg_id == CANCEL_MESSAGE_ID:
-            msg_id_to_cancel = load64(msg)
-            logger.info("Received cancel for request: %s (%s)", msg_id_to_cancel, self.rw.peername)
-            self._tasks.cancel(msg_id_to_cancel)
+            self._cancel(msg)
             return
         if self._stopping:
             # not scheduling new tasks if we are stopping
@@ -1024,6 +1021,15 @@ class BaseServerHandler(ABC):
             self._tasks.done(msg_id, t)
 
         task.add_done_callback(cb)
+
+    def _cancel(self, msg: bytes) -> None:
+        try:
+            msg_id = load64(msg)
+            logger.info("Received cancel for request: %s (%s)", msg_id, self.rw.peername)
+            self._tasks.cancel(msg_id)
+        except ValueError:
+            # malformed cancel message
+            logger.warning("Received malformed cancel message (%s)", self.rw.peername)
 
     async def _handle_message(self, msg: bytes, msg_id: int) -> None:
         self._msgid_var.set(msg_id)
@@ -1068,9 +1074,11 @@ class RequestResponseHandler(BaseServerHandler, ABC):
 
 
 def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
-    if isinstance(handler, type) and issubclass(handler, BaseServerHandler):
-        return handler().handle
-    if not isinstance(handler, type):
+    if isinstance(handler, type):
+        if issubclass(handler, BaseServerHandler):
+            return handler().handle
+        raise TypeError("Handler class must be a subclass of BaseServerHandler")
+    if callable(handler):
         return handler
     raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
 
