@@ -4,12 +4,14 @@ project(
   license: 'Apache-2.0',
   meson_version: '>= 1.8.0',
   version: run_command(['tools/gitversion.py'], check: true).stdout().strip(),
+  default_options: ['c_std=c11'], # use C11 standard because we use C11 atomics
 )
-
-cc = meson.get_compiler('c')
 
 add_project_arguments('-DCYTHON_CLINE_IN_TRACEBACK=0', language: 'c')
 add_project_arguments('-DCYTHON_CLINE_IN_TRACEBACK_RUNTIME=0', language: 'c')
+
+cc = meson.get_compiler('c')
+gnu_source_args = ['-D_GNU_SOURCE']
 
 if cc.check_header('sys/mman.h')
   add_project_arguments('-DHAVE_SYS_MMAN_H', language: 'c')
@@ -22,8 +24,10 @@ if cc.check_header('sys/mman.h')
   if cc.has_function('mlock', prefix : '#include <sys/mman.h>')
     add_project_arguments('-DHAVE_MLOCK', language: 'c')
   endif
-  # madvise
   if cc.has_function('madvise', prefix : '#include <sys/mman.h>')
+    add_project_arguments('-DHAVE_MADVISE', language: 'c')
+  elif cc.has_function('madvise', prefix : '#include <sys/mman.h>', args: gnu_source_args)
+    add_project_arguments(gnu_source_args, language: 'c')
     add_project_arguments('-DHAVE_MADVISE', language: 'c')
   endif
 endif
@@ -36,19 +40,31 @@ if cc.check_header('signal.h')
     add_project_arguments('-DHAVE_RAISE', language: 'c')
   endif
 endif
-if cc.has_function('posix_memalign', prefix : '#include <stdlib.h>')
-  add_project_arguments('-DHAVE_POSIX_MEMALIGN', language: 'c')
+if cc.has_function('aligned_alloc', prefix : '#include <stdlib.h>')
+  add_project_arguments('-DHAVE_ALIGNED_ALLOC', language: 'c')
 endif
 if cc.has_function('memset_s', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_MEMSET_S', language: 'c')
+elif cc.has_function('memset_s', prefix : '#include <string.h>', args: gnu_source_args)
+  add_project_arguments(gnu_source_args, language: 'c')
   add_project_arguments('-DHAVE_MEMSET_S', language: 'c')
 endif
 if cc.has_function('explicit_bzero', prefix : '#include <string.h>')
   add_project_arguments('-DHAVE_EXPLICIT_BZERO', language: 'c')
+elif cc.has_function('explicit_bzero', prefix : '#include <string.h>', args: gnu_source_args)
+  add_project_arguments(gnu_source_args, language: 'c')
+  add_project_arguments('-DHAVE_EXPLICIT_BZERO', language: 'c')
 endif
 if cc.has_function('memset_explicit', prefix : '#include <string.h>')
   add_project_arguments('-DHAVE_MEMSET_EXPLICIT', language: 'c')
+elif cc.has_function('memset_explicit', prefix : '#include <string.h>', args: gnu_source_args)
+  add_project_arguments(gnu_source_args, language: 'c')
+  add_project_arguments('-DHAVE_MEMSET_EXPLICIT', language: 'c')
 endif
 if cc.has_function('explicit_memset', prefix : '#include <string.h>')
+  add_project_arguments('-DHAVE_EXPLICIT_MEMSET', language: 'c')
+elif cc.has_function('explicit_memset', prefix : '#include <string.h>', args: gnu_source_args)
+  add_project_arguments(gnu_source_args, language: 'c')
   add_project_arguments('-DHAVE_EXPLICIT_MEMSET', language: 'c')
 endif
 if cc.has_function_attribute('weak')

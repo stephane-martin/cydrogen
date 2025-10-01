@@ -16,8 +16,8 @@ import random
 import tempfile
 
 
-cdef psnip_uint64_t one = 1
-cdef psnip_uint64_t increment = 2
+cdef uint64_t one = 1
+cdef uint64_t increment = 2
 
 cdef uint32_t fnv_prefix = random.randint(0, 0xFFFFFFFF)
 cdef uint32_t fnv_suffix = random.randint(0, 0xFFFFFFFF)
@@ -25,13 +25,13 @@ cdef uint32_t fnv_suffix = random.randint(0, 0xFFFFFFFF)
 
 cdef class Counter:
     def __cinit__(self):
-        psnip_atomic_uint64_store(&self.count, one)
+        atomic_store_explicit(&self.count, one, memory_order_seq_cst)
 
     def __init__(self):
         pass
 
     cpdef uint64_t value(self) noexcept:
-        return psnip_atomic_uint64_add(&self.count, increment)
+        return atomic_fetch_add_explicit(&self.count, increment, memory_order_seq_cst)
 
     def __call__(self):
         return self.value()
