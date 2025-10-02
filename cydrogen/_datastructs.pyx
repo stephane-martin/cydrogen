@@ -108,8 +108,8 @@ cdef class EncryptedMessage:
         store64(encoded_view[2:10], self.msg_id)
         store32(encoded_view[10:14], self.session_keys_idx)
         encoded_view[CY_ENC_MSG_HEADER_SIZE:len(encoded)] = ciphertext_view[0:len(self.ciphertext)]
-        cdef const unsigned char* encoded_ptr = encoded
-        PyBuffer_FillInfo(buffer, encoded, encoded_ptr, len(encoded), 1, flags)
+        cdef unsigned char* encoded_ptr = encoded
+        PyBuffer_FillInfo(buffer, encoded, <void*>encoded_ptr, len(encoded), 1, flags)
 
     def __len__(self):
         return CY_ENC_MSG_HEADER_SIZE + len(self.ciphertext)
@@ -171,7 +171,7 @@ cdef class KX_N_Packet1:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -208,7 +208,7 @@ cdef class KX_KK_Packet1:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -244,7 +244,7 @@ cdef class KX_KK_Packet2:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -281,7 +281,7 @@ cdef class KX_XX_Packet1:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -318,7 +318,7 @@ cdef class KX_XX_Packet2:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -355,7 +355,7 @@ cdef class KX_XX_Packet3:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
@@ -388,7 +388,7 @@ cdef class KX_Server_Ack:
 
     def __getbuffer__(self, Py_buffer *buffer, int flags):
         cdef const unsigned char* encoded_ptr = self.encoded
-        PyBuffer_FillInfo(buffer, self, encoded_ptr, len(self.encoded), 1, flags)
+        PyBuffer_FillInfo(buffer, self, <void*>encoded_ptr, len(self.encoded), 1, flags)
 
     def __bytes__(self):
         return bytes(self.encoded)
