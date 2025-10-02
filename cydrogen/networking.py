@@ -58,12 +58,12 @@ class KxCompleted(MachineProducedEvent):
     pass
 
 
-class KxFailed(MachineProducedEvent):
-    def __init__(self, exc: Exception) -> None:
-        self.exc = exc
+class KxInitialCompleted(KxCompleted):
+    pass
 
 
-# TODO: KxRekeyFailed
+class KxRekeyCompleted(KxCompleted):
+    pass
 
 
 class KxProgress(MachineProducedEvent):
@@ -76,6 +76,8 @@ class ReceivedEncryptedMessage(MachineProducedEvent):
 
 
 kx_completed = KxCompleted()
+kx_initial_completed = KxInitialCompleted()
+kx_rekey_completed = KxRekeyCompleted()
 kx_progress = KxProgress()
 kx_server_ack = KX_Server_Ack()
 
@@ -145,15 +147,25 @@ class MachineState(StrEnum):
     Server is connected, and waiting for packet3 to be sent by peer.
     """
 
-    def kx_is_pending(self) -> bool:
+    def pending_initial_kx(self) -> bool:
         """
-        Returns True if the state is one of the states where the key exchange is pending.
+        Returns True if the state is one of the states where the initial key exchange is pending.
         """
         return self in (
             MachineState.WAITING_FOR_PACKET1,
             MachineState.WAITING_FOR_PACKET2,
             MachineState.WAITING_FOR_PACKET3,
             MachineState.WAITING_FOR_SERVER_ACK,
+        )
+
+    def pending_rekey(self) -> bool:
+        """
+        Returns True if the state is one of the states where a rekeying operation is pending.
+        """
+        return self in (
+            MachineState.CONNECTED_WAITING_FOR_SERVER_ACK,
+            MachineState.CONNECTED_WAITING_FOR_PACKET2,
+            MachineState.CONNECTED_WAITING_FOR_PACKET3,
         )
 
     def writer_closed(self) -> bool:
@@ -419,7 +431,6 @@ class BaseMachine:
         """
         self.sent_msg_max_size: int = sent_msg_max_size
         self.received_msg_max_size: int = received_msg_max_size
-        self._kx_finished = False
 
         self._transitions = Transitions()
 
@@ -590,43 +601,58 @@ class BaseMachine:
     def release_encrypted_message(self, mv: Buffer) -> None:
         self._read_buffers.release_bytearray(mv)
 
-    def receive_data(self, nbytes: int) -> list[MachineProducedEvent]:
+    def receive_data(self, nbytes: int) -> list[MachineProducedEvent]:  # noqa: PLR0912
         self._read_buffers.buffer_updated(nbytes)
         events: list[MachineProducedEvent] = []
         try:
+            # the chunk of data we just received may generate multiple events, so we loop until no more events can be generated
             while True:
                 mtype = self._read_buffers.peek_message_type()
                 if mtype is None:
-                    # not enough data to determine the message type
+                    # not enough data to determine the type of the next message
                     return events
                 old_state = self._state
                 ev: MachineProducedEvent | None = None
                 match mtype:
                     case MessageType.KX_N_PACKET1 | MessageType.KX_KK_PACKET1 | MessageType.KX_XX_PACKET1:
-                        ev = self.trigger_receive_packet1()
+                        ev = self._trigger_receive_packet1()
                     case MessageType.KX_KK_PACKET2 | MessageType.KX_XX_PACKET2:
-                        ev = self.trigger_receive_packet2()
+                        ev = self._trigger_receive_packet2()
                     case MessageType.KX_XX_PACKET3:
-                        ev = self.trigger_receive_packet3()
+                        ev = self._trigger_receive_packet3()
                     case MessageType.KX_SERVER_ACK:
-                        ev = self.trigger_receive_server_ack()
+                        ev = self._trigger_receive_server_ack()
                     case MessageType.ENCRYPTED_MESSAGE:
-                        ev = self.trigger_receive_emessage()
+                        ev = self._trigger_receive_emessage()
                     case _:
                         raise RuntimeError(f"Unknown message type: {mtype}")  # noqa: TRY301
                 if not ev:
                     # there was not enough available data to advance the state
                     return events
-                events.append(ev)
-                if old_state.kx_is_pending() and self._state == MachineState.CONNECTED and (kx_ev := self._complete_kx()):
-                    events.append(kx_ev)
+                if isinstance(ev, KxCompleted):
+                    if old_state.pending_initial_kx():
+                        events.append(kx_initial_completed)
+                    elif old_state.pending_rekey():
+                        events.append(kx_rekey_completed)
+                    else:
+                        raise RuntimeError("KxCompleted event while no key exchange was pending")  # noqa: TRY301
+                else:
+                    events.append(ev)
 
-        except Exception as ex:
+        except KeyExchangeException:
             self._state = MachineState.READER_WRITER_CLOSED
-            if kx_ev := self._fail_kx(ex):
-                events.append(kx_ev)
-                return events
             raise
+        except Exception as ex:
+            old_state = self._state
+            self._state = MachineState.READER_WRITER_CLOSED
+            if old_state.pending_initial_kx():
+                raise KeyExchangeException("Initial key exchange failed") from ex
+            if old_state.pending_rekey():
+                raise KeyExchangeException("Rekeying operation failed") from ex
+            raise
+
+    def trigger_rekey(self) -> None:
+        pass
 
     def trigger_connection_lost(self, exc: Exception | None) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.CONNECTION_LOST, exc)
@@ -643,23 +669,20 @@ class BaseMachine:
     def trigger_connection_made(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.CONNECTION_MADE)
 
-    def trigger_receive_packet1(self) -> MachineProducedEvent | None:
+    def _trigger_receive_packet1(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_PACKET1)
 
-    def trigger_receive_packet2(self) -> MachineProducedEvent | None:
+    def _trigger_receive_packet2(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_PACKET2)
 
-    def trigger_receive_packet3(self) -> MachineProducedEvent | None:
+    def _trigger_receive_packet3(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_PACKET3)
 
-    def trigger_receive_emessage(self) -> MachineProducedEvent | None:
+    def _trigger_receive_emessage(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_EMESSAGE)
 
-    def trigger_receive_server_ack(self) -> MachineProducedEvent | None:
+    def _trigger_receive_server_ack(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_SERVER_ACK)
-
-    def trigger_rekey(self) -> None:
-        pass
 
     def remove_oldest_material(self) -> None:
         with self._material_lock.readwrite:
@@ -673,7 +696,7 @@ class BaseMachine:
                     logger.info("Removed crypto material at index %d", i)
                     return
 
-    def _trigger(self, ev: ExternalEvent, *args) -> MachineProducedEvent | None:  # noqa: ANN002
+    def _trigger(self, ext_event: ExternalEvent, *args) -> MachineProducedEvent | None:  # noqa: ANN002
         """
         Triggers a state transition in the state machine based on the given event and arguments.
 
@@ -682,17 +705,23 @@ class BaseMachine:
             *args: Additional arguments to pass to the callback function associated with the transition.
 
         Returns:
-            The result of the callback function associated with the transition.
+            The event produced by the state transition, if any.
         """
         try:
-            dest = self._transitions.get(ev, self._state)
-            e = dest.callback(*args)
+            dest = self._transitions.get(ext_event, self._state)
+            ev = dest.callback(*args)
             self._state = dest.state
-            return e
-        except Exception as ex:
+            return ev
+        except KeyExchangeException:
             self._state = MachineState.READER_WRITER_CLOSED
-            if kx_ev := self._fail_kx(ex):
-                return kx_ev
+            raise
+        except Exception as ex:
+            old_state = self._state
+            self._state = MachineState.READER_WRITER_CLOSED
+            if old_state.pending_initial_kx():
+                raise KeyExchangeException(f"Initial key exchange failed: {ex}") from ex
+            if old_state.pending_rekey():
+                raise KeyExchangeException(f"Rekeying operation failed: {ex}") from ex
             raise
 
     def _receive_emessage(self) -> MachineProducedEvent | None:
@@ -704,15 +733,27 @@ class BaseMachine:
         # _reader_eof may have been called before this method, so we check if the exception is already set
         if self.exception is None:
             self.exception = EOF_EXCEPTION if exc is None else exc
-        return self._fail_kx(self.exception)
+        if self._state.pending_initial_kx():
+            raise KeyExchangeException("Initial key exchange failed: connection lost") from self.exception
+        if self._state.pending_rekey():
+            raise KeyExchangeException("Rekeying operation failed: connection lost") from self.exception
+        return None
 
     def _reader_eof(self) -> MachineProducedEvent | None:
         if self.exception is None:
             self.exception = EOF_EXCEPTION
-        return self._fail_kx(self.exception)
+        if self._state.pending_initial_kx():
+            raise KeyExchangeException("Initial key exchange failed: reader closed") from self.exception
+        if self._state.pending_rekey():
+            raise KeyExchangeException("Rekeying operation failed: reader closed") from self.exception
+        return None
 
     def _writer_eof(self) -> MachineProducedEvent | None:
-        return self._fail_kx(EOF_EXCEPTION)
+        if self._state.pending_initial_kx():
+            raise KeyExchangeException("Initial key exchange failed: writer closed") from EOF_EXCEPTION
+        if self._state.pending_rekey():
+            raise KeyExchangeException("Rekeying operation failed: writer closed") from EOF_EXCEPTION
+        return None
 
     def _write_emessage(self, emsg: EncryptedMessage) -> None:
         # called by Protocol to prepare sending a message to the server
@@ -720,22 +761,6 @@ class BaseMachine:
 
     def _connection_made(self) -> None:
         pass
-
-    def _fail_kx(self, exc: Exception) -> MachineProducedEvent | None:
-        if self._kx_finished:
-            return None
-        self._kx_finished = True
-        if isinstance(exc, KeyExchangeException):
-            return KxFailed(exc)
-        new_ex = KeyExchangeException()
-        new_ex.__cause__ = exc
-        return KxFailed(new_ex)
-
-    def _complete_kx(self) -> MachineProducedEvent | None:
-        if self._kx_finished:
-            return None
-        self._kx_finished = True
-        return kx_completed
 
     def encrypt_message(self, msg: Buffer, msg_id: int) -> EncryptedMessage:
         """
@@ -854,7 +879,7 @@ class KX_N_ClientStateMachine(BaseMachine):
         # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._packet1 = None
-        return kx_progress
+        return kx_completed
 
     def _kx_start(self) -> None:
         if self._candidate_pair is not None or self._packet1 is not None:
@@ -935,7 +960,7 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._replace_current_material()
         # Send ACK to the client. When the client receives the ACK, it will switch to the new session keys.
         self._data_ready_to_send.add(kx_server_ack)
-        return kx_progress
+        return kx_completed
 
 
 class KX_KK_ClientStateMachine(BaseMachine):
@@ -1007,7 +1032,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
         # switch to the new session keys. the server has already switched to them at this point.
         self._replace_current_material()
         self._kx_state = None
-        return kx_progress
+        return kx_completed
 
     def _kx_start(self) -> None:
         if self._kx_state is not None:
@@ -1086,7 +1111,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
         self._data_ready_to_send.add(packet2)
         # switch to the new session keys server side
         self._replace_current_material()
-        return kx_progress
+        return kx_completed
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key
@@ -1185,13 +1210,10 @@ class KX_XX_ClientStateMachine(BaseMachine):
             if self.validate_peer_key is not None:
                 try:
                     self.validate_peer_key(self._server_public_key)
-                except InvalidPeerKeyException as ex:
-                    return self._fail_kx(ex)
-                except Exception as ex:  # noqa: BLE001
-                    # ensure the exception is of type InvalidPeerKeyException
-                    new_ex = InvalidPeerKeyException()
-                    new_ex.__cause__ = ex
-                    return self._fail_kx(new_ex)
+                except InvalidPeerKeyException:
+                    raise
+                except Exception as ex:
+                    raise InvalidPeerKeyException from ex
         # send packet3 to the server
         self._data_ready_to_send.add(self._kx_state.packet3)
         return kx_progress
@@ -1206,7 +1228,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         # switch to the new session keys (the server has already switched to them at this point)
         self._replace_current_material()
         self._kx_state = None
-        return kx_progress
+        return kx_completed
 
     def _kx_start(self) -> None:
         if self._kx_state is not None:
@@ -1328,13 +1350,10 @@ class KX_XX_ServerStateMachine(BaseMachine):
             if self.validate_peer_key is not None:
                 try:
                     self.validate_peer_key(self._client_public_key)
-                except InvalidPeerKeyException as ex:
-                    return self._fail_kx(ex)
-                except Exception as ex:  # noqa: BLE001
-                    # ensure the exception is of type InvalidPeerKeyException
-                    new_ex = InvalidPeerKeyException()
-                    new_ex.__cause__ = ex
-                    return self._fail_kx(new_ex)
+                except InvalidPeerKeyException:
+                    raise
+                except Exception as ex:
+                    raise InvalidPeerKeyException from ex
 
         # switch to the new session keys.
         self._replace_current_material()
@@ -1343,7 +1362,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         # send ACK to the client
         # when the client receives the ACK, it will switch to the new session keys
         self._data_ready_to_send.add(kx_server_ack)
-        return kx_progress
+        return kx_completed
 
     def get_peer_key(self) -> KxPublicKey | None:
         return self._client_public_key

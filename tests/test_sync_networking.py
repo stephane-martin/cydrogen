@@ -68,8 +68,12 @@ def sync_client_sync_server(client: BaseTCPClient, server: BaseTCPServer) -> Non
                 nb_received += 1
                 assert resp == msg.upper(), "Response does not match expected"
                 assert msg_id == idx + 1, "Response message ID does not match request message ID"
+            logger.info("Client has sent and received all messages.")
+        logger.info("Client has shutdown.")
     finally:
+        logger.info("Waiting for server to shutdown...")
         server.shutdown()
+        logger.info("Server has shutdown.")
 
     assert nb_received == len(MESSAGES), "Not all messages were received by the sync client."
 
