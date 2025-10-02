@@ -24,9 +24,7 @@ from .networking import (
     KX_N_ServerStateMachine,
     KX_XX_ClientStateMachine,
     KX_XX_ServerStateMachine,
-    KxCompleted,
-    KxFailed,
-    KxProgress,
+    KxInitialCompleted,
     MachineProducedEvent,
     ReceivedEncryptedMessage,
 )
@@ -71,43 +69,53 @@ class Protocol:
         self.rekey_thread.join()
         self.remove_old_keys_thread.join()
 
-    def connection_made(self) -> None:
-        with self._machine_lock:
-            events = self._machine.trigger_connection_made()
-        self._handle_machine_events(events)
+    def _send_to_machine(self, func: Callable[..., list[MachineProducedEvent] | MachineProducedEvent | None], *args: Any) -> None:  # noqa: ANN401
+        try:
+            with self._machine_lock:
+                evs = func(*args)
+        except Exception as ex:  # noqa: BLE001
+            self.connection_lost(ex)
+            self.kx_finished.set()
+            return
+        self._handle_machine_events(evs)
         with self._machine_lock:
             data = self._machine.data_to_send()
         if data:
-            with self._write_lock:
-                self.socket.sendall(data)
+            try:
+                with self._write_lock:
+                    self.socket.sendall(data)
+            except Exception as ex:  # noqa: BLE001
+                logger.info("Connection lost with %s while sending data: %s", self.peer, ex)
+                self.connection_lost(ex)
+
+    def connection_made(self) -> None:
+        self._send_to_machine(self._machine.trigger_connection_made)
 
     def connection_lost(self, exc: Exception | None = None) -> None:
         try:
             self.socket.shutdown(socket.SHUT_RDWR)
         except OSError as e:
             logger.info("socket shutdown: %s", e)
-        with self._machine_lock:
-            events = self._machine.trigger_connection_lost(exc)
-        self._handle_machine_events(events)  # KxFailed events may be generated here
+        try:
+            self._send_to_machine(self._machine.trigger_connection_lost, exc)
+        except Exception as ex:  # noqa: BLE001
+            logger.info("handling connection_lost: %s", ex)
         self.connection_lost_ev.set()
-        # not useful to try to send any pending data, the connection is lost
 
     def _rekey(self) -> None:
         if self.rekey_secs is None:
             return
-        while True:
-            if self.connection_lost_ev.wait(timeout=self.rekey_secs):
-                # connection lost, exit the rekey loop
-                return
-            self._rekey1()
+        try:
+            while True:
+                if self.connection_lost_ev.wait(timeout=self.rekey_secs):
+                    # connection lost, exit the rekey loop
+                    return
+                self._rekey1()
+        except Exception as ex:  # noqa: BLE001
+            self.connection_lost(ex)
 
     def _rekey1(self) -> None:
-        with self._machine_lock:
-            self._machine.trigger_rekey()
-            data = self._machine.data_to_send()
-        if data:
-            with self._write_lock:
-                self.socket.sendall(data)
+        self._send_to_machine(self._machine.trigger_rekey)
 
     def _remove_old_keys(self) -> None:
         if self.rekey_grace_secs is None:
@@ -145,21 +153,7 @@ class Protocol:
                 logger.info("Connection lost with %s: %s", self.peer, ex)
                 self.connection_lost(ex)
                 return
-            with self._machine_lock:
-                events = self._machine.receive_data(n)
-            # new encrypted messages are typically queued in _received_encrypted_msgs from the returned events
-            # but KxFailed events may also be generated here
-            self._handle_machine_events(events)
-            with self._machine_lock:
-                data = self._machine.data_to_send()
-            if data:
-                try:
-                    with self._write_lock:
-                        self.socket.sendall(data)
-                except Exception as ex:  # noqa: BLE001
-                    logger.info("Connection lost with %s while sending data: %s", self.peer, ex)
-                    self.connection_lost(ex)
-                    return
+            self._send_to_machine(self._machine.receive_data, n)
 
     def _decrypt_received_messages(self) -> None:
         # this is executed in a separate thread
@@ -167,6 +161,8 @@ class Protocol:
         logger.info("starting to decrypt received messages for %s", self.peer)
         try:
             self._decrypt_received_messages1()
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decrypt thread exception for %s: %s", self.peer, ex)
         finally:
             self.received_decrypted_msgs.shutdown()
             logger.info("decrypt thread has finished for %s", self.peer)
@@ -195,43 +191,24 @@ class Protocol:
     def _handle_machine_events(self, events: list[MachineProducedEvent] | MachineProducedEvent | None) -> None:
         if events is None:
             return
-        try:
-            if isinstance(events, MachineProducedEvent):
-                self._handle_machine_event(events)
-                return
-            for event in events:
-                self._handle_machine_event(event)
-        except KeyExchangeException as ex:
-            self.connection_lost(ex)
-            self.kx_finished.set()
-        except Exception as ex:  # noqa: BLE001
-            self.connection_lost(ex)
+        if isinstance(events, MachineProducedEvent):
+            self._handle_machine_event(events)
+            return
+        for event in events:
+            self._handle_machine_event(event)
 
     def _handle_machine_event(self, ev: MachineProducedEvent) -> None:
         match ev:
-            case KxCompleted():
+            case KxInitialCompleted():
                 logger.info("Key exchange completed with %s", self.peer)
                 self.kx_finished.set()
-            case KxFailed(exc=exc):
-                if isinstance(exc, KeyExchangeException):
-                    raise exc
-                raise KeyExchangeException from exc
-            case KxProgress():
-                logger.debug("Key exchange in progress with %s", self.peer)
             case ReceivedEncryptedMessage(emsg=emsg):
                 self.received_encrypted_msgs.put_nowait(emsg)
 
     def write(self, msg: Buffer, *, msg_id: int) -> None:
         # we don't need to hold the machine lock while encrypting, as encrypt_message() does not modify the machine state
         emsg = self._machine.encrypt_message(msg, msg_id)
-        with self._machine_lock:
-            events = self._machine.trigger_write_emessage(emsg)
-        self._handle_machine_events(events)  # normally no events
-        with self._machine_lock:
-            data = self._machine.data_to_send()
-        if data:
-            with self._write_lock:
-                self.socket.sendall(data)
+        self._send_to_machine(self._machine.trigger_write_emessage, emsg)
 
 
 class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
@@ -277,21 +254,15 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
                     break
                 if not self._handle_message(msg, msg_id):
                     break
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001
             # just be sure that the other threads will finish, close the connection
             self.protocol.connection_lost(ex)
-            exc = self.protocol.exception
-            if exc is not None:
-                raise exc from ex
-            raise
         else:
             self.protocol.connection_lost(None)
-            exc = self.protocol.exception
-            if exc is not None:
-                raise exc
         finally:
-            # wait for the read and decrypt threads to finish
+            logger.info("Waiting for protocol threads to finish for %s", self.peer)
             self.protocol.join()
+            logger.info("Protocol threads have finished for %s", self.peer)
 
     def _handle_message(self, msg: bytes, msg_id: int) -> bool:
         self.current_msg_id = msg_id

@@ -29,9 +29,7 @@ from .networking import (
     KX_N_ServerStateMachine,
     KX_XX_ClientStateMachine,
     KX_XX_ServerStateMachine,
-    KxCompleted,
-    KxFailed,
-    KxProgress,
+    KxInitialCompleted,
     MachineProducedEvent,
     MachineState,
     ReceivedEncryptedMessage,
@@ -229,25 +227,33 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def _handle_machine_event(self, ev: MachineProducedEvent) -> None:
         match ev:
-            case KxCompleted():
-                self._kx_completed.set_result(None)
-            case KxFailed(exc=exc):
-                self._kx_completed.set_exception(exc)
-            case KxProgress():
-                pass
+            case KxInitialCompleted():
+                if not self._kx_completed.done():
+                    self._kx_completed.set_result(None)
             case ReceivedEncryptedMessage(emsg=emsg):
                 self._received_encrypted_msgs.put_nowait(emsg)
+
+    def _send_to_machine(self, func: Callable[..., list[MachineProducedEvent] | MachineProducedEvent | None], *args: Any) -> None:  # noqa: ANN401
+        try:
+            evs = func(*args)
+        except KeyExchangeException as ex:
+            if self._kx_completed.done():
+                # key exchange had already been completed, so this is a rekey error
+                raise
+            # initial key exchange failed, notify the caller waiting for key exchange
+            self._kx_completed.set_exception(ex)
+            return
+        self._handle_machine_events(evs)
+        data = self._machine.data_to_send()
+        if data:
+            self._transport.write(data)
 
     async def write_cancel_msg(self, target_msg_id: int) -> None:
         cancel_msg = bytearray(8)
         store64(cancel_msg, target_msg_id)
         emsg = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
-        evs = self._machine.trigger_write_emessage(emsg)
-        self._handle_machine_events(evs)
-        data = self._machine.data_to_send()
-        if data:
-            self._transport.write(data)
-            await self.drain()
+        self._send_to_machine(self._machine.trigger_write_emessage, emsg)
+        await self.drain()
 
     async def write_msg(self, msg: Buffer, msg_id: int) -> None:
         """
@@ -271,17 +277,11 @@ class KXProtocol(asyncio.BufferedProtocol):
         # execute encryption in a separate thread to avoid blocking the event loop
         # may raise MessageTooBigException if the message is too big
         emsg = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
-        evs = self._machine.trigger_write_emessage(emsg)
-        self._handle_machine_events(evs)
-        data = self._machine.data_to_send()
-        if data:
-            self._transport.write(data)
-            await self.drain()
+        self._send_to_machine(self._machine.trigger_write_emessage, emsg)
+        await self.drain()
 
     def write_eof(self) -> None:
-        evs = self._machine.trigger_writer_eof()
-        self._handle_machine_events(evs)
-        self._transport.write_eof()
+        self._send_to_machine(self._machine.trigger_writer_eof)
 
     def can_write_eof(self) -> bool:
         return self._transport.can_write_eof()
@@ -296,11 +296,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         else:
             logger.info("new connection from client %s", self.peername)
         self._kx_completed.add_done_callback(self.key_exchange_completed)
-        evs = self._machine.trigger_connection_made()
-        self._handle_machine_events(evs)
-        data = self._machine.data_to_send()
-        if data:
-            self._transport.write(data)
+        self._send_to_machine(self._machine.trigger_connection_made)
 
     def key_exchange_completed(self, kx_completed: asyncio.Future) -> None:
         if kx_completed.cancelled():
@@ -364,10 +360,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         try:
             while True:
                 await asyncio.sleep(self._rekey_secs)
-                self._machine.trigger_rekey()
-                data = self._machine.data_to_send()
-                if data:
-                    self._transport.write(data)
+                self._send_to_machine(self._machine.trigger_rekey)
         except Exception as ex:  # noqa: BLE001
             logger.warning("Continuous rekey task failed: %s", ex)
             self._transport.abort()
@@ -409,12 +402,8 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
-        evs = self._machine.receive_data(nbytes)
-        self._handle_machine_events(evs)
+        self._send_to_machine(self._machine.receive_data, nbytes)
         self.maybe_pause_reading()  # TODO: move ?
-        data = self._machine.data_to_send()
-        if data:
-            self._transport.write(data)
 
     def maybe_pause_reading(self) -> None:
         if self._reading_paused:
@@ -439,15 +428,15 @@ class KXProtocol(asyncio.BufferedProtocol):
         logger.info("connection lost for %s, exc: %s", self.peername, exc)
         if isinstance(exc, ConnectionError):
             exc = EOF_EXCEPTION
-        evs = self._machine.trigger_connection_lost(exc)
-        self._handle_machine_events(evs)
+        try:
+            self._send_to_machine(self._machine.trigger_connection_lost, exc)
+        except Exception as ex:  # noqa: BLE001
+            # we need to execute the rest of the function even if some rekey exception happens
+            logger.warning("handling lost connection: %s", ex)
         self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         # make wait_closed() return
         if not self._closed_fut.done():
-            if exc is None:
-                self._closed_fut.set_result(None)
-            else:
-                self._closed_fut.set_exception(exc)
+            self._closed_fut.set_result(None) if exc is None else self._closed_fut.set_exception(exc)
 
         self._connection_lost = True  # makes next calls to drain() raise EOFError
 
@@ -455,10 +444,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             # some writers may be on pause, we need to unblock them
             for dfut in self._drain_futures:
                 if not dfut.done():
-                    if exc is None:
-                        dfut.set_result(None)
-                    else:
-                        dfut.set_exception(exc)
+                    dfut.set_result(None) if exc is None else dfut.set_exception(exc)
 
         if self._rekey_task is not None:
             self._rekey_task.cancel()
@@ -481,8 +467,10 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def eof_received(self) -> bool:
         logger.info("eof received from %s", self.peername)
-        evs = self._machine.trigger_reader_eof()
-        self._handle_machine_events(evs)
+        try:
+            self._send_to_machine(self._machine.trigger_reader_eof)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("handling eof received: %s", ex)
         self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         return False
 
