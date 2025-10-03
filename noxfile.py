@@ -47,6 +47,8 @@ def lint(session: nox.Session) -> None:
         print("===> shellcheck not found, skipping")
     else:
         bash_files = ROOT.glob("**/*.sh")
+        # exclude files in .nox
+        bash_files = [f for f in bash_files if ".nox" not in f.parts]
         if not bash_files:
             print("no bash files found")
         else:
