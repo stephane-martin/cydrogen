@@ -6,8 +6,7 @@ CFLAGS = -DHAVE_STDIO_H=1 -DHAVE_STDLIB_H=1 -DHAVE_STRING_H=1 -DHAVE_INTTYPES_H=
 all: cyutils.o
 	make -C src -f Makefile.fake $@
 
-cyutils.o: cyutils.c cyutils.h cyd_memcpy_s.h cyd_memcpy_s.c
+cyutils.o: cyutils.c cyutils.h
 	gcc -c -o cyutils.o cyutils.c $(CFLAGS)
-	gcc -c -o cyd_memcpy_s.o cyd_memcpy_s.h $(CFLAGS)
 
 .PHONY: all

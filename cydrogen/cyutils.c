@@ -26,7 +26,6 @@
 #endif
 
 #include "cyutils.h"
-#include "cyd_memcpy_s.h"
 
 #ifndef ENOSYS
 #    define ENOSYS ENXIO
@@ -468,7 +467,7 @@ int cyd_have_mman(void) {
 uint64_t cyd_load64_le(const uint8_t src[8]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint64_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 8);
+    memcpy(&w, src, 8);
     return w;
 #else
     uint64_t w = (uint64_t) src[0];
@@ -485,7 +484,7 @@ uint64_t cyd_load64_le(const uint8_t src[8]) {
 
 void cyd_store64_le(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    cyd_memcpy_s(dst, 8, &w, sizeof w);
+    memcpy(dst, &w, 8);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -501,7 +500,7 @@ void cyd_store64_le(uint8_t dst[8], uint64_t w) {
 uint32_t cyd_load32_le(const uint8_t src[4]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint32_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 4);
+    memcpy(&w, src, 4);
     return w;
 #else
     uint32_t w = (uint32_t) src[0];
@@ -514,7 +513,7 @@ uint32_t cyd_load32_le(const uint8_t src[4]) {
 
 void cyd_store32_le(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    cyd_memcpy_s(dst, 4, &w, sizeof w);
+    memcpy(dst, &w, 4);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -526,7 +525,7 @@ void cyd_store32_le(uint8_t dst[4], uint32_t w) {
 uint16_t cyd_load16_le(const uint8_t src[2]) {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint16_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 2);
+    memcpy(&w, src, 2);
     return w;
 #else
     uint16_t w = (uint16_t) src[0];
@@ -537,7 +536,7 @@ uint16_t cyd_load16_le(const uint8_t src[2]) {
 
 void cyd_store16_le(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
-    cyd_memcpy_s(dst, 2, &w, sizeof w);
+    memcpy(dst, &w, 2);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w;
@@ -548,7 +547,7 @@ void cyd_store16_le(uint8_t dst[2], uint16_t w) {
 uint64_t cyd_load64_be(const uint8_t src[8]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint64_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 8);
+    memcpy(&w, src, 8);
     return w;
 #else
     uint64_t w = (uint64_t) src[7];
@@ -565,7 +564,7 @@ uint64_t cyd_load64_be(const uint8_t src[8]) {
 
 void cyd_store64_be(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    cyd_memcpy_s(dst, 8, &w, sizeof w);
+    memcpy(dst, &w, 8);
 #else
     dst[7] = (uint8_t) w; w >>= 8;
     dst[6] = (uint8_t) w; w >>= 8;
@@ -581,7 +580,7 @@ void cyd_store64_be(uint8_t dst[8], uint64_t w) {
 uint32_t cyd_load32_be(const uint8_t src[4]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint32_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 4);
+    memcpy(&w, src, 4);
     return w;
 #else
     uint32_t w = (uint32_t) src[3];
@@ -594,7 +593,7 @@ uint32_t cyd_load32_be(const uint8_t src[4]) {
 
 void cyd_store32_be(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    cyd_memcpy_s(dst, 4, &w, sizeof w);
+    memcpy(dst, &w, 4);
 #else
     dst[3] = (uint8_t) w; w >>= 8;
     dst[2] = (uint8_t) w; w >>= 8;
@@ -606,7 +605,7 @@ void cyd_store32_be(uint8_t dst[4], uint32_t w) {
 uint16_t cyd_load16_be(const uint8_t src[2]) {
 #ifdef NATIVE_BIG_ENDIAN
     uint16_t w;
-    cyd_memcpy_s(&w, sizeof w, src, 2);
+    memcpy(&w, src, 2);
     return w;
 #else
     uint16_t w = (uint16_t) src[1];
@@ -617,7 +616,7 @@ uint16_t cyd_load16_be(const uint8_t src[2]) {
 
 void cyd_store16_be(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_BIG_ENDIAN
-    cyd_memcpy_s(dst, 2, &w, sizeof w);
+    memcpy(dst, &w, 2);
 #else
     dst[1] = (uint8_t) w;
     w >>= 8;
