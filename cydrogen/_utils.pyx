@@ -12,15 +12,14 @@ import asyncio
 import io
 import os
 import pathlib
-import random
 import tempfile
 
 
 cdef uint64_t one = 1
 cdef uint64_t increment = 2
 
-cdef uint32_t fnv_prefix = random.randint(0, 0xFFFFFFFF)
-cdef uint32_t fnv_suffix = random.randint(0, 0xFFFFFFFF)
+cdef uint32_t fnv_prefix = int.from_bytes(os.urandom(4), "little")
+cdef uint32_t fnv_suffix = int.from_bytes(os.urandom(4), "little")
 
 
 cdef class Counter:
