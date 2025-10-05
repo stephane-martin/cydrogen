@@ -9,7 +9,7 @@ from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._decls cimport hydro_kx_N_PACKET1BYTES
 from ._decls cimport hydro_kx_KK_PACKET1BYTES, hydro_kx_KK_PACKET2BYTES
 from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_kx_XX_PACKET3BYTES
-from ._utils cimport make_safe_writer, store64, load64, store32, load32
+from ._utils cimport make_safe_writer, store64, load64, store32, load32, fnv
 
 from enum import StrEnum
 
@@ -134,7 +134,7 @@ cdef class EncryptedMessage:
 
     def __hash__(self):
         # TODO: replace with Py_HashBuffer when Python 3.14 is the minimum version
-        return hash(bytes(self))
+        return fnv(self)
 
     cpdef writeto(self, out):
         n_written = make_safe_writer(out).write(self)
