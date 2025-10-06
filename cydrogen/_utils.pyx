@@ -2,7 +2,9 @@
 
 cimport cython
 
-from cpython.buffer cimport PyBuffer_FillInfo, PyBUF_WRITABLE
+from cpython.buffer cimport PyBuffer_FillInfo, PyBUF_WRITABLE, PyBUF_WRITE
+from cpython.bytes cimport PyBytes_FromStringAndSize
+from cpython.memoryview cimport PyMemoryView_FromMemory
 from libc.stdint cimport int64_t
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
@@ -319,20 +321,30 @@ cdef class SafeReader:
         if self.direct == 1:
             return self.fileobj.read(length)
 
-        cdef bytearray result = bytearray(length)
+        result = PyBytes_FromStringAndSize(NULL, length)
+        cdef char* result_ptr = result
+        result_view = PyMemoryView_FromMemory(result_ptr, length, PyBUF_WRITE)
         cdef size_t offset = 0
+        cdef size_t n = 0
+
+        if self.has_readinto:
+            # when the underlying file object supports readinto, we can use it to read in chunks
+            while offset < length:
+                n = self.fileobj.readinto(result_view[offset:length])
+                if n == 0:
+                    return result[0:offset]
+                offset += n
+            return result
+
         cdef bytes tmp
-        cdef const unsigned char[:] view
 
         while offset < length:
             tmp = self.fileobj.read(length - offset)
             if len(tmp) == 0:
-                return bytes(result[:offset])
-            view = tmp
-            result[offset:offset + len(tmp)] = view[0:len(tmp)]
+                return result[0:offset]
+            result_view[offset:offset + len(tmp)] = tmp
             offset += len(tmp)
-        # TODO: find a way to avoid this copy
-        return bytes(result[0:offset])
+        return result
 
 
 cdef class AsyncSafeReader:
@@ -354,18 +366,20 @@ cdef class AsyncSafeReader:
             return b""
         if self.has_readexactly:
             return await self.reader.readexactly(length)
-        cdef bytearray result = bytearray(length)
+
+        result = PyBytes_FromStringAndSize(NULL, length)
+        cdef char* result_ptr = result
+        result_view = PyMemoryView_FromMemory(result_ptr, length, PyBUF_WRITE)
         cdef size_t offset = 0
         cdef bytes tmp
-        cdef const unsigned char[:] view
+
         while offset < length:
             tmp = await self.reader.read(length - offset)
             if len(tmp) == 0:
                 raise EOFError("EOF reached before reading the requested number of bytes")
-            view = tmp
-            result[offset:offset + len(tmp)] = view[0:len(tmp)]
+            result_view[offset:offset + len(tmp)] = tmp
             offset += len(tmp)
-        return bytes(result)
+        return result
 
 
 cdef class SafeWriter:
@@ -407,6 +421,7 @@ cdef make_safe_reader(fileobj):
     if reader_is_safe(fileobj):
         return fileobj
     return SafeReader(fileobj)
+
 
 cdef make_async_safe_reader(reader):
     if isinstance(reader, (AsyncSafeReader, asyncio.StreamReader)):
