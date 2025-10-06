@@ -194,7 +194,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         """
         Returns the total size of received messages that have not been processed yet.
         """
-        return self._received_decrypted_msgs.bytesize
+        return self._received_decrypted_msgs.bytesize + self._received_encrypted_msgs.bytesize
 
     @property
     def machine(self) -> BaseMachine:
