@@ -73,18 +73,18 @@ cdef class SessionPair:
     def __hash__(self):
         return hash((self.rx, self.tx))
 
+
 cdef class KxKkClientState:
-    def __init__(self, KxPair client_kp):
-        self.packet1 = None
-        self.session_pair = None
+    def __init__(self, KxPair client_kp, KxPublicKey server_public_key):
+        self.packet1 = KX_KK_Packet1(kx_kk_1(&self.state, server_public_key, client_kp))
         self.client_kp = client_kp
+        # protect state with a mutex
         self.mu = threading.Lock()
+        self._session_pair = None
 
     cpdef client_finish_kx_kk(self, KX_KK_Packet2 packet2):
         with self.mu:
-            if not self.packet1:
-                raise RuntimeError("client_finish_kx_kk called before client_init_kx_kk")
-            if self.session_pair is not None:
+            if self._session_pair is not None:
                 raise RuntimeError("client_finish_kx_kk already called")
             if packet2 is None:
                 raise ValueError("packet2 cannot be None")
@@ -92,18 +92,25 @@ cdef class KxKkClientState:
                 rx, tx = kx_kk_3(&self.state, packet2.packet, self.client_kp)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to finish key exchange") from ex
-            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            self._session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
             return self
+
+    @property
+    def session_pair(self):
+        with self.mu:
+            return self._session_pair
+
 
 cdef class KxXxClientState:
     def __init__(self, KxPair client_kp, Psk psk=None):
-        self.packet1 = None
-        self.packet3 = None
-        self.server_public_key = None
-        self.session_pair = None
+        self.packet1 = KX_XX_Packet1(kx_xx_1(&self.state, psk))
         self.client_kp = client_kp
         self.psk = psk
+        # protect state with a mutex
         self.mu = threading.Lock()
+        self._session_pair = None
+        self._server_public_key = None
+        self._packet3 = None
 
     def __str__(self) -> str:
         return f"""packet1: {self.packet1}
@@ -113,9 +120,7 @@ session_pair: {self.session_pair}"""
 
     cpdef client_process_kx_xx(self, KX_XX_Packet2 packet2):
         with self.mu:
-            if not self.packet1:
-                raise RuntimeError("client_process_kx_xx called before client_init_kx_xx")
-            if self.packet3:
+            if self._packet3:
                 raise RuntimeError("client_process_kx_xx already called")
             if packet2 is None:
                 raise ValueError("packet2 cannot be None")
@@ -123,19 +128,35 @@ session_pair: {self.session_pair}"""
                 rx, tx, peer_pk, packet3 = kx_xx_3(&self.state, packet2.packet, self.psk, self.client_kp)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to process second packet for key exchange") from ex
-            self.packet3 = KX_XX_Packet3(packet3)
-            self.server_public_key = KxPublicKey(peer_pk)
-            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            self._packet3 = KX_XX_Packet3(packet3)
+            self._server_public_key = KxPublicKey(peer_pk)
+            self._session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
             return self
+
+    @property
+    def session_pair(self):
+        with self.mu:
+            return self._session_pair
+
+    @property
+    def server_public_key(self):
+        with self.mu:
+            return self._server_public_key
+
+    @property
+    def packet3(self):
+        with self.mu:
+            return self._packet3
 
 
 cdef class KxXxServerState:
-    def __init__(self, Psk psk=None):
-        self.packet2 = None
-        self.client_public_key = None
-        self.session_pair = None
+    def __init__(self, KxPair server_kp, KX_XX_Packet1 packet1, Psk psk=None):
+        self.packet2 = KX_XX_Packet2(kx_xx_2(&self.state, packet1.packet, psk, server_kp))
         self.psk = psk
+        # protect state with a mutex
         self.mu = threading.Lock()
+        self._client_public_key = None
+        self._session_pair = None
 
     def __str__(self) -> str:
         return f"""packet2: {self.packet2}
@@ -144,19 +165,27 @@ session_pair: {self.session_pair}
 """
     cpdef server_finish_kx_xx(self, KX_XX_Packet3 packet3):
         with self.mu:
-            if self.session_pair is not None:
+            if self._session_pair is not None:
                 raise RuntimeError("server_finish_kx_xx already called")
-            if not self.packet2:
-                raise RuntimeError("server_finish_kx_xx called before server_process_kx_xx")
             if packet3 is None:
                 raise ValueError("packet3 cannot be None")
             try:
                 rx, tx, client_public_key = kx_xx_4(&self.state, packet3.packet, self.psk)
             except RuntimeError as ex:
                 raise KeyExchangeException("failed to finish key exchange") from ex
-            self.client_public_key = KxPublicKey(client_public_key)
-            self.session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
+            self._client_public_key = KxPublicKey(client_public_key)
+            self._session_pair = SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx))
             return self
+
+    @property
+    def session_pair(self):
+        with self.mu:
+            return self._session_pair
+
+    @property
+    def client_public_key(self):
+        with self.mu:
+            return self._client_public_key
 
 
 cdef class KxPublicKey:
@@ -230,6 +259,7 @@ cdef class KxPublicKey:
 
     def __hash__(self):
         return hash(bytes(self))
+
 
 cdef class KxSecretKey:
     def __init__(self, kp):
@@ -347,13 +377,10 @@ cdef class KxPair:
     cpdef client_init_kx_kk(self, KxPublicKey server_public_key):
         if server_public_key is None:
             raise ValueError("Server public key cannot be None")
-        cdef KxKkClientState state = KxKkClientState(self)
         try:
-            packet1 = kx_kk_1(&state.state, server_public_key, self)
-            state.packet1 = KX_KK_Packet1(packet1)
+            return KxKkClientState(self, server_public_key)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
-        return state
 
     cpdef server_process_kx_kk(self, KxPublicKey client_public_key, KX_KK_Packet1 packet1):
         if client_public_key is None:
@@ -367,24 +394,18 @@ cdef class KxPair:
         return SessionPair(rx=SecretBoxKey(rx), tx=SecretBoxKey(tx)), KX_KK_Packet2(packet2)
 
     cpdef client_init_kx_xx(self, Psk psk=None):
-        cdef KxXxClientState state = KxXxClientState(self, psk)
         try:
-            packet1 = kx_xx_1(&state.state, psk)
-            state.packet1 = KX_XX_Packet1(packet1)
+            return KxXxClientState(self, psk)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate first packet for key exchange") from ex
-        return state
 
     cpdef server_process_kx_xx(self, KX_XX_Packet1 packet1, Psk psk=None):
         if packet1 is None:
             raise ValueError("packet1 cannot be None")
-        cdef KxXxServerState state = KxXxServerState(psk)
         try:
-            packet2 = kx_xx_2(&state.state, packet1.packet, psk, self)
-            state.packet2 = KX_XX_Packet2(packet2)
+            return KxXxServerState(self, packet1, psk)
         except RuntimeError as ex:
             raise KeyExchangeException("failed to generate second packet for key exchange") from ex
-        return state
 
     @classmethod
     def gen(cls):

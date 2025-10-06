@@ -136,7 +136,6 @@ class KxKkClientState:
     """
 
     packet1: KX_KK_Packet1 | None
-    session_pair: SessionPair | None
 
     def client_finish_kx_kk(self, packet2: KX_KK_Packet2) -> Self:
         """
@@ -153,24 +152,32 @@ class KxKkClientState:
         """
         ...
 
+    @property
+    def session_pair(self) -> SessionPair | None: ...
+
 class KxXxClientState:
     packet1: KX_XX_Packet1 | None
-    packet3: KX_XX_Packet3 | None
-    session_pair: SessionPair | None
-    server_public_key: KxPublicKey | None
 
     def __init__(self, client_kp: KxPair, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
     def client_process_kx_xx(self, packet2: KX_XX_Packet2) -> Self: ...
+    @property
+    def session_pair(self) -> SessionPair | None: ...
+    @property
+    def server_public_key(self) -> KxPublicKey | None: ...
+    @property
+    def packet3(self) -> KX_XX_Packet3 | None: ...
 
 class KxXxServerState:
     packet2: KX_XX_Packet2 | None
-    session_pair: SessionPair | None
-    client_public_key: KxPublicKey | None
 
     def __init__(self, psk: Psk | None = None) -> None: ...
     def __str__(self) -> str: ...
     def server_finish_kx_xx(self, packet3: KX_XX_Packet3) -> Self: ...
+    @property
+    def session_pair(self) -> SessionPair | None: ...
+    @property
+    def client_public_key(self) -> KxPublicKey | None: ...
 
 class KxPair:
     """
