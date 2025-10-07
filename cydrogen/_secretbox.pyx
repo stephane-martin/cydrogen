@@ -238,4 +238,6 @@ cdef class SecretBox:
         computed_hash = hasher.digest()
         if transmitted_hash != computed_hash:
             raise DecryptException("Invalid hash")
+        if r.read(1):
+            raise DecryptException("Extra data found at the end of the file")
         return total_bytes_written
