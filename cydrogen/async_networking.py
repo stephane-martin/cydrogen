@@ -214,16 +214,20 @@ class KXProtocol(asyncio.BufferedProtocol):
         await self._closed_fut
 
     async def get_next_msg(self) -> tuple[bytes, int]:
-        return await self._received_decrypted_msgs.get()
+        payload, msg_id = await self._received_decrypted_msgs.get()
+        self.maybe_resume_reading()
+        return payload, msg_id
 
     def _handle_machine_events(self, events: list[MachineProducedEvent] | MachineProducedEvent | None) -> None:
         if events is None:
             return
         if isinstance(events, MachineProducedEvent):
             self._handle_machine_event(events)
+            self.maybe_pause_reading()
             return
         for event in events:
             self._handle_machine_event(event)
+            self.maybe_pause_reading()
 
     def _handle_machine_event(self, ev: MachineProducedEvent) -> None:
         match ev:
@@ -403,7 +407,6 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     def buffer_updated(self, nbytes: int) -> None:
         self._send_to_machine(self._machine.receive_data, nbytes)
-        self.maybe_pause_reading()  # TODO: move ?
 
     def maybe_pause_reading(self) -> None:
         if self._reading_paused:
