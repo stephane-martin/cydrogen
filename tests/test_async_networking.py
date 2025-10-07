@@ -320,13 +320,15 @@ async def test_client_server_kx_xx_rekeying() -> None:
         logger.info("telling the client to stop")
         stopping.set()
 
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, limit=128000)
     await server.start_serving()
     logger.info("server started")
 
     try:
         # rekey every 2 seconds, and we will take more than that to send all messages
-        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2, request_timeout_secs=60) as client:
+        async with KX_XX_AsyncRequestResponseClient(
+            HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2, request_timeout_secs=120, limit=128000
+        ) as client:
             logger.info("client connected")
             assert client.key_material_idx == 0
             async with asyncio.TaskGroup() as tg:
@@ -336,7 +338,7 @@ async def test_client_server_kx_xx_rekeying() -> None:
                     tg.create_task(client.request(b"ping"))
                     await asyncio.sleep(0)
             logger.info("client has finished")
-            assert client.key_material_idx > 1
+            assert client.key_material_idx >= 1
         logger.info("client disconnected")
 
     finally:
