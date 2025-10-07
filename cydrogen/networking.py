@@ -652,7 +652,7 @@ class BaseMachine:
             raise
 
     def trigger_rekey(self) -> None:
-        pass
+        logger.warning("Rekeying is not supported in this state machine")
 
     def trigger_connection_lost(self, exc: Exception | None) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.CONNECTION_LOST, exc)
@@ -891,6 +891,12 @@ class KX_N_ClientStateMachine(BaseMachine):
         return self._server_public_key
 
     def trigger_rekey(self) -> None:
+        if self._state.pending_initial_kx():
+            logger.warning("Cannot rekey while initial key exchange is in progress")
+            return
+        if self._state.pending_rekey():
+            logger.info("Rekeying already in progress")
+            return
         logger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
@@ -1046,6 +1052,13 @@ class KX_KK_ClientStateMachine(BaseMachine):
         return self._server_public_key
 
     def trigger_rekey(self) -> None:
+        if self._state.pending_initial_kx():
+            logger.warning("Cannot rekey while initial key exchange is in progress")
+            return
+        if self._state.pending_rekey():
+            logger.info("Rekeying already in progress")
+            return
+        logger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
 
@@ -1242,6 +1255,13 @@ class KX_XX_ClientStateMachine(BaseMachine):
         return self._server_public_key
 
     def trigger_rekey(self) -> None:
+        if self._state.pending_initial_kx():
+            logger.warning("Cannot rekey while initial key exchange is in progress")
+            return
+        if self._state.pending_rekey():
+            logger.info("Rekeying already in progress")
+            return
+        logger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
 
