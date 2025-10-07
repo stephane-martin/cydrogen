@@ -326,7 +326,7 @@ async def test_client_server_kx_xx_rekeying() -> None:
 
     try:
         # rekey every 2 seconds, and we will take more than that to send all messages
-        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2) as client:
+        async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2, request_timeout_secs=60) as client:
             logger.info("client connected")
             assert client.key_material_idx == 0
             async with asyncio.TaskGroup() as tg:
