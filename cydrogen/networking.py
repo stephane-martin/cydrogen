@@ -596,15 +596,19 @@ class BaseMachine:
     def receive_data(self, nbytes: int) -> list[MachineProducedEvent]:  # noqa: PLR0912
         self._read_buffers.buffer_updated(nbytes)
         events: list[MachineProducedEvent] = []
+        old_state: MachineState = self._state
+
         try:
             # the chunk of data we just received may generate multiple events, so we loop until no more events can be generated
             while True:
-                mtype = self._read_buffers.peek_message_type()
+                old_state = self._state
+                mtype = self._read_buffers.peek_message_type()  # won't raise
                 if mtype is None:
                     # not enough data to determine the type of the next message
                     return events
-                old_state = self._state
                 ev: MachineProducedEvent | None = None
+                # the selected trigger may raise KeyExchangeException or other exceptions
+                # if no exception is raised, the state machine may advance to a new state
                 match mtype:
                     case MessageType.KX_N_PACKET1 | MessageType.KX_KK_PACKET1 | MessageType.KX_XX_PACKET1:
                         ev = self._trigger_receive_packet1()
@@ -635,7 +639,7 @@ class BaseMachine:
             self._state = MachineState.READER_WRITER_CLOSED
             raise
         except Exception as ex:
-            old_state = self._state
+            # ensure we raise a KeyExchangeException if the error happened during a key exchange
             self._state = MachineState.READER_WRITER_CLOSED
             if old_state.pending_initial_kx():
                 raise KeyExchangeException("Initial key exchange failed") from ex
@@ -699,17 +703,19 @@ class BaseMachine:
         Returns:
             The event produced by the state transition, if any.
         """
+        old_state: MachineState = self._state
         try:
-            dest = self._transitions.get(ext_event, self._state)
-            ev = dest.callback(*args)
+            old_state = self._state
+            dest = self._transitions.get(ext_event, self._state)  # may raise if the transition is invalid
+            ev = dest.callback(*args)  # may raise if the callback fails
             self._state = dest.state
             return ev
         except KeyExchangeException:
             self._state = MachineState.READER_WRITER_CLOSED
             raise
         except Exception as ex:
-            old_state = self._state
             self._state = MachineState.READER_WRITER_CLOSED
+            # ensure we raise a KeyExchangeException if the error happened during a key exchange
             if old_state.pending_initial_kx():
                 raise KeyExchangeException(f"Initial key exchange failed: {ex}") from ex
             if old_state.pending_rekey():
