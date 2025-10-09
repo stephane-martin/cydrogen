@@ -288,25 +288,17 @@ class Transitions:
     """
 
     def __init__(self) -> None:
-        self._t: dict[ExternalEvent, TransitionsByOrigState] = {
-            ExternalEvent.CONNECTION_MADE: {},
-            ExternalEvent.RECEIVE_PACKET1: {},
-            ExternalEvent.RECEIVE_PACKET2: {},
-            ExternalEvent.RECEIVE_PACKET3: {},
-            ExternalEvent.RECEIVE_SERVER_ACK: {},
-            ExternalEvent.REKEY: {},
-        }
+        self._t: dict[ExternalEvent, TransitionsByOrigState] = {}
 
     def add_many(self, ev: ExternalEvent, transitions: TransitionsByOrigState) -> None:
-        if ev in self._t:
-            raise KeyError(f"Event {ev} already exists in transitions")
-        self._t[ev] = transitions
+        if ev not in self._t:
+            self._t[ev] = {}
+        for state, dest in transitions.items():
+            self._t[ev][state] = dest
 
     def add_one(self, ev: ExternalEvent, orig_state: MachineState, dest_state: MachineState, callback: Callable) -> None:
         if ev not in self._t:
-            raise KeyError(f"Event {ev} not found in transitions")
-        if orig_state in self._t[ev]:
-            raise KeyError(f"Transition for event {ev} and state {orig_state} already exists")
+            self._t[ev] = {}
         self._t[ev][orig_state] = TransitionDestination(state=dest_state, callback=callback)
 
     def get(self, event: ExternalEvent, orig_state: MachineState) -> TransitionDestination:
