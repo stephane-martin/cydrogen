@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.12, 3.13]   
+        python-version: [3.12, 3.13, 3.14]   
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v5
@@ -156,7 +156,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.12, 3.13]
+        python-version: [3.12, 3.13, 3.14]
     steps:
       - name: checkout cydrogen repo
         uses: actions/checkout@v5
