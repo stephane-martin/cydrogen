@@ -458,13 +458,15 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._remove_old_keys_task = None
 
         if self._decrypt_task is not None and self._client_handler is None:
+            # cancel the executor client-side
+
             # because we received connection_lost, it is not possible anymore to send encrypted messages
             # because self._client_handler is None, we know we are client side
             # because the queue of encrypted messages has been closed, we know that the decrypt task will finish soon
             # when _decrypt_task finishes, we also know we wont be decrypting any more message
             # so in that case we can shutdown the executor as no encryption/decryption will happen anymore
             def shutdown_client_executor(_: asyncio.Future) -> None:
-                self._executor.shutdown(wait=False)
+                self._executor.shutdown(wait=False, cancel_futures=True)
 
             self._decrypt_task.add_done_callback(shutdown_client_executor)
 
@@ -554,7 +556,7 @@ async def _open_connection(
     try:
         transport, protocol = await _connect(host, port, protocol_factory, retry, retry_wait)
     except:
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
         raise
     try:
         await protocol.wait_for_key_exchange()
@@ -1090,7 +1092,7 @@ async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port
         try:
             original_wakeup()
         finally:
-            executor.shutdown(wait=False)
+            executor.shutdown(wait=False, cancel_futures=True)
 
     server._wakeup = types.MethodType(_wakeup, server)  # type: ignore[attr-defined]  # noqa: SLF001
     return server
@@ -1121,7 +1123,7 @@ async def start_kx_n_server(
     try:
         return await _loop_create_server(factory, host, port, executor)
     except:
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
         raise
 
 
@@ -1149,7 +1151,7 @@ async def start_kx_kk_server(
     try:
         return await _loop_create_server(factory, host, port, executor)
     except:
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
         raise
 
 
@@ -1182,5 +1184,5 @@ async def start_kx_xx_server(
     try:
         return await _loop_create_server(factory, host, port, executor)
     except:
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
         raise
