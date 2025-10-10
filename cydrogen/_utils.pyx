@@ -11,6 +11,7 @@ from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
 
 import asyncio
+import inspect
 import io
 import os
 import pathlib
@@ -353,9 +354,9 @@ cdef class AsyncSafeReader:
             raise ValueError("reader cannot be None")
         if not hasattr(reader, "read"):
             raise TypeError("reader must be a file-like object with a 'read' method")
-        if not asyncio.iscoroutinefunction(reader.read):
+        if not inspect.iscoroutinefunction(reader.read):
             raise TypeError("reader must be an async file-like object with an 'read' method")
-        self.has_readexactly = hasattr(reader, "readexactly") and asyncio.iscoroutinefunction(reader.readexactly)
+        self.has_readexactly = hasattr(reader, "readexactly") and inspect.iscoroutinefunction(reader.readexactly)
         self.reader = reader
 
     async def readexactly(self, size_t length):
