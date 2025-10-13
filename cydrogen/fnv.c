@@ -7,7 +7,7 @@
 
 #define PyHASH_MULTIPLIER 1000003UL
 
-int64_t fnv_impl(const void *src, uint64_t len, uint32_t prefix, uint32_t suffix) {
+static int64_t fnv_impl(const void *src, uint64_t len, uint32_t prefix, uint32_t suffix) {
     const unsigned char *p = src;
     uint64_t x;
     uint64_t remainder, blocks;
@@ -39,4 +39,15 @@ int64_t fnv_impl(const void *src, uint64_t len, uint32_t prefix, uint32_t suffix
         x = (uint64_t) -2;
     }
     return x;
+}
+
+Py_hash_t cy_hash_buffer(const void *buf, Py_ssize_t len, uint32_t fnv_prefix, uint32_t fnv_suffix)
+{
+#if PY_VERSION_HEX >= 0x030E00F0
+    (void)fnv_prefix;
+    (void)fnv_suffix;
+    return Py_HashBuffer(buf, len);
+#else
+    return fnv_impl(buf, len, fnv_prefix, fnv_suffix);
+#endif
 }

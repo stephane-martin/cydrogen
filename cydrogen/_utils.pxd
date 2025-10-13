@@ -98,6 +98,9 @@ cpdef store16(unsigned char[:] dst, uint16_t src)
 cpdef encode_length(obj)
 
 
+cpdef Py_hash_t hash_buffer(const unsigned char[:] src) noexcept
+
+
 @cython.final
 cdef class FileOpener:
     cdef object fileobj
@@ -130,4 +133,3 @@ cdef class SafeWriter:
 cdef make_safe_reader(fileobj)
 cdef make_async_safe_reader(reader)
 cdef make_safe_writer(fileobj)
-cpdef int64_t fnv(const unsigned char[:] src) noexcept
