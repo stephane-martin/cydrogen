@@ -257,36 +257,6 @@ class SafeWriter:
         """
         ...
 
-class TeeWriter:
-    def __init__(self, w1: Writer, w2: Writer) -> None:
-        """
-        Initialize the TeeWriter.
-
-        Args:
-            w1: The first writer (must have a write method).
-            w2: The second writer (must have a write method).
-
-        Raises:
-            ValueError: If either w1 or w2 is None.
-            TypeError: If either w1 or w2 does not have a 'write' method.
-        """
-        ...
-
-    def write(self, buf: Buffer) -> int:
-        """
-        Write bytes to both writers.
-
-        Args:
-            buf: A buffer containing bytes to write. Must be a bytes-like object.
-
-        Returns:
-            The number of bytes written to both writers.
-
-        Raises:
-            OSError: If the two writers do not write the same number of bytes.
-        """
-        ...
-
 class FileOpener:
     """
     A context manager for opening files or file-like objects.
