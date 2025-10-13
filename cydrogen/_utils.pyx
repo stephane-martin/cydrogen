@@ -436,20 +436,6 @@ cdef make_safe_writer(fileobj):
     return SafeWriter(fileobj)
 
 
-cdef class TeeWriter:
-    def __init__(self, w1, w2):
-        # wrap the writers in SafeWriter to ensure they both write the same number of bytes
-        self.w1 = make_safe_writer(w1)
-        self.w2 = make_safe_writer(w2)
-
-    cpdef write(self, const unsigned char[:] buf):
-        cdef size_t n1 = self.w1.write(buf)
-        cdef size_t n2 = self.w2.write(buf[0:n1])
-        if n1 != n2:
-            raise OSError("Writers did not write the same number of bytes")
-        return n1
-
-
 cpdef int64_t fnv(const unsigned char[:] src) noexcept:
     if src is None:
         return 0

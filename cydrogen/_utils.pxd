@@ -127,13 +127,6 @@ cdef class SafeWriter:
     cpdef write(self, const unsigned char[:] buf)
 
 
-@cython.final
-cdef class TeeWriter:
-    cdef object w1
-    cdef object w2
-    cpdef write(self, const unsigned char[:] buf)
-
-
 cdef make_safe_reader(fileobj)
 cdef make_async_safe_reader(reader)
 cdef make_safe_writer(fileobj)
