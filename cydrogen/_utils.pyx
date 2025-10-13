@@ -5,7 +5,6 @@ cimport cython
 from cpython.buffer cimport PyBuffer_FillInfo, PyBUF_WRITABLE, PyBUF_WRITE
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.memoryview cimport PyMemoryView_FromMemory
-from libc.stdint cimport int64_t
 from libc.stdint cimport uint64_t
 from libc.stdint cimport uint32_t
 from libc.stdint cimport uint16_t
@@ -23,6 +22,18 @@ cdef uint64_t increment = 2
 
 cdef uint32_t fnv_prefix = int.from_bytes(os.urandom(4), "little")
 cdef uint32_t fnv_suffix = int.from_bytes(os.urandom(4), "little")
+
+
+cdef extern from "fnv.h":
+    Py_hash_t cy_hash_buffer(const void *buf, Py_ssize_t len, uint32_t prefix, uint32_t suffix)
+
+
+cpdef Py_hash_t hash_buffer(const unsigned char[:] src) noexcept:
+    if src is None:
+        return 0
+    if len(src) == 0:
+        return 0
+    return cy_hash_buffer(&src[0], len(src), fnv_prefix, fnv_suffix)
 
 
 cdef class Counter:
@@ -93,8 +104,7 @@ cdef class SafeMemory:
     def __hash__(self):
         if not self.readonly_protected:
             raise TypeError("unhashable because not readonly")
-        # TODO: replace with Py_HashBuffer when python 3.14 is the minimum version
-        return fnv(self)
+        return hash_buffer(self)
 
     @property
     def readonly(self):
@@ -434,11 +444,3 @@ cdef make_safe_writer(fileobj):
     if writer_is_safe(fileobj):
         return fileobj
     return SafeWriter(fileobj)
-
-
-cpdef int64_t fnv(const unsigned char[:] src) noexcept:
-    if src is None:
-        return 0
-    if len(src) == 0:
-        return 0
-    return fnv_impl(&src[0], len(src), fnv_prefix, fnv_suffix)
