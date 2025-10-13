@@ -219,6 +219,10 @@ class RWLock:
     Multiple readers can hold the lock simultaneously, as long as there is no writer.
     When a writer is waiting, new readers are blocked until the writer has acquired and released the lock.
     Only one writer can hold the lock at a time, and no readers can hold the lock while a writer is active.
+
+    Note:
+        This is a non-recursive lock. Attempting to acquire a lock that is already held by the same thread
+        will result in a deadlock. This includes attempting to "upgrade" a read lock to a write lock.
     """
     def __init__(self) -> None: ...
     def acquire_readonly(self) -> None:
