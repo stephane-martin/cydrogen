@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - key exchange implementations for the N/KK/XX protocols.
 - TCP clients and servers supporting the different N/KK/XX key exchange protocols.
+- automatic rekeying between client and server.
+
+### Changed
+
+- various performance improvements and simplifications.
 
 ## v0.0.10 - 2025-06-12
 
