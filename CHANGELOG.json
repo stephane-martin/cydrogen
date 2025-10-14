@@ -2,7 +2,11 @@
     "unreleased": {
         "added": [
             "key exchange implementations for the N/KK/XX protocols.",
-            "TCP clients and servers supporting the different N/KK/XX key exchange protocols."
+            "TCP clients and servers supporting the different N/KK/XX key exchange protocols.",
+            "automatic rekeying between client and server."
+        ],
+        "changed": [
+            "various performance improvements and simplifications."
         ]
     },
     "v0.0.10": {
