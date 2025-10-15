@@ -17,12 +17,13 @@ develop.fish				export-ignore
 mkdocs.yml					export-ignore
 zizmor.yml					export-ignore
 styles/						export-ignore
+GEMINI.md					export-ignore
 
 # only used by Github Code Scanning
 Makefile					export-ignore
 **/Makefile.fake			export-ignore
 
-# markdown sources to built the readthedocs documentation
+# markdown sources to build the readthedocs documentation
 docs/						export-ignore
 CHANGELOG.json				export-ignore
 CHANGELOG.tpl.md			export-ignore
