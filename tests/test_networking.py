@@ -1,12 +1,12 @@
 import asyncio
-import logging
 import threading
 import time
 
 import pytest
+from cydrogen import get_logger
 from cydrogen._networking import MsgQueue, RWLock
 
-logger = logging.getLogger("cydrogen.tests")
+logger = get_logger("cydrogen.tests")
 
 
 @pytest.mark.asyncio

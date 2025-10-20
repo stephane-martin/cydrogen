@@ -72,6 +72,7 @@ from .exceptions import (
     SignException,
     VerifyException,
 )
+from .logs import get_logger, set_logger, set_own_logger
 
 __all__ = [
     "ENC_MSG_HEADER_SIZE",
@@ -127,6 +128,7 @@ __all__ = [
     "client_init_kx_n",
     "encode_length",
     "gen_random_buffer",
+    "get_logger",
     "hash_file",
     "load16",
     "load32",
@@ -136,6 +138,8 @@ __all__ = [
     "random_uniform",
     "randomize_buffer",
     "server_finish_kx_n",
+    "set_logger",
+    "set_own_logger",
     "shuffle_buffer",
     "sign_file",
     "store16",

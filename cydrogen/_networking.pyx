@@ -10,15 +10,15 @@ from ._decls cimport hydro_secretbox_HEADERBYTES
 from ._utils cimport load64, encode_length, store64
 
 import asyncio
-import logging
 import threading
 from collections import deque
 
 from .exceptions import MessageTooBigException, SyncMsgQueueShutdown
+from .logs import get_logger
 from ._datastructs import MessageType
 
 
-logger = logging.getLogger("cydrogen")
+logger = get_logger("cydrogen")
 
 
 cdef class BytearrayBuilder:

@@ -7,12 +7,14 @@ nox.options.reuse_existing_virtualenvs = True
 nox.options.error_on_missing_interpreters = True
 
 PYPROJECT = nox.project.load_toml("pyproject.toml")
+DEPS = PYPROJECT["project"]["dependencies"]
 SUPPORTED_PYTHON_VERSIONS = nox.project.python_versions(PYPROJECT)
 ROOT = pathlib.Path(__file__).parent.resolve()
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def develop(session: nox.Session) -> None:
+    session.install(*DEPS)
     session.install(*nox.project.dependency_groups(PYPROJECT, "develop"))
     session.install(*nox.project.dependency_groups(PYPROJECT, "build"))
     session.install(*nox.project.dependency_groups(PYPROJECT, "test"))
@@ -24,6 +26,7 @@ def develop(session: nox.Session) -> None:
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS[-1])
 def lint(session: nox.Session) -> None:
     print()
+    session.install(*DEPS)
     session.install(*nox.project.dependency_groups(PYPROJECT, "lint"))
     print("\n=== linters ===\n")
 
