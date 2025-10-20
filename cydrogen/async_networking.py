@@ -1,6 +1,5 @@
 import asyncio
 import contextvars
-import logging
 import types
 from abc import ABC, abstractmethod
 from collections import deque
@@ -16,6 +15,7 @@ from ._kx_n import (
 from ._networking import MsgQueue
 from ._utils import Counter, load64, store64
 from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, MessageTooBigException
+from .logs import get_logger
 from .networking import (
     CANCEL_MESSAGE_ID,
     EOF_EXCEPTION,
@@ -35,7 +35,7 @@ from .networking import (
     ReceivedEncryptedMessage,
 )
 
-logger = logging.getLogger("cydrogen")
+logger = get_logger("cydrogen")
 
 
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB
@@ -184,6 +184,7 @@ class KXProtocol(asyncio.BufferedProtocol):
         self.peername: str = ""
 
         self._transport: asyncio.Transport
+        self.blogger = logger.bind(role="server_protocol" if client_handler else "client_protocol")
 
     @property
     def key_material_idx(self) -> int | None:
@@ -291,28 +292,29 @@ class KXProtocol(asyncio.BufferedProtocol):
         return self._transport.can_write_eof()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        logger.debug("KxProtocol connection_made called")
+        self.blogger.debug("KxProtocol connection_made")
         assert isinstance(transport, asyncio.Transport)
         self._transport = transport
         self.peername = str(transport.get_extra_info("peername", ""))
+        self.blogger = self.blogger.bind(peer=self.peername)
         if self._client_handler is None:
-            logger.info("connected to server %s", self.peername)
+            self.blogger.info("connected to server")
         else:
-            logger.info("new connection from client %s", self.peername)
+            self.blogger.info("new connection from client")
         self._kx_completed.add_done_callback(self.key_exchange_completed)
-        self._send_to_machine(self._machine.trigger_connection_made)
+        self._send_to_machine(self._machine.trigger_connection_made, self.peername)
 
     def key_exchange_completed(self, kx_completed: asyncio.Future) -> None:
         if kx_completed.cancelled():
-            logger.warning("Key exchange with %s was cancelled", self.peername)
+            self.blogger.warning("Key exchange cancelled")
             self._transport.abort()
             return
         if kx_completed.exception() is not None:
-            logger.error("Key exchange with %s failed: %s", self.peername, kx_completed.exception())
+            self.blogger.error("Key exchange failed", error=kx_completed.exception())
             self._transport.abort()
             return
 
-        logger.info("key exchange with %s completed with success", self.peername)
+        self.blogger.info("Key exchange success")
 
         self._task = self._loop.create_task(self.validate_and_handle())
 
@@ -328,13 +330,13 @@ class KXProtocol(asyncio.BufferedProtocol):
 
         This coroutine is scheduled as a task by the Protocol when the key exchange is completed successfully.
         """
-        logger.info("starting to decrypt received messages")
+        self.blogger.info("starting to decrypt received messages")
         while True:
             try:
                 incoming, _ = await self._received_encrypted_msgs.get()
             except Exception as ex:  # noqa: BLE001
                 # this means that the queue of encrypted messages has been closed
-                logger.info("decrypt received messages has finished: %s", ex)
+                self.blogger.info("decrypt received messages finished", reason=ex)
                 # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
                 self._received_decrypted_msgs.close(ex)
                 return
@@ -354,31 +356,31 @@ class KXProtocol(asyncio.BufferedProtocol):
         try:
             await self._decrypt_received_messages()
         except Exception:
-            logger.exception("Continuous decryption task failed")
+            self.blogger.exception("Continuous decryption task failed")
             self._transport.abort()
 
     async def continuous_rekey(self) -> None:
         if self._rekey_secs is None:
             return
-        logger.info("starting continuous rekey task, rekey every %d seconds", self._rekey_secs)
+        self.blogger.info("starting continuous rekey task", period=self._rekey_secs)
         try:
             while True:
                 await asyncio.sleep(self._rekey_secs)
                 self._send_to_machine(self._machine.trigger_rekey)
         except Exception as ex:  # noqa: BLE001
-            logger.warning("Continuous rekey task failed: %s", ex)
+            self.blogger.warning("Continuous rekey task failed", error=ex)
             self._transport.abort()
 
     async def continuous_remove_old_keys(self) -> None:
         if self._rekey_grace_secs is None:
             return
-        logger.info("starting continuous remove old keys task, remove oldest key every %d seconds", self._rekey_grace_secs)
+        self.blogger.info("starting continuous remove old keys task", period=self._rekey_grace_secs)
         try:
             while True:
                 await asyncio.sleep(self._rekey_grace_secs)
                 self._machine.remove_oldest_material()
         except Exception:
-            logger.exception("Continuous remove old keys task failed")
+            self.blogger.exception("Continuous remove old keys task failed")
             self._transport.abort()
 
     async def validate_and_handle(self) -> None:
@@ -392,12 +394,12 @@ class KXProtocol(asyncio.BufferedProtocol):
             try:
                 await self._client_handler(StreamReaderWriter(self))
             except asyncio.CancelledError:
-                logger.info("Client handler for %s cancelled", self.peername)
+                self.blogger.info("Client handler cancelled")
             except Exception:
-                logger.exception("Client handler for %s", self.peername)
+                self.blogger.exception("Client handler failed")
             finally:
                 self._transport.close()
-                logger.info("Client %s disconnected", self.peername)
+                self.blogger.info("Client disconnected")
 
     async def wait_for_key_exchange(self) -> None:
         await self._kx_completed
@@ -413,7 +415,7 @@ class KXProtocol(asyncio.BufferedProtocol):
             return
         if self.received_size > 2 * self._limit:
             try:
-                logger.info("Transport was asked to pause reading, received_size: %d, limit: %d", self.received_size, self._limit)
+                self.blogger.info("Pause reading", received_size=self.received_size, limit=self._limit)
                 self._transport.pause_reading()
                 self._reading_paused = True
             except NotImplementedError:
@@ -423,19 +425,19 @@ class KXProtocol(asyncio.BufferedProtocol):
         if not self._reading_paused:
             return
         if self.received_size <= self._limit:
-            logger.info("Transport asked to resume reading, received_size: %d, limit: %d", self.received_size, self._limit)
+            self.blogger.info("Resume reading", received_size=self.received_size, limit=self._limit)
             self._reading_paused = False
             self._transport.resume_reading()
 
     def connection_lost(self, exc: Exception | None) -> None:
-        logger.info("connection lost for %s, exc: %s", self.peername, exc)
         if isinstance(exc, ConnectionError):
             exc = EOF_EXCEPTION
+        self.blogger.info("connection lost", reason=exc)
         try:
             self._send_to_machine(self._machine.trigger_connection_lost, exc)
         except Exception as ex:  # noqa: BLE001
             # we need to execute the rest of the function even if some rekey exception happens
-            logger.warning("handling lost connection: %s", ex)
+            self.blogger.warning("error handling lost connection", error=ex)
         self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         # make wait_closed() return
         if not self._closed_fut.done():
@@ -471,11 +473,11 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._decrypt_task.add_done_callback(shutdown_client_executor)
 
     def eof_received(self) -> bool:
-        logger.info("eof received from %s", self.peername)
+        self.blogger.info("eof received")
         try:
             self._send_to_machine(self._machine.trigger_reader_eof)
         except Exception as ex:  # noqa: BLE001
-            logger.warning("handling eof received: %s", ex)
+            self.blogger.warning("error handling eof received", error=ex)
         self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
         return False
 
@@ -496,11 +498,11 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._drain_futures.remove(waiter)
 
     def pause_writing(self) -> None:
-        logger.info("pause_writing called: Transport asked protocol to pause writing")
+        self.blogger.info("Pause writing")
         self._writing_paused = True
 
     def resume_writing(self) -> None:
-        logger.info("resume_writing called: Transport asked protocol to resume writing")
+        self.blogger.info("Resume writing")
         self._writing_paused = False
 
         for waiter in self._drain_futures:
@@ -519,19 +521,20 @@ async def _connect(
     retry_wait: int,
 ) -> tuple[asyncio.Transport, KXProtocol]:
     loop = asyncio.get_running_loop()
+    blogger = logger.bind(server_host=host, server_port=port, role="client")
     while True:
         try:
-            logger.info("Connecting to %s:%d...", host, port)
+            blogger.info("Connecting...")
             transport, protocol = await loop.create_connection(protocol_factory, host, port)
-            logger.info("Connected to %s:%d", host, port)
+            blogger.info("Connected")
             return transport, protocol
         except ConnectionRefusedError:
             if retry == 0:
                 raise
         retry -= 1
-        logger.warning("Connection to %s:%d failed", host, port)
+        blogger.warning("Connection failed")
         if retry_wait > 0:
-            logger.info("Retrying connection in %d seconds...", retry_wait)
+            blogger.info("Retrying soon", wait=retry_wait)
             await asyncio.sleep(retry_wait)
 
 
@@ -684,6 +687,7 @@ class BaseAsyncRequestResponseClient:
 
         self._rw: StreamReaderWriter
         self._read_task: asyncio.Task
+        self.blogger = logger.bind(role="async_request_response_client")
 
     async def connect(self) -> None:
         self._read_task = asyncio.create_task(self._read_responses())
@@ -707,7 +711,7 @@ class BaseAsyncRequestResponseClient:
         try:
             await self._read_task
         except Exception as ex:  # noqa: BLE001
-            logger.info("Read task stopped with error: %s", ex)
+            self.blogger.info("Read task stopped", error=ex)
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -756,7 +760,6 @@ class BaseAsyncRequestResponseClient:
             # The server did not respond in time.
             # Attempt to cancel the request on the server side.
             await self._cancel_request(msg_id)
-            logger.info("Request timed out: %s", msg_id)
             raise
         except asyncio.CancelledError:
             # The user cancelled the request before the server responded.
@@ -774,9 +777,9 @@ class BaseAsyncRequestResponseClient:
 
         try:
             await self._rw.write_cancel_msg(msg_id)
-            logger.info("Request cancelled: %s", msg_id)
+            self.blogger.debug("Request cancelled", msg_id=msg_id)
         except Exception as ex:  # noqa: BLE001
-            logger.info("Failed to cancel request: %s: %s", msg_id, ex)
+            self.blogger.info("Failed to cancel request", msg_id=msg_id, error=ex)
 
     async def _read_responses(self) -> None:
         # read responses from the server in a loop
@@ -797,7 +800,7 @@ class BaseAsyncRequestResponseClient:
         # this method is called when the client receives a response with an unknown msg_id
         # you can override this method to handle unexpected responses
         # by default, we just ignore it
-        logger.warning("Unexpected response received. nbytes = %s, msg_id = %s", len(msg), msg_id)
+        self.blogger.warning("Unexpected response received", nb_bytes=len(msg), msg_id=msg_id)
 
 
 class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
@@ -829,6 +832,7 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self.received_msg_max_size = received_msg_max_size
         self._rekey_secs = rekey_secs
         self._rekey_grace_secs = rekey_grace_secs
+        self.blogger = self.blogger.bind(client_type="KX_N", server_host=host, server_port=port)
 
     async def connect(self) -> None:
         self._rw = await open_kx_n_connection(
@@ -876,6 +880,7 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self.received_msg_max_size = received_msg_max_size
         self._rekey_secs = rekey_secs
         self._rekey_grace_secs = rekey_grace_secs
+        self.blogger = self.blogger.bind(client_type="KX_KK", server_host=host, server_port=port)
 
     async def connect(self) -> None:
         self._rw = await open_kx_kk_connection(
@@ -925,6 +930,7 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         self.received_msg_max_size = received_msg_max_size
         self._rekey_secs = rekey_secs
         self._rekey_grace_secs = rekey_grace_secs
+        self.blogger = self.blogger.bind(client_type="KX_XX", server_host=host, server_port=port)
 
     async def connect(self) -> None:
         self._rw = await open_kx_xx_connection(
@@ -981,21 +987,23 @@ class BaseServerHandler(ABC):
         self._stopping: bool = False
         self.rw: StreamReaderWriter
         self._msgid_var: contextvars.ContextVar = contextvars.ContextVar("msgid")
+        self.blogger = logger.bind(role="server_handler")
 
     async def handle(self, rw: StreamReaderWriter) -> None:
         # note: self.handle is a StreamHandlerFunction
         self.rw = rw
+        self.blogger = self.blogger.bind(peer=rw.peername)
         try:
             while not self._stopping:
                 msg, msg_id = await rw.get_next_msg()  # may raise when no more messages
                 self._process_msg(msg, msg_id)  # can't raise
         except EOFError:
-            logger.info("EOF received")
+            self.blogger.info("EOF received")
         except Exception as ex:  # noqa: BLE001
-            logger.warning("While reading next message: %s", ex)
+            self.blogger.warning("Error reading next message", error=ex)
         finally:
             nb = self._tasks.cancel_all()  # cancel any pending tasks
-            logger.info("Cancelled pending tasks: %s", nb)
+            self.blogger.info("Cancelled pending tasks", nb_tasks=nb)
             rw.close()
             await rw.wait_closed()
 
@@ -1018,11 +1026,11 @@ class BaseServerHandler(ABC):
     def _cancel(self, msg: bytes) -> None:
         try:
             msg_id = load64(msg)
-            logger.info("Received cancel for request: %s (%s)", msg_id, self.rw.peername)
+            self.blogger.debug("Cancelling request", msg_id=msg_id)
             self._tasks.cancel(msg_id)
         except ValueError:
             # malformed cancel message
-            logger.warning("Received malformed cancel message (%s)", self.rw.peername)
+            logger.warning("Received malformed cancel message")
 
     async def _handle_message(self, msg: bytes, msg_id: int) -> None:
         self._msgid_var.set(msg_id)
@@ -1031,17 +1039,17 @@ class BaseServerHandler(ABC):
                 self._stopping = True
                 self.rw.close()
         except MessageTooBigException:
-            logger.error("Server response is too big (incoming msg_id: %d)", msg_id)  # noqa: TRY400
+            self.blogger.error("Server response is too big", msg_id=msg_id)  # noqa: TRY400
             self._stopping = True
             self.rw.close()
         except InvalidTransitionError as ex:
             if ex.writer_closed():
                 # don't want to spam the logs with the full stack traces if the client closed the connection
-                logger.warning("Cannot write response for %s: connection closed", msg_id)
+                self.blogger.warning("Cannot write response: connection closed", msg_id=msg_id)
             else:
-                logger.exception("Error while handling message %s", msg_id)
+                self.blogger.exception("Error handling message", msg_id=msg_id)
         except Exception:
-            logger.exception("Error while handling message %s", msg_id)
+            self.blogger.exception("Error handling message", msg_id=msg_id)
 
     @abstractmethod
     async def handle_message(self, msg: bytes, msg_id: int) -> bool:

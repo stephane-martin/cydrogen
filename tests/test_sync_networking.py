@@ -1,7 +1,5 @@
-import logging
-
 import pytest
-from cydrogen import KeyExchangeException, KxPair, KxPublicKey, Psk
+from cydrogen import KeyExchangeException, KxPair, KxPublicKey, Psk, get_logger
 from cydrogen.sync_networking import (
     BaseTCPClient,
     BaseTCPHandler,
@@ -44,7 +42,7 @@ MESSAGES = [
     b"ten",
 ]
 
-logger = logging.getLogger("cydrogen.tests")
+logger = get_logger("cydrogen.tests")
 
 
 class H_Mixin(BaseTCPHandler):

@@ -1,7 +1,6 @@
 # note that this module does not contain any networking code, it is just the state machines used by the networking code.
 # in particular, it does not use asyncio or any other networking library.
 
-import logging
 import os
 import sys
 from collections.abc import Buffer, Callable
@@ -32,8 +31,9 @@ from ._kx_n import (
 from ._networking import BytearrayBuilder, ReadBuffers, RWLock
 from ._secretbox import SecretBox
 from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
+from .logs import get_logger
 
-logger = logging.getLogger("cydrogen")
+logger = get_logger("cydrogen")
 
 CANCEL_MESSAGE_ID: int = 0
 """
@@ -335,12 +335,13 @@ class Transitions:
                 if orig_state not in valid_states or dest.state not in valid_states:
                     to_remove[event].add(orig_state)
 
+        blogger = logger.bind()
         for event, orig_states in to_remove.items():
             for orig_state in orig_states:
-                logger.debug("Removing: %s => %s => ...", orig_state, event)
+                blogger.debug("Removing transition", orig_state=orig_state, ev=event)
                 del self._t[event][orig_state]
             if not self._t[event]:
-                logger.debug("Removing event: %s", event)
+                blogger.debug("Removing event", ev=event)
                 del self._t[event]
 
 
@@ -520,6 +521,8 @@ class BaseMachine:
 
         self.exception: Exception | None = None
 
+        self.blogger = logger.bind()
+
     @property
     def key_material_idx(self) -> int | None:
         """
@@ -532,6 +535,7 @@ class BaseMachine:
 
     def _replace_current_material(self) -> None:
         # we lock _material_lock, so this method is thread-safe
+        blogger = self.blogger.bind(action="new_session_keys")
         with self._material_lock.readwrite:
             if self._candidate_pair is None:
                 raise RuntimeError("candidate pair not set")
@@ -540,7 +544,7 @@ class BaseMachine:
                 CryptoMaterial(pair=self._candidate_pair, tbox=SecretBox(self._candidate_pair.tx), rbox=SecretBox(self._candidate_pair.rx))
             )
             self._candidate_pair = None
-            logger.info("Switched to new session keys (index %d)", new_idx)
+            blogger.info("Switched to new session keys", new_idx=new_idx)
 
     def _get_material(self, idx: int | None = None) -> tuple[CryptoMaterial, int]:
         # we don't lock _material_lock, so this method is not thread-safe
@@ -648,7 +652,7 @@ class BaseMachine:
             raise
 
     def trigger_rekey(self) -> None:
-        logger.warning("Rekeying is not supported in this state machine")
+        self.blogger.warning("Rekeying is not supported in this state machine")
 
     def trigger_connection_lost(self, exc: Exception | None) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.CONNECTION_LOST, exc)
@@ -662,8 +666,8 @@ class BaseMachine:
     def trigger_write_emessage(self, emsg: EncryptedMessage) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.WRITE_EMESSAGE, emsg)
 
-    def trigger_connection_made(self) -> MachineProducedEvent | None:
-        return self._trigger(ExternalEvent.CONNECTION_MADE)
+    def trigger_connection_made(self, peer: str = "") -> MachineProducedEvent | None:
+        return self._trigger(ExternalEvent.CONNECTION_MADE, peer)
 
     def _trigger_receive_packet1(self) -> MachineProducedEvent | None:
         return self._trigger(ExternalEvent.RECEIVE_PACKET1)
@@ -681,15 +685,16 @@ class BaseMachine:
         return self._trigger(ExternalEvent.RECEIVE_SERVER_ACK)
 
     def remove_oldest_material(self) -> None:
+        blogger = self.blogger.bind(action="remove_session_keys")
         with self._material_lock.readwrite:
             if len(self._materials) <= 1:
-                logger.warning("Cannot remove the only available crypto material")
+                blogger.warning("Cannot remove the only available crypto material")
                 return
             # find first non-None material
             for i, mat in enumerate(self._materials):
                 if mat is not None:
                     self._materials[i] = None
-                    logger.info("Removed crypto material at index %d", i)
+                    blogger.info("Removed crypto material", idx=i)
                     return
 
     def _trigger(self, ext_event: ExternalEvent, *args) -> MachineProducedEvent | None:  # noqa: ANN002
@@ -757,8 +762,9 @@ class BaseMachine:
         # called by Protocol to prepare sending a message to the server
         self._data_ready_to_send.add_encrypted_message(emsg)
 
-    def _connection_made(self) -> None:
-        pass
+    def _connection_made(self, peer: str = "") -> None:
+        if peer:
+            self.blogger = self.blogger.bind(peer=peer)
 
     def encrypt_message(self, msg: Buffer, msg_id: int) -> EncryptedMessage:
         """
@@ -866,6 +872,7 @@ class KX_N_ClientStateMachine(BaseMachine):
 
         self._server_public_key: KxPublicKey = server_public_key
         self._psk = psk
+        self.blogger = self.blogger.bind(role="client_machine")
 
     def _receive_server_ack(self) -> MachineProducedEvent | None:
         if self._candidate_pair is None:
@@ -879,9 +886,10 @@ class KX_N_ClientStateMachine(BaseMachine):
         self._packet1 = None
         return kx_completed
 
-    def _kx_start(self) -> None:
+    def _kx_start(self, peer: str = "") -> None:
         if self._candidate_pair is not None or self._packet1 is not None:
             raise RuntimeError("Rekeying already in progress")
+        self._connection_made(peer)
         self._candidate_pair, self._packet1 = client_init_kx_n(self._server_public_key, self._psk)
         self._data_ready_to_send.add(self._packet1)
 
@@ -890,12 +898,12 @@ class KX_N_ClientStateMachine(BaseMachine):
 
     def trigger_rekey(self) -> None:
         if self._state.pending_initial_kx():
-            logger.warning("Cannot rekey while initial key exchange is in progress")
+            self.blogger.warning("Cannot rekey while initial key exchange is in progress")
             return
         if self._state.pending_rekey():
-            logger.info("Rekeying already in progress")
+            self.blogger.info("Rekeying already in progress")
             return
-        logger.info("Rekeying requested")
+        self.blogger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
 
@@ -949,6 +957,7 @@ class KX_N_ServerStateMachine(BaseMachine):
 
         self._server_pair: KxPair = server_pair
         self._psk: Psk | None = psk
+        self.blogger = self.blogger.bind(role="server_machine")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         # we expect to receive packet1 from the client, length KX_N_PACKET1BYTES
@@ -1021,6 +1030,7 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._client_pair: KxPair = client_pair
         self._server_public_key: KxPublicKey = server_public_key
         self._kx_state: KxKkClientState | None = None
+        self.blogger = self.blogger.bind(role="client_machine")
 
     def _receive_packet2(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1038,9 +1048,10 @@ class KX_KK_ClientStateMachine(BaseMachine):
         self._kx_state = None
         return kx_completed
 
-    def _kx_start(self) -> None:
+    def _kx_start(self, peer: str = "") -> None:
         if self._kx_state is not None:
             raise RuntimeError("Rekeying already in progress")
+        self._connection_made(peer)
         self._kx_state = self._client_pair.client_init_kx_kk(self._server_public_key)
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
@@ -1051,12 +1062,12 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
     def trigger_rekey(self) -> None:
         if self._state.pending_initial_kx():
-            logger.warning("Cannot rekey while initial key exchange is in progress")
+            self.blogger.warning("Cannot rekey while initial key exchange is in progress")
             return
         if self._state.pending_rekey():
-            logger.info("Rekeying already in progress")
+            self.blogger.info("Rekeying already in progress")
             return
-        logger.info("Rekeying requested")
+        self.blogger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
 
@@ -1110,6 +1121,7 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
         self._server_pair: KxPair = server_pair
         self._client_public_key: KxPublicKey = client_public_key
+        self.blogger = self.blogger.bind(role="server_machine")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         # we expect to receive packet1 from the client, length KX_KK_PACKET1BYTES
@@ -1202,6 +1214,7 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._psk: Psk | None = psk
         self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
         self._kx_state: KxXxClientState | None = None
+        self.blogger = self.blogger.bind(role="client_machine")
 
     def _receive_packet2(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1241,9 +1254,10 @@ class KX_XX_ClientStateMachine(BaseMachine):
         self._kx_state = None
         return kx_completed
 
-    def _kx_start(self) -> None:
+    def _kx_start(self, peer: str = "") -> None:
         if self._kx_state is not None:
             raise RuntimeError("Rekeying already in progress")
+        self._connection_made(peer)
         self._kx_state = self._client_pair.client_init_kx_xx(self._psk)
         assert self._kx_state is not None
         assert self._kx_state.packet1 is not None
@@ -1254,12 +1268,12 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
     def trigger_rekey(self) -> None:
         if self._state.pending_initial_kx():
-            logger.warning("Cannot rekey while initial key exchange is in progress")
+            self.blogger.warning("Cannot rekey while initial key exchange is in progress")
             return
         if self._state.pending_rekey():
-            logger.info("Rekeying already in progress")
+            self.blogger.info("Rekeying already in progress")
             return
-        logger.info("Rekeying requested")
+        self.blogger.info("Rekeying requested")
         self._trigger(ExternalEvent.REKEY)
 
 
@@ -1336,6 +1350,7 @@ class KX_XX_ServerStateMachine(BaseMachine):
         self._psk: Psk | None = psk
         self._client_public_key: KxPublicKey | None = None  # will be set after receiving packet1 from the client
         self._kx_state: KxXxServerState | None = None
+        self.blogger = self.blogger.bind(role="server_machine")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         if self._kx_state is not None:

@@ -1,4 +1,3 @@
-import logging
 import platform
 import socket
 import socketserver
@@ -16,6 +15,7 @@ from ._kx_n import (
 )
 from ._networking import SyncMsgQueue
 from .exceptions import ClientClosedError, DecryptException, KeyExchangeException, SyncMsgQueueShutdown
+from .logs import get_logger
 from .networking import (
     BaseMachine,
     KX_KK_ClientStateMachine,
@@ -29,15 +29,16 @@ from .networking import (
     ReceivedEncryptedMessage,
 )
 
-logger = logging.getLogger("cydrogen")
+logger = get_logger("cydrogen")
 
 
 class Protocol:
     def __init__(
-        self, sock: socket.socket, machine: BaseMachine, rekey_secs: int | None = 3600, rekey_grace_secs: int | None = 1800
+        self, sock: socket.socket, machine: BaseMachine, role: str, rekey_secs: int | None = 3600, rekey_grace_secs: int | None = 1800
     ) -> None:
         self.socket = sock
         self.peer = sock.getpeername()
+        self.blogger = logger.bind(peer=self.peer, role=role)
         self._machine = machine
         self._machine_lock = threading.Lock()
         self.received_encrypted_msgs: SyncMsgQueue[memoryview] = SyncMsgQueue()
@@ -85,7 +86,7 @@ class Protocol:
                 with self._write_lock:
                     self.socket.sendall(data)
             except Exception as ex:  # noqa: BLE001
-                logger.info("Connection lost with %s while sending data: %s", self.peer, ex)
+                self.blogger.info("Connection lost while sending data", error=ex)
                 self.connection_lost(ex)
 
     def connection_made(self) -> None:
@@ -95,11 +96,11 @@ class Protocol:
         try:
             self.socket.shutdown(socket.SHUT_RDWR)
         except OSError as e:
-            logger.info("socket shutdown: %s", e)
+            self.blogger.debug("socket shutdown", error=e)
         try:
             self._send_to_machine(self._machine.trigger_connection_lost, exc)
         except Exception as ex:  # noqa: BLE001
-            logger.info("handling connection_lost: %s", ex)
+            self.blogger.info("error handling connection lost", error=ex)
         self.connection_lost_ev.set()
 
     def _rekey(self) -> None:
@@ -137,7 +138,7 @@ class Protocol:
             self._read1()
         finally:
             self.received_encrypted_msgs.shutdown()
-            logger.info("read thread has finished for %s", self.peer)
+            self.blogger.info("read thread has finished")
 
     def _read1(self) -> None:
         while True:
@@ -146,11 +147,11 @@ class Protocol:
             try:
                 n = self.socket.recv_into(buf)
                 if n == 0:
-                    logger.info("Connection closed by peer %s", self.peer)
+                    self.blogger.info("Connection closed by peer")
                     self.connection_lost(None)
                     return
             except Exception as ex:  # noqa: BLE001
-                logger.info("Connection lost with %s: %s", self.peer, ex)
+                self.blogger.info("Connection lost", error=ex)
                 self.connection_lost(ex)
                 return
             self._send_to_machine(self._machine.receive_data, n)
@@ -158,14 +159,14 @@ class Protocol:
     def _decrypt_received_messages(self) -> None:
         # this is executed in a separate thread
         # when _decrypt_received_messages() returns, the _received_encrypted_msgs queue is closed to signal handle() to exit
-        logger.info("starting to decrypt received messages for %s", self.peer)
+        self.blogger.info("starting to decrypt received messages")
         try:
             self._decrypt_received_messages1()
         except Exception as ex:  # noqa: BLE001
-            logger.warning("decrypt thread exception for %s: %s", self.peer, ex)
+            self.blogger.warning("decrypt thread exception", error=ex)
         finally:
             self.received_decrypted_msgs.shutdown()
-            logger.info("decrypt thread has finished for %s", self.peer)
+            self.blogger.info("decrypt thread has finished")
 
     def _decrypt_received_messages1(self) -> None:
         while True:
@@ -173,7 +174,7 @@ class Protocol:
                 incoming = self.received_encrypted_msgs.get()
             except SyncMsgQueueShutdown:
                 # this means that the queue of encrypted messages has been closed
-                logger.info("decrypt received messages has finished")
+                self.blogger.info("decrypt received messages has finished")
                 # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
                 return
             # decrypt the message and push the result downstream to _received_decrypted_msgs queue
@@ -200,7 +201,7 @@ class Protocol:
     def _handle_machine_event(self, ev: MachineProducedEvent) -> None:
         match ev:
             case KxInitialCompleted():
-                logger.info("Key exchange completed with %s", self.peer)
+                self.blogger.info("Key exchange completed")
                 self.kx_finished.set()
             case ReceivedEncryptedMessage(emsg=emsg):
                 self.received_encrypted_msgs.put_nowait(emsg)
@@ -222,19 +223,20 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         self.request: socket.socket = request
         self.server: BaseTCPServer = server  # to make type checker happy
         self.current_msg_id: int = 0
-        self.protocol = Protocol(request, machine)
+        self.protocol = Protocol(request, machine, role="server_protocol")
         self.peer = request.getpeername()
+        self.blogger = logger.bind(peer=self.peer, role="server_handler")
         super().__init__(request, client_address, server)  # calls setup(), handle(), and finish() in a finally block
 
     def setup(self) -> None:
-        logger.info("Connection from %s", self.peer)
+        self.blogger.info("Connection from client")
         self.server.add_accepted_socket(self.request)
         super().setup()  # creates self.rfile and self.wfile
 
     def finish(self) -> None:
         super().finish()
         self.server.remove_accepted_socket(self.request)
-        logger.info("Connection closed: %s", self.peer)
+        self.blogger.info("Connection closed")
         # That's all we need to do, the server itself will shutdown/close the accepted socket
         # for this thread by calling its shutdown_request(socket) method.
 
@@ -250,7 +252,7 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
                     msg, msg_id = self.protocol.received_decrypted_msgs.get()
                 except SyncMsgQueueShutdown:
                     # this means that the queue of decrypted messages has been closed
-                    logger.info("No more decrypted messages to handle, exiting handle() for %s", self.peer)
+                    self.blogger.info("No more decrypted messages to handle")
                     break
                 if not self._handle_message(msg, msg_id):
                     break
@@ -260,18 +262,18 @@ class BaseTCPHandler(socketserver.BaseRequestHandler, ABC):
         else:
             self.protocol.connection_lost(None)
         finally:
-            logger.info("Waiting for protocol threads to finish for %s", self.peer)
+            self.blogger.info("Waiting for protocol threads to finish")
             self.protocol.join()
-            logger.info("Protocol threads have finished for %s", self.peer)
+            self.blogger.info("Protocol threads have finished")
 
     def _handle_message(self, msg: bytes, msg_id: int) -> bool:
         self.current_msg_id = msg_id
         try:
             if not self.handle_message(msg, msg_id):
-                logger.info("Stopping message handling for %s", self.peer)
+                self.blogger.info("Stopping message handling")
                 return False  # if handle_message returns False, we stop handling messages
         except Exception as ex:  # noqa: BLE001
-            logger.warning("Handling message from %s: %s", self.peer, ex)
+            self.blogger.warning("Error handling message", error=ex)
             return False
         finally:
             self.current_msg_id = 0
@@ -315,18 +317,21 @@ class KX_N_TCPHandler(BaseTCPHandler):
     def __init__(self, request: socket.socket, client_address: Any, server: "KX_N_TCPServer") -> None:  # noqa: ANN401
         machine = KX_N_ServerStateMachine(server.server_keypair, psk=server.psk)
         super().__init__(request, client_address, server, machine)
+        self.blogger = self.blogger.bind(server_type="KX_N")
 
 
 class KX_KK_TCPHandler(BaseTCPHandler):
     def __init__(self, request: socket.socket, client_address: Any, server: "KX_KK_TCPServer") -> None:  # noqa: ANN401
         machine = KX_KK_ServerStateMachine(server.server_keypair, server.client_public_key)
         super().__init__(request, client_address, server, machine)
+        self.blogger = self.blogger.bind(server_type="KX_KK")
 
 
 class KX_XX_TCPHandler(BaseTCPHandler):
     def __init__(self, request: socket.socket, client_address: Any, server: "KX_XX_TCPServer") -> None:  # noqa: ANN401
         machine = KX_XX_ServerStateMachine(server.server_keypair, psk=server.psk, validate_peer_key=server.validate)
         super().__init__(request, client_address, server, machine)
+        self.blogger = self.blogger.bind(server_type="KX_XX")
 
 
 class BaseTCPServer(socketserver.ThreadingTCPServer):
@@ -338,6 +343,7 @@ class BaseTCPServer(socketserver.ThreadingTCPServer):
         self.thread: threading.Thread | None = None
         self.sockets: dict[int, socket.socket] = {}  # to keep track of accepted sockets
         self.sockets_lock = threading.Lock()
+        self.blogger = logger.bind(role="server", server_host=host, server_port=port)
 
     def _reset_main_socket(self) -> None:
         if self.socket is not None:
@@ -377,12 +383,12 @@ class BaseTCPServer(socketserver.ThreadingTCPServer):
         with self.sockets_lock:
             self.sockets.clear()
         if background:
-            logger.info("Starting server in background thread")
+            self.blogger.info("Starting server in background thread")
             self.thread = threading.Thread(target=self._run)
             self.thread.start()
         else:
             self.thread = None
-            logger.info("Starting server in the main thread")
+            self.blogger.info("Starting server in the main thread")
             self._run()
 
     def _run(self) -> None:
@@ -392,14 +398,13 @@ class BaseTCPServer(socketserver.ThreadingTCPServer):
             with self as server:  # on exit, the context manager will call server_close
                 server.server_bind()
                 server.server_activate()
-                logger.info("Server running on %s", server.server_address)
+                self.blogger.info("Server running")
                 server.serve_forever()  # this will block until shutdown is called
         finally:
             self.running = False
-            logger.info("Server has stopped running")
+            self.blogger.info("Server has stopped running")
 
     def server_close(self) -> None:
-        logger.info("server_close")
         # close all the accepted sockets to interrupt the child threads
         self.close_all_sockets()
         super().server_close()  # close the main server socket and wait for threads to finish
@@ -413,9 +418,8 @@ class BaseTCPServer(socketserver.ThreadingTCPServer):
         `shutdown` does not wait for clients to go away and closes the channels with them immediately.
         """
         if not self.running:
-            logger.warning("Server is not running, nothing to shutdown")
+            self.blogger.warning("Server is not running, nothing to shutdown")
             return
-        logger.info("shutdown")
         super().shutdown()  # trigger event to exit the serve_forever loop
         if self.thread is not None:  # when serve_forever runs in background, wait for the thread to finish
             self.thread.join()
@@ -473,20 +477,21 @@ class BaseTCPClient:
         self.socket: socket.socket | None = None
         self.protocol: Protocol | None = None
         self.rekey_secs = rekey_secs
+        self.blogger = logger.bind(role="client", server_host=host, server_port=port)
 
     def connect(self) -> None:
         with self.state_lock:
             if self.connected:
-                logger.info("Already connected to %s", self.server_address)
+                self.blogger.info("Already connected")
                 return
             if self.connecting:
-                logger.info("Already connecting to %s", self.server_address)
+                self.blogger.info("Already connecting")
                 return
             self.connecting = True
         try:
             self.socket = self._create_connection()
             set_keepalive(self.socket)
-            self.protocol = Protocol(self.socket, self.machine, rekey_secs=self.rekey_secs)
+            self.protocol = Protocol(self.socket, self.machine, rekey_secs=self.rekey_secs, role="client_protocol")
             self.protocol.connection_made()
             self.protocol.start()
             with self.state_lock:
@@ -512,8 +517,9 @@ class BaseTCPClient:
                 if retry == 0:
                     raise
             retry -= 1
-            logger.warning("Connection to %s failed, retrying...", self.server_address)
+            self.blogger.warning("Connection failed")
             if self.retry_wait > 0:
+                self.blogger.info("Retry soon", wait=self.retry_wait)
                 time.sleep(self.retry_wait)
 
     def close(self) -> None:

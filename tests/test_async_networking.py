@@ -1,8 +1,7 @@
 import asyncio
-import logging
 
 import pytest
-from cydrogen import KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk
+from cydrogen import KeyExchangeException, KxPair, KxPublicKey, MessageTooBigException, Psk, get_logger
 from cydrogen.async_networking import (
     KX_KK_AsyncRequestResponseClient,
     KX_N_AsyncRequestResponseClient,
@@ -38,7 +37,7 @@ MESSAGES = [
 ]
 
 
-logger = logging.getLogger("cydrogen.tests")
+logger = get_logger("cydrogen.tests")
 
 
 class H(RequestResponseHandler):
