@@ -27,6 +27,14 @@ cdef class BytearrayBuilder:
         self.offset = 0
 
     cpdef add_encrypted_message(self, EncryptedMessage msg):
+        # This specialized method is more efficient than add(...) for EncryptedMessage,
+        # because it avoids to create an intermediate bytes object.
+        # If we use add(...), a memoryview for the EncryptedMessage would be created,
+        # and __getbuffer__ implementation for EncryptedMessage does create a bytes object
+        # to hold the memoryview data.
+        # Jere instead, we can directly copy the header and ciphertext into the bytearray,
+        # the ciphertext itself being already a memoryview.
+        # See implementation of EncryptedMessage in _datastructs.pyx.
         header = msg.header()
         lendata = len(header) + len(msg.ciphertext)
         needed = lendata + 8
