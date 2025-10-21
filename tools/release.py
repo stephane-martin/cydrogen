@@ -146,9 +146,9 @@ class Changelog:
                 change_type = ChangeType(ctype.lower())
                 changes = []
                 for change in release_data[ctype]:
-                    schange = change.strip()
+                    schange = change.lstrip(" -").rstrip(" .")
                     if schange:
-                        schange = schange + "." if not schange.endswith(".") else schange
+                        schange += "."
                         changes.append(schange)
                 if changes:
                     release_changes[change_type] = changes
