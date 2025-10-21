@@ -85,6 +85,13 @@ def test(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
+def pipaudit(session: nox.Session) -> None:
+    print("\n=== pip-audit ===\n")
+    session.install("pip-audit")
+    session.run("pip-audit", ".")
+
+
+@nox.session(venv_backend="venv", python=SUPPORTED_PYTHON_VERSIONS)
 def build(session: nox.Session) -> None:
     _build(session)
 

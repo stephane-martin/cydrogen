@@ -50,9 +50,7 @@ jobs:
           check-latest: true
       - name: install nox
         run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install nox
+          python -m pip install --upgrade pip && pip install nox
       - name: install shellcheck
         run: |
           sudo apt-get install -y shellcheck
@@ -74,14 +72,13 @@ jobs:
         run: |
           nox -s lint
 
-  build:
+  pip-audit:
     runs-on: ubuntu-22.04
-    needs: [lint, gitleaks]
     defaults:
       run:
         shell: bash
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         python-version: [3.12, 3.13, 3.14]
     steps:
@@ -98,9 +95,36 @@ jobs:
           check-latest: true
       - name: install nox
         run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install nox
+          python -m pip install --upgrade pip && pip install nox
+      - name: audit dependencies
+        run: |
+          nox -s "pipaudit-${{matrix.python-version}}"
+
+  build:
+    runs-on: ubuntu-22.04
+    needs: [lint, gitleaks, pip-audit]
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: [3.12, 3.13, 3.14]
+    steps:
+      - name: checkout cydrogen repo
+        uses: actions/checkout@v5
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: set up python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "${{matrix.python-version}}"
+          cache: pip
+          check-latest: true
+      - name: install nox
+        run: |
+          python -m pip install --upgrade pip && pip install nox
       - name: install build dependencies
         run: |
           sudo apt-get install -y build-essential binutils
