@@ -64,7 +64,7 @@ class StreamReaderWriter:
 
     def __init__(self, protocol: "KXProtocol") -> None:
         self._protocol: KXProtocol = protocol
-        self.peername = protocol.peername
+        self.peername: str = protocol.peername
 
     def close(self) -> None:
         """
@@ -1074,7 +1074,7 @@ class RequestResponseHandler(BaseServerHandler, ABC):
         return True
 
 
-def wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
+def _wrap(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
     if isinstance(handler, type):
         if issubclass(handler, BaseServerHandler):
             return handler().handle
@@ -1126,7 +1126,7 @@ async def start_kx_n_server(
         machine = KX_N_ServerStateMachine(
             server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
+        return KXProtocol(machine, loop, client_handler=_wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
@@ -1154,7 +1154,7 @@ async def start_kx_kk_server(
         machine = KX_KK_ServerStateMachine(
             server_pair, client_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
+        return KXProtocol(machine, loop, client_handler=_wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
@@ -1187,7 +1187,7 @@ async def start_kx_xx_server(
             received_msg_max_size=received_msg_max_size,
             validate_peer_key=validate_client_key,
         )
-        return KXProtocol(machine, loop, client_handler=wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
+        return KXProtocol(machine, loop, client_handler=_wrap(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs)
 
     try:
         return await _loop_create_server(factory, host, port, executor)
