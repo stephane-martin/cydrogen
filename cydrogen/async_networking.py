@@ -35,7 +35,7 @@ from .networking import (
     ReceivedEncryptedMessage,
 )
 
-logger = get_logger("cydrogen")
+logger = get_logger()
 
 
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB

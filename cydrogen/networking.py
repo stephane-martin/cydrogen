@@ -33,7 +33,7 @@ from ._secretbox import SecretBox
 from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
 from .logs import get_logger
 
-logger = get_logger("cydrogen")
+logger = get_logger()
 
 CANCEL_MESSAGE_ID: int = 0
 """

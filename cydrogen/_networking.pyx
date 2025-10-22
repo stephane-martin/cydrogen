@@ -18,7 +18,7 @@ from .logs import get_logger
 from ._datastructs import MessageType
 
 
-logger = get_logger("cydrogen")
+logger = get_logger()
 
 
 cdef class BytearrayBuilder:
