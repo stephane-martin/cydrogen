@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import contextvars
 import types
 from abc import ABC, abstractmethod
@@ -36,6 +37,8 @@ from .networking import (
 )
 
 logger = get_logger()
+# Context Variables should be created at the top module level
+msg_id_var: contextvars.ContextVar = contextvars.ContextVar("msgid")
 
 
 _DEFAULT_LIMIT: int = 2**16  # 64 KiB
@@ -258,7 +261,6 @@ class KXProtocol(asyncio.BufferedProtocol):
         store64(cancel_msg, target_msg_id)
         emsg = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
         self._send_to_machine(self._machine.trigger_write_emessage, emsg)
-        await self.drain()
 
     async def write_msg(self, msg: Buffer, msg_id: int) -> None:
         """
@@ -283,7 +285,6 @@ class KXProtocol(asyncio.BufferedProtocol):
         # may raise MessageTooBigException if the message is too big
         emsg = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
         self._send_to_machine(self._machine.trigger_write_emessage, emsg)
-        await self.drain()
 
     def write_eof(self) -> None:
         self._send_to_machine(self._machine.trigger_writer_eof)
@@ -981,29 +982,57 @@ class ServerPendingProcessingTasks:
         return nb
 
 
+class Stopping(Exception):
+    pass
+
+
 class BaseServerHandler(ABC):
     def __init__(self) -> None:
         self._tasks = ServerPendingProcessingTasks()
-        self._stopping: bool = False
+        self.stopping = asyncio.Event()
         self.rw: StreamReaderWriter
-        self._msgid_var: contextvars.ContextVar = contextvars.ContextVar("msgid")
         self.blogger = logger.bind(role="server_handler")
+
+    async def get_msg(self) -> tuple[bytes, int]:
+        """
+        Get the next message from the stream reader-writer, but raise Stopping if self.stopping is set.
+        """
+        get_msg_task = asyncio.create_task(self.rw.get_next_msg())
+        stop_task = asyncio.create_task(self.stopping.wait())
+        done, pending = await asyncio.wait({get_msg_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        # we need to cancel the pending task
+        for t in pending:
+            t.cancel()
+            # avoid "Task was destroyed but it is pending!" warnings
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
+        if stop_task in done:
+            raise Stopping
+        return get_msg_task.result()
 
     async def handle(self, rw: StreamReaderWriter) -> None:
         # note: self.handle is a StreamHandlerFunction
         self.rw = rw
         self.blogger = self.blogger.bind(peer=rw.peername)
         try:
-            while not self._stopping:
-                msg, msg_id = await rw.get_next_msg()  # may raise when no more messages
-                self._process_msg(msg, msg_id)  # can't raise
+            while True:
+                # wait for either a new message or for stopping
+                msg, msg_id = await self.get_msg()  # may raise Stopping or EOFError or other exceptions
+                # before processing the new message, drain the stream to avoid flooding the client
+                await self.rw.drain()
+                # once we got a new message, process it in an independent task
+                self._process_msg(msg, msg_id)  # does not raise
+        except Stopping:
+            self.blogger.info("Stopping handler as requested")
         except EOFError:
             self.blogger.info("EOF received")
         except Exception as ex:  # noqa: BLE001
             self.blogger.warning("Error reading next message", error=ex)
         finally:
-            nb = self._tasks.cancel_all()  # cancel any pending tasks
-            self.blogger.info("Cancelled pending tasks", nb_tasks=nb)
+            # cancel the pending message processing tasks
+            if (nb := self._tasks.cancel_all()) > 0:  # cancel any pending tasks
+                self.blogger.info("Cancelled pending tasks", nb_tasks=nb)
+            # close the stream reader-writer
             rw.close()
             await rw.wait_closed()
 
@@ -1011,17 +1040,19 @@ class BaseServerHandler(ABC):
         if msg_id == CANCEL_MESSAGE_ID:
             self._cancel(msg)
             return
-        if self._stopping:
-            # not scheduling new tasks if we are stopping
+        if self.stopping.is_set():
+            # not scheduling new tasks when we are stopping
             return
         # schedule a new task to handle the message
-        task: asyncio.Task = asyncio.create_task(self._handle_message(msg, msg_id))
-        self._tasks.register(msg_id, task)
+        incoming_msg_task: asyncio.Task = asyncio.create_task(self._handle_message(msg, msg_id))
+        # register the task so that it does not get lost
+        self._tasks.register(msg_id, incoming_msg_task)
 
         def cb(t: asyncio.Task) -> None:
             self._tasks.done(msg_id, t)
 
-        task.add_done_callback(cb)
+        # when the task is done, unregister it
+        incoming_msg_task.add_done_callback(cb)
 
     def _cancel(self, msg: bytes) -> None:
         try:
@@ -1033,37 +1064,68 @@ class BaseServerHandler(ABC):
             logger.warning("Received malformed cancel message")
 
     async def _handle_message(self, msg: bytes, msg_id: int) -> None:
-        self._msgid_var.set(msg_id)
+        # _handle_message is executed in its own Task for each incoming message,
+        # so we can use a context variable to store the message ID
+        msg_id_var.set(msg_id)
         try:
             if not await self.handle_message(msg, msg_id):
-                self._stopping = True
-                self.rw.close()
+                self.stopping.set()
         except MessageTooBigException:
+            # if the handler tries to write a response that is too big, we stop the handler
+            # TODO: instead, send the client an error message
+            self.stopping.set()
             self.blogger.error("Server response is too big", msg_id=msg_id)  # noqa: TRY400
-            self._stopping = True
-            self.rw.close()
         except InvalidTransitionError as ex:
+            # this typically happens when the message handler tries to write a response, but the rw is already closed
+            self.stopping.set()
             if ex.writer_closed():
                 # don't want to spam the logs with the full stack traces if the client closed the connection
                 self.blogger.warning("Cannot write response: connection closed", msg_id=msg_id)
             else:
                 self.blogger.exception("Error handling message", msg_id=msg_id)
-        except Exception:
-            self.blogger.exception("Error handling message", msg_id=msg_id)
+        except Exception as ex:  # noqa: BLE001
+            # stop the handler on any other exception
+            # TODO: instead, send the client an error message
+            self.stopping.set()
+            self.blogger.warning("Error handling message", msg_id=msg_id, error=ex)
 
     @abstractmethod
     async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        """
+        Handle an incoming message from the client.
+
+        Subclasses must implement this method to process incoming messages. The method should return True to continue handling messages,
+        or False to stop the handler. If any exception is raised, the handler will also be stopped.
+
+        Args:
+            msg: the incoming message bytes.
+            msg_id: the message ID of the incoming message.
+
+        Returns:
+            bool: True to continue handling messages, False to stop the handler.
+        """
         raise NotImplementedError
 
-    async def write(self, msg: bytes, msg_id: int | None = None) -> None:
-        # the write method can be used by subclasses to implement handle_message
-        # it automatically uses the message ID from the incoming message to write the response, if not provided
-        if msg_id is None:
-            msg_id = self._msgid_var.get()
-        await self.rw.write_msg(msg, msg_id)
+    async def write(self, msg: Buffer, msg_id: int | None = None) -> None:
+        """
+        Write a message to the stream writer, using the provided message ID or the one from the context variable.
+
+        Subclasses can use this method to send responses to clients, when implementing the `handle_message` method.
+        """
+        if self.stopping.is_set():
+            # do not write if we are stopping
+            self.blogger.debug("Not writing message as handler is stopping", msg_id=msg_id)
+            return
+        await self.rw.write_msg(msg, msg_id if msg_id is not None else msg_id_var.get())
 
 
 class RequestResponseHandler(BaseServerHandler, ABC):
+    """
+    A base class for request-response server handlers.
+
+    Subclasses must implement the `response` method to process incoming messages and generate responses.
+    """
+
     @abstractmethod
     async def response(self, msg: bytes, msg_id: int) -> Buffer:
         raise NotImplementedError
@@ -1119,7 +1181,7 @@ async def start_kx_n_server(
     rekey_grace_secs: int | None = 1800,
 ) -> asyncio.Server:
     """
-    Starts an async TCP server that uses the KX_N key exchange pattern.
+    Start an async TCP server that uses the KX_N key exchange pattern.
 
     The server supports KX_N clients only (either sync or async).
 
@@ -1148,6 +1210,8 @@ async def start_kx_n_server(
     Returns:
         An asyncio.Server object representing the created server.
 
+    Raises:
+        OSError: if the server could not be started (e.g., address already in use).
     """
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     # a single executor per server, shared by all clients
