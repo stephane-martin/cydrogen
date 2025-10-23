@@ -1118,6 +1118,37 @@ async def start_kx_n_server(
     received_msg_max_size: int = 2**20,
     rekey_grace_secs: int | None = 1800,
 ) -> asyncio.Server:
+    """
+    Starts an async TCP server that uses the KX_N key exchange pattern.
+
+    The server supports KX_N clients only (either sync or async).
+
+    When the handler is a StreamHandlerFunction, the function defines how to handle each client connection. The function will
+    be called for each client connection with a StreamReaderWriter object as argument. Through this object, the handler can
+    read and write messages to the client.
+
+    When the handler is a subclass of BaseServerHandler, an instance of the class will be created for each client connection.
+    The class must implement the handle_message method to process incoming messages from the client. Each incoming message will
+    be handled in its own asyncio Task, allowing concurrent processing of multiple messages from the same client.
+
+    When this function returns, the server is created but not yet accepting connections. You need to call `server.start_serving()`
+    or `server.serve_forever()` to start accepting connections.
+
+    Args:
+        handler: a StreamHandlerFunction or a subclass of BaseServerHandler to handle client connections.
+        host: the host to bind the server to.
+        port: the port to bind the server to.
+        server_pair: the server's key exchange pair.
+        psk: an optional pre-shared key for the key exchange. The same PSK must be used by the clients.
+        limit: the maximum number of bytes to store in the receive buffer before pausing reading.
+        sent_msg_max_size: the maximum bytes size of messages that can be sent to clients.
+        received_msg_max_size: the maximum bytes size of messages that can be received from clients.
+        rekey_grace_secs: the grace period in seconds before old keys are removed after a rekey.
+
+    Returns:
+        An asyncio.Server object representing the created server.
+
+    """
     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
     # a single executor per server, shared by all clients
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
