@@ -330,3 +330,18 @@ async def test_server_already_running() -> None:
         with pytest.raises(OSError):
             await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
     logger.info("first server stopped")
+
+
+@pytest.mark.asyncio
+async def test_start_server_successive() -> None:
+    server1 = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server1:
+        await server1.start_serving()
+        logger.info("first server started")
+    logger.info("first server stopped")
+    # should work directly after the first server is closed because we use SO_REUSEADDR
+    server2 = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server2:
+        await server2.start_serving()
+        logger.info("second server started")
+    logger.info("second server stopped")
