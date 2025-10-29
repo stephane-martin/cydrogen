@@ -134,7 +134,7 @@ jobs:
         run: |
           nox -s "build-${PYTHON_VERSION}"
       - name: upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: "cydrogen-${{matrix.python-version}}-build"
           path: dist/*.whl
@@ -166,7 +166,7 @@ jobs:
         run: |
           nox -s build-3.13
       - name: upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: cydrogen-windows-build
           path: dist/*.whl
