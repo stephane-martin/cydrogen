@@ -14,7 +14,7 @@ from ._decls cimport hydro_kx_XX_PACKET1BYTES, hydro_kx_XX_PACKET2BYTES, hydro_k
 from ._decls cimport kx_n_1, kx_n_2
 from ._decls cimport kx_kk_1, kx_kk_2, kx_kk_3
 from ._decls cimport kx_xx_1, kx_xx_2, kx_xx_3, kx_xx_4
-from ._secretbox cimport SecretBoxKey
+from ._secretbox cimport SecretBoxKey, make_secretbox_key
 
 import base64
 import threading
@@ -35,6 +35,9 @@ cdef class Psk(BaseKey):
         if isinstance(b, str):
             super().__init__(base64.standard_b64decode(b))
             return
+        if isinstance(b, Psk):
+            super().__init__((<Psk>b).key)
+            return
         super().__init__(b)
 
     def __repr__(self):
@@ -52,12 +55,18 @@ cdef class Psk(BaseKey):
         return hash(self.key)
 
 
+cpdef make_psk(obj):
+    if isinstance(obj, Psk):
+        return obj
+    return Psk(obj)
+
+
 cdef class SessionPair:
-    def __init__(self, SecretBoxKey rx, SecretBoxKey tx):
+    def __init__(self, rx, tx):
         if rx is None or tx is None:
             raise ValueError("rx and tx cannot be None")
-        self.rx = rx
-        self.tx = tx
+        self.rx = make_secretbox_key(rx)
+        self.tx = make_secretbox_key(tx)
 
     def __repr__(self):
         return f'SessionPair(rx={repr(self.rx)}, tx={repr(self.tx)})'
@@ -200,10 +209,15 @@ cdef class KxPublicKey:
         cdef uint8_t* src
 
         if isinstance(kp, SafeMemory):
+            # The safe memory may hold either a full keypair or just a public key.
+            # As we have represented a KxPublicKey as a full keypair for easier initialization,
+            # initialization will differ based on the length of the SafeMemory object.
             if len(kp) == KX_PAIR_SIZE:
+                # in case of a full keypair, we can just use it directly
                 self.kp = kp
                 return
             if len(kp) == hydro_kx_PUBLICKEYBYTES:
+                # in case of just a public key, we need to create a full keypair and copy the public key into it
                 mem = SafeMemory.__new__(SafeMemory, KX_PAIR_SIZE)
                 kp_ptr = <hydro_kx_keypair*>(<void*>(mem.ptr))
                 dst = <uint8_t*>(kp_ptr.pk)

@@ -31,7 +31,6 @@ cdef class SecretBoxKey(BaseKey):
             super().__init__(key)
             return
 
-        # when key argument is already a SecretBoxKey, copy the key
         cdef SecretBoxKey o
         if isinstance(key, SecretBoxKey):
             o = <SecretBoxKey>key

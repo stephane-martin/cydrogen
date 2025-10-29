@@ -13,6 +13,9 @@ cdef class Psk(BaseKey):
     pass
 
 
+cpdef make_psk(obj)
+
+
 cdef class SessionPair:
     cdef readonly SecretBoxKey rx
     cdef readonly SecretBoxKey tx
