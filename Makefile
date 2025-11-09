@@ -4,6 +4,6 @@ all:
 	make -C cydrogen -f Makefile.fake $@
 
 clean:
-	rm -f cydrogen/cyutils.o cydrogen/src/hydrogen.o
+	rm -f cydrogen/cyutils.o cydrogen/fnv.o cydrogen/src/hydrogen.o
 
 .PHONY: all clean
