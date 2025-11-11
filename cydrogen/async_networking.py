@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import contextvars
 import inspect
+import os
+import sys
 import types
 from abc import ABC, abstractmethod
 from collections import deque
@@ -1506,14 +1508,17 @@ def wrap_handler(handler: StreamHandlerFunction | type[BaseServerHandler]) -> St
     raise TypeError("Handler must be a callable or a subclass of BaseServerHandler")
 
 
+REUSE_ADDRESS = os.name == "posix" and sys.platform != "cygwin"
+
+
 async def _loop_create_server(factory: Callable[[], KXProtocol], host: str, port: int, executor: ThreadPoolExecutor) -> asyncio.Server:
     loop = asyncio.get_running_loop()
     server: asyncio.Server
     if PY312:
         # python 3.12 does not support keep_alive here
-        server = await loop.create_server(factory, host, port, reuse_address=True, start_serving=False)
+        server = await loop.create_server(factory, host, port, reuse_address=REUSE_ADDRESS, start_serving=False)
     else:
-        server = await loop.create_server(factory, host, port, reuse_address=True, start_serving=False, keep_alive=True)
+        server = await loop.create_server(factory, host, port, reuse_address=REUSE_ADDRESS, start_serving=False, keep_alive=True)
 
     # modify the server's _wakeup method to also shutdown the executor
     original_wakeup = server._wakeup  # type: ignore[attr-defined]  # noqa: SLF001
