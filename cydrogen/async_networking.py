@@ -96,6 +96,10 @@ class StreamReaderWriter:
         Returns:
             The decrypted message.
             The message ID associated with the decrypted message.
+
+        Raises:
+            EOFError: If the stream has been closed normally.
+            Exception: If an error occurred while reading or decrypting the message.
         """
         return await self._protocol.get_next_msg()
 
@@ -108,6 +112,10 @@ class StreamReaderWriter:
 
         Args:
             target_msg_id: The message ID of the message to cancel.
+
+        Raises:
+            ClientClosedError: If we are client side and the stream is closed or closing.
+            Exception: If another error occurs during sending.
         """
         await self._protocol.write_cancel_msg(target_msg_id)
 
@@ -118,6 +126,12 @@ class StreamReaderWriter:
         Args:
             msg: The message to write, as a bytes-like object.
             msg_id: The message ID to use for the message.
+
+        Raises:
+            MessageTooBigException: If the message is too big to be sent.
+            ValueError: If msg_id is CANCEL_MESSAGE_ID.
+            ClientClosedError: if we are client side and the stream is closed or closing.
+            Exception: If another error occurs during encryption or sending.
         """
         await self._protocol.write_msg(msg, msg_id)
 
@@ -192,6 +206,9 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     @property
     def key_material_idx(self) -> int | None:
+        """
+        Returns the index of the current key material in use, or None if the key exchange has not completed yet.
+        """
         return self._machine.key_material_idx
 
     @property
@@ -231,6 +248,7 @@ class KXProtocol(asyncio.BufferedProtocol):
 
     async def get_next_msg(self) -> tuple[bytes, int]:
         payload, msg_id = await self._received_decrypted_msgs.get()
+        # as we have removed a message from the decrypted queue, we may resume reading if it was paused
         self.maybe_resume_reading()
         return payload, msg_id
 
@@ -246,9 +264,11 @@ class KXProtocol(asyncio.BufferedProtocol):
             if self._handle_machine_event(event):
                 has_received_msg = True
         if has_received_msg:
+            # we have received some messages, we may need to pause reading
             self.maybe_pause_reading()
 
     def _handle_machine_event(self, ev: MachineProducedEvent) -> bool:
+        # returns True if the event is a ReceivedEncryptedMessage
         match ev:
             case KxInitialCompleted():
                 if not self._kx_completed.done():
@@ -265,6 +285,13 @@ class KXProtocol(asyncio.BufferedProtocol):
         Triggers an action in the state machine and handles the resulting events.
 
         If the processing of events generate data to send, it is written to the transport.
+
+        When the machine reports a KeyExchangeException during the initial key exchange, the exception is set on the _kx_completed future
+        so that the caller waiting for key exchange is notified.
+
+        When the machine reports a KeyExchangeException after the initial key exchange has been completed, the exception is propagated to
+        the caller. The uncaught exception will bubbles up to the asyncio framework, which will call connection_lost() and abort the
+        transport.
         """
         try:
             evs = func(*args)
@@ -281,12 +308,21 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._transport.write(data)
 
     async def write_cancel_msg(self, target_msg_id: int) -> None:
+        """
+        Write a cancel message to the server.
+        """
         cancel_msg = bytearray(8)
         store64(cancel_msg, target_msg_id)
         emsg = self._machine.encrypt_message(cancel_msg, CANCEL_MESSAGE_ID)
         await self.drain()
-        self._send_to_machine(self._machine.trigger_write_emessage, emsg)
-        await self.drain()
+        try:
+            self._send_to_machine(self._machine.trigger_write_emessage, emsg)
+            await self.drain()
+        except InvalidTransitionError as ex:
+            if self._client_handler is None:
+                # Invalid transition means the client is already closed or closing.
+                raise ClientClosedError from ex
+            raise
 
     async def write_msg(self, msg: Buffer, msg_id: int) -> None:
         """
@@ -299,6 +335,8 @@ class KXProtocol(asyncio.BufferedProtocol):
         Raises:
             MessageTooBigException: If the message is too big to be sent.
             ValueError: If msg_id is CANCEL_MESSAGE_ID.
+            ClientClosedError: if we are client side and the stream is closed or closing.
+            Exception: If another error occurs during encryption or sending.
         """
         if msg_id == CANCEL_MESSAGE_ID:
             raise ValueError("Cannot write a message with msg_id CANCEL_MESSAGE_ID")
@@ -311,8 +349,14 @@ class KXProtocol(asyncio.BufferedProtocol):
         # may raise MessageTooBigException if the message is too big
         emsg = await self._loop.run_in_executor(self._executor, self._machine.encrypt_message, msg, msg_id)
         await self.drain()
-        self._send_to_machine(self._machine.trigger_write_emessage, emsg)
-        await self.drain()
+        try:
+            self._send_to_machine(self._machine.trigger_write_emessage, emsg)
+            await self.drain()
+        except InvalidTransitionError as ex:
+            if self._client_handler is None:
+                # Invalid transition means the client is already closed or closing.
+                raise ClientClosedError from ex
+            raise
 
     def write_eof(self) -> None:
         self._send_to_machine(self._machine.trigger_writer_eof)
@@ -323,6 +367,8 @@ class KXProtocol(asyncio.BufferedProtocol):
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         """
         Called by the asyncio framework when the network connection with the peer is established.
+
+        The new connection is forwarded to the state machine to start the key exchange process.
         """
         # called by asyncio when the network connection with the peer is established
         self.blogger.debug("connection_made")
@@ -371,11 +417,13 @@ class KXProtocol(asyncio.BufferedProtocol):
                 incoming, _ = await self._received_encrypted_msgs.get()
             except Exception as ex:  # noqa: BLE001
                 # this means that the queue of encrypted messages has been closed
+                # in normal case, this happens when the connection is lost or closed, and the exception is EOFError
                 if isinstance(ex, EOFError):
                     self.blogger.info("decrypt received messages finished")
                 else:
                     self.blogger.info("decrypt received messages finished", reason=ex)
                 # consequently, we close the queue of decrypted messages (previously queued messages may still be consumed)
+                # we propagate the exception so that get_next_msg() calls will raise the same exception
                 self._received_decrypted_msgs.close(ex)
                 return
             # decrypt the message and push the result downstream to _received_decrypted_msgs queue
@@ -430,33 +478,52 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._transport.abort()
 
     async def handle_peer(self) -> None:
+        """
+        Handles the peer connection after the key exchange has been completed.
+
+        Client side: starts the continuous decryption task, the rekey task (if enabled), and the remove old keys task (if enabled).
+        Server side: starts the continuous decryption task, the remove old keys task (if enabled), and calls the client handler.
+        """
         self._decrypt_task = self._loop.create_task(self.continuous_decrypt())
         if self._rekey_secs is not None and self._client_handler is None:  # only trigger rekey if we are client side
             self._rekey_task = self._loop.create_task(self.continuous_rekey())
         if self._rekey_grace_secs is not None:  # both client and server side
             self._remove_old_keys_task = self._loop.create_task(self.continuous_remove_old_keys())
-        if self._client_handler is not None:
-            # server side
-            try:
-                await self._client_handler(StreamReaderWriter(self))
-            except asyncio.CancelledError:
-                self.blogger.info("Client handler cancelled")
-            except Exception:
-                self.blogger.exception("Client handler failed")
-            finally:
-                self._transport.close()
-                self.blogger.info("Client disconnected")
+        if self._client_handler is None:
+            return
+        # server side
+        try:
+            await self._client_handler(StreamReaderWriter(self))
+        except asyncio.CancelledError:
+            self._transport.close()
+            self.blogger.info("Client handler cancelled")
+        except Exception:
+            # it not recommended that the client handler raises exceptions, but if it does, we abort the transport
+            self._transport.abort()
+            self.blogger.exception("Client handler failed")
+        else:
+            self._transport.close()
+            self.blogger.info("Client disconnected")
 
     async def wait_for_key_exchange(self) -> None:
         await self._kx_completed
 
     def get_buffer(self, sizehint: int) -> memoryview:  # noqa: ARG002
+        """
+        Called by asyncio to get a buffer to read data into.
+        """
         return self._machine.get_buffer()
 
     def buffer_updated(self, nbytes: int) -> None:
+        """
+        Called by asyncio when data has been read into the buffer.
+        """
         self._send_to_machine(self._machine.receive_data, nbytes)
 
     def maybe_pause_reading(self) -> None:
+        """
+        Pauses reading from the transport if the total size of received messages exceeds twice the limit.
+        """
         if self._reading_paused:
             return
         if self.received_size > 2 * self._limit:
@@ -468,6 +535,9 @@ class KXProtocol(asyncio.BufferedProtocol):
                 pass
 
     def maybe_resume_reading(self) -> None:
+        """
+        Resumes reading from the transport if the total size of received messages is below the limit.
+        """
         if not self._reading_paused:
             return
         if self.received_size <= self._limit:
@@ -476,6 +546,9 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._transport.resume_reading()
 
     def connection_lost(self, exc: Exception | None) -> None:
+        """
+        Called by asyncio when the connection with the peer is lost.
+        """
         if isinstance(exc, ConnectionError):
             exc = EOF_EXCEPTION
         self.blogger.info("connection lost", reason=exc)
@@ -484,7 +557,10 @@ class KXProtocol(asyncio.BufferedProtocol):
         except Exception as ex:  # noqa: BLE001
             # we need to execute the rest of the function even if some rekey exception happens
             self.blogger.warning("error handling lost connection", error=ex)
-        self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
+        # we won't receive any more encrypted message after connection_lost, so we close the queue of encrypted messages
+        # ultimately, this will make the decrypt task finish and close the queue of decrypted messages
+        # reader coroutines waiting for messages will be unblocked and receive the exception
+        self._received_encrypted_msgs.close(self._machine.exception)
         # make wait_closed() return
         if not self._closed_fut.done():
             self._closed_fut.set_result(None) if exc is None else self._closed_fut.set_exception(exc)
@@ -497,25 +573,27 @@ class KXProtocol(asyncio.BufferedProtocol):
                 if not dfut.done():
                     dfut.set_result(None) if exc is None else dfut.set_exception(exc)
 
+        # cancel the rekeying background task
         if self._rekey_task is not None:
             self._rekey_task.cancel()
             self._rekey_task = None
 
+        # cancel the remove old keys background task
         if self._remove_old_keys_task is not None:
             self._remove_old_keys_task.cancel()
             self._remove_old_keys_task = None
 
         if self._decrypt_task is not None and self._client_handler is None:
-            # cancel the executor client-side
+            # when we are client side, shutdown the executor when the decrypt task finishes
 
             # because we received connection_lost, it is not possible anymore to send encrypted messages
             # because self._client_handler is None, we know we are client side
             # because the queue of encrypted messages has been closed, we know that the decrypt task will finish soon
             # when _decrypt_task finishes, we also know we wont be decrypting any more message
             # so in that case we can shutdown the executor as no encryption/decryption will happen anymore
-            self._decrypt_task.add_done_callback(self.shutdown_client_executor)
+            self._decrypt_task.add_done_callback(self._shutdown_client_executor)
 
-    def shutdown_client_executor(self, f: asyncio.Future) -> None:
+    def _shutdown_client_executor(self, f: asyncio.Future) -> None:
         if not f.cancelled() and f.exception() is not None:
             self.blogger.info("decrypt task finished with error", error=f.exception())
         try:
@@ -524,15 +602,24 @@ class KXProtocol(asyncio.BufferedProtocol):
             self.blogger.warning("error shutting down client executor", error=ex)
 
     def eof_received(self) -> bool:
-        self.blogger.info("eof received")
+        """
+        Called by asyncio when an EOF is received from the peer.
+        """
+        self.blogger.info("eof received from peer")
         try:
             self._send_to_machine(self._machine.trigger_reader_eof)
         except Exception as ex:  # noqa: BLE001
             self.blogger.warning("error handling eof received", error=ex)
-        self._received_encrypted_msgs.close(self._machine.exception)  # unblock readers
+        # we won't receive any more encrypted message after eof, so we close the queue of encrypted messages
+        self._received_encrypted_msgs.close(self._machine.exception)
+        # return False to indicate that we want the transport to close the connection
+        # connection_lost() will be called afterwards
         return False
 
     async def drain(self) -> None:
+        """
+        Wait until it is appropriate to resume writing to the transport.
+        """
         if self._connection_lost:
             raise EOF_EXCEPTION
         if self._transport.is_closing():
@@ -549,10 +636,16 @@ class KXProtocol(asyncio.BufferedProtocol):
             self._drain_futures.remove(waiter)
 
     def pause_writing(self) -> None:
+        """
+        Called by asyncio when the transport's buffer goes over the high-water mark.
+        """
         self.blogger.info("Pause writing")
         self._writing_paused = True
 
     def resume_writing(self) -> None:
+        """
+        Called by asyncio when the transport's buffer goes below the low-water mark.
+        """
         self.blogger.info("Resume writing")
         self._writing_paused = False
 
@@ -561,6 +654,9 @@ class KXProtocol(asyncio.BufferedProtocol):
                 waiter.set_result(None)
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:  # noqa: ANN401
+        """
+        Returns extra information about the transport.
+        """
         return self._transport.get_extra_info(name, default)
 
 
@@ -571,6 +667,11 @@ async def _connect(
     retry: int,
     retry_wait: int,
 ) -> tuple[asyncio.Transport, KXProtocol]:
+    """
+    Connects to a server using the given protocol factory, with retries.
+
+    Returns when the network connection is established.
+    """
     loop = asyncio.get_running_loop()
     blogger = logger.bind(server_host=host, server_port=port, role="client", color="async")
     port = int(port)
@@ -604,6 +705,11 @@ async def _open_connection(
     rekey_secs: int | None = 3600,
     rekey_grace_secs: int | None = 1800,
 ) -> StreamReaderWriter:
+    """
+    Open a connection to a server using the given state machine factory.
+
+    When the function returns, the network connection has been established and the key exchange has been completed.
+    """
     # one executor per client
     executor = ThreadPoolExecutor(max_workers=min(8, N_CPUS + 4))
 
@@ -885,14 +991,14 @@ class BaseAsyncRequestResponseClient(ABC):
         return self._rw is None or self._rw.is_closing()
 
     def close(self) -> None:
-        self._close_with_exception()
-
-    def _close_with_exception(self, exc: Exception | None = None) -> None:
         """
         Close the client and the underlying connection.
 
         This method is idempotent.
         """
+        self._close_with_exception()
+
+    def _close_with_exception(self, exc: Exception | None = None) -> None:
         if self.is_closing():
             self.blogger.debug("Client already closed")
         else:
@@ -914,10 +1020,11 @@ class BaseAsyncRequestResponseClient(ABC):
 
         If close() has not been called yet, this method will call it.
         """
-        self.close()
+        if not self.is_closing():
+            self.close()
         read_task = self._read_task
         # when the transport is closed, the read task will terminate at some point
-        if read_task is None or read_task.done():
+        if read_task is None:
             return
         try:
             await read_task
@@ -977,10 +1084,9 @@ class BaseAsyncRequestResponseClient(ABC):
             # The user cancelled the request before it was sent.
             fut.cancel()
             raise
-        except InvalidTransitionError as ex:
-            # Invalid transition means the client is already closed or closing.
+        except ClientClosedError:
             fut.cancel()
-            raise ClientClosedError from ex
+            raise
         except Exception as ex:
             # Some other exception occurred while sending the request.
             fut.cancel()
@@ -1052,9 +1158,12 @@ class BaseAsyncRequestResponseClient(ABC):
         fut = self._pending_requests.get(msg_id)
         if fut is None:
             # if we are here, it means we received a response with an unknown message ID
-            # possibly because the request timed out and was removed from pending requests
-            # or because the client has been closed and all pending requests were removed
-            # or because the server sent an unsolicited response
+            # possibly because:
+            # - the request timed out and was removed from pending requests
+            # - or because the client has been closed and all pending requests were removed
+            # - or because the server has actually sent an unsolicited response.
+            # We check that the client is not closed before handling the unexpected response,
+            # to avoid flooding the logs during client shutdown.
             if self._rw is not None and not self._rw.is_closing():
                 # client is not closed, we can handle the unexpected response
                 await self.handle_unexpected_response(msg, msg_id)
@@ -1085,7 +1194,12 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
     So that requests and responses are properly matched, the server must reuse the same message ID for the response as
     the one used in the request.
 
-    The server must support the KX_N pattern (sync or async).
+    The server must support the KX_N pattern (sync or async). KX_N is a one-way authenticated key exchange pattern
+    where only the server is authenticated. The client remains anonymous. Optional pre-shared keys (PSK) can be used for
+    additional security.
+
+    The client supports the async context manager protocol and should be used with `async with` statements to ensure
+    proper connection management.
     """
 
     def __init__(
@@ -1161,6 +1275,20 @@ class KX_N_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
 
 
 class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    """
+    KX_KK_AsyncRequestResponseClient is an asynchronous request/response client that uses the KX_KK key exchange pattern.
+
+    So that requests and responses are properly matched, the server must reuse the same message ID for the response as
+    the one used in the request.
+
+    The server must support the KX_KK pattern (sync or async). KX_KK is a mutual authenticated key exchange pattern where both
+    the client and server are authenticated. The client must know the server's public key, and the server must know the
+    client's public key prior to the key exchange.
+
+    The client supports the async context manager protocol and should be used with `async with` statements to ensure
+    proper connection management.
+    """
+
     def __init__(
         self,
         host: str,
@@ -1177,6 +1305,23 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         rekey_secs: int | None = 3600,
         rekey_grace_secs: int | None = 1800,
     ) -> None:
+        """
+        Initialize the KX_KK_AsyncRequestResponseClient.
+
+        Args:
+            host: The server hostname or IP address.
+            port: The server port.
+            client_pair: The client's key pair.
+            server_public_key: The server's public key.
+            limit: The threshold in bytes for the total size of received messages that have not been processed yet.
+            request_timeout_secs: The default timeout in seconds for requests. If None, requests will not timeout.
+            connect_retry: The number of times to retry connecting to the server if the connection fails.
+            connect_retry_wait: The number of seconds to wait between connection retries.
+            sent_msg_max_size: The maximum size in bytes of messages that can be sent.
+            received_msg_max_size: The maximum size in bytes of messages that can be received.
+            rekey_secs: The number of seconds between automatic rekeying. If None, automatic rekeying is disabled.
+            rekey_grace_secs: The number of seconds to keep old keys after a rekey. If None, old keys are kept indefinitely.
+        """
         super().__init__(request_timeout_secs=request_timeout_secs)
         self._host = host
         self._port = port
@@ -1217,6 +1362,21 @@ class KX_KK_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
 
 
 class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
+    """
+    KX_XX_AsyncRequestResponseClient is an asynchronous request/response client that uses the KX_XX key exchange pattern.
+
+    So that requests and responses are properly matched, the server must reuse the same message ID for the response as
+    the one used in the request.
+
+    The server must support the KX_XX pattern (sync or async). KX_XX is a mutual authenticated key exchange pattern where both
+    the client and server are authenticated. The client and server exchange their public keys during the key exchange: they
+    don't need to know each other's public keys prior to the key exchange. Optional pre-shared keys (PSK) can be used for
+    additional security.
+
+    The client supports the async context manager protocol and should be used with `async with` statements to ensure
+    proper connection management.
+    """
+
     def __init__(
         self,
         host: str,
@@ -1234,6 +1394,24 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
         rekey_secs: int | None = 3600,
         rekey_grace_secs: int | None = 1800,
     ) -> None:
+        """
+        Initialize the KX_XX_AsyncRequestResponseClient.
+
+        Args:
+            host: The server hostname or IP address.
+            port: The server port.
+            client_pair: The client's key pair.
+            psk: An optional pre-shared key.
+            limit: The threshold in bytes for the total size of received messages that have not been processed yet.
+            validate_server_key: An optional callable to validate the server's public key.
+            request_timeout_secs: The default timeout in seconds for requests. If None, requests will not timeout.
+            connect_retry: The number of times to retry connecting to the server if the connection fails.
+            connect_retry_wait: The number of seconds to wait between connection retries.
+            sent_msg_max_size: The maximum size in bytes of messages that can be sent.
+            received_msg_max_size: The maximum size in bytes of messages that can be received.
+            rekey_secs: The number of seconds between automatic rekeying. If None, automatic rekeying is disabled.
+            rekey_grace_secs: The number of seconds to keep old keys after a rekey. If None, old keys are kept indefinitely.
+        """
         super().__init__(request_timeout_secs=request_timeout_secs)
         self._host = host
         self._port = port
@@ -1276,16 +1454,30 @@ class KX_XX_AsyncRequestResponseClient(BaseAsyncRequestResponseClient):
 
 
 class ServerPendingProcessingTasks:
+    """
+    Utility class to keep track of pending server message processing tasks.
+
+    Usually the client would send different messages with different message IDs, but
+    in case the client reuses the same message ID for multiple messages, we keep track
+    of all pending tasks for a given message ID.
+    """
+
     def __init__(self) -> None:
         # keep track of pending server tasks by incoming message ID
         self.pending: dict[int, set[asyncio.Task]] = {}
 
     def register(self, msg_id: int, task: asyncio.Task) -> None:
+        """
+        Register a new pending task for the given message ID.
+        """
         if msg_id not in self.pending:
             self.pending[msg_id] = set()
         self.pending[msg_id].add(task)
 
     def done(self, msg_id: int, task: asyncio.Task) -> None:
+        """
+        Mark the given task as done for the given message ID.
+        """
         s = self.pending.get(msg_id)
         if s is None:
             return
@@ -1294,10 +1486,16 @@ class ServerPendingProcessingTasks:
             del self.pending[msg_id]
 
     def cancel(self, msg_id: int) -> None:
+        """
+        Cancel all pending tasks for the given message ID.
+        """
         for task in self.pending.get(msg_id, []):
             task.cancel()
 
     def cancel_all(self) -> int:
+        """
+        Cancel all pending tasks.
+        """
         nb = 0
         for tasks in self.pending.values():
             nb += len(tasks)
@@ -1307,11 +1505,27 @@ class ServerPendingProcessingTasks:
 
 
 class Stopping(Exception):
-    pass
+    """
+    Exception raised to indicate that the server handler is stopping.
+    """
 
 
 class BaseServerHandler(ABC):
+    """
+    BaseServerHandler is an abstract base class for server handlers that process incoming messages
+    from clients over a StreamReaderWriter.
+
+    Subclasses must implement the `handle_message` method to define how to process each incoming message.
+    To implement `handle_message`, subclasses can use the `get_msg` and `write_msg` methods of the base class.
+
+    The handler processes each incoming message in its own asyncio Task, allowing for concurrent processing
+    of multiple messages.
+    """
+
     def __init__(self) -> None:
+        """
+        Initialize the BaseServerHandler.
+        """
         self._tasks = ServerPendingProcessingTasks()
         self.stopping = asyncio.Event()
         self.rw: StreamReaderWriter
@@ -1319,7 +1533,13 @@ class BaseServerHandler(ABC):
 
     async def get_msg(self) -> tuple[bytes, int]:
         """
-        Get the next message from the stream reader-writer, but raise Stopping if self.stopping is set.
+        Get the next message from the stream reader-writer.
+
+        Returns:
+            A tuple containing the next incoming message as bytes and its message ID.
+
+        Raises:
+            Stopping: If stopping has been requested.
         """
         # wait for either a new message or for stopping
         get_msg_task = asyncio.create_task(self.rw.get_next_msg())
@@ -1408,7 +1628,8 @@ class BaseServerHandler(ABC):
         """
         Internal method to handle an incoming message.
 
-        This method is executed in its own Task for each incoming message.
+        This method is executed in its own Task for each incoming message. It
+        calls the `handle_message` method implemented by subclasses to process the message.
         """
         # _handle_message is executed in its own Task for each incoming message,
         # so we can use a context variable to store the message ID
@@ -1456,7 +1677,7 @@ class BaseServerHandler(ABC):
         """
         raise NotImplementedError
 
-    async def write(self, msg: Buffer, msg_id: int | None = None) -> None:
+    async def write_msg(self, msg: Buffer, msg_id: int | None = None) -> None:
         """
         Write a message to the stream writer, using the provided message ID or the one from the context variable.
 
@@ -1478,15 +1699,35 @@ class RequestResponseHandler(BaseServerHandler, ABC):
 
     @abstractmethod
     async def response(self, msg: bytes, msg_id: int) -> Buffer:
+        """
+        Process an incoming message and generate a response.
+
+        Must be implemented by subclasses to define how to process incoming messages.
+
+        If this method raises an exception, the handler will log the error and will be closed. The client
+        will receive a lost connection error.
+
+        Args:
+            msg: the incoming message bytes.
+            msg_id: the message ID of the incoming message.
+
+        Returns:
+            The intended response message as an object supporting the Buffer protocol.
+        """
         raise NotImplementedError
 
     async def handle_message(self, msg: bytes, msg_id: int) -> bool:
+        """
+        Implementation of the abstract method from BaseServerHandler to handle incoming messages.
+
+        Relies on the `response` method to process the message and generate a response.
+        """
         resp = await self.response(msg, msg_id)
         await self.rw.write_msg(resp, msg_id)
         return True
 
 
-def wrap_handler(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
+def _wrap_handler(handler: StreamHandlerFunction | type[BaseServerHandler]) -> StreamHandlerFunction:
     if isinstance(handler, type):
         if issubclass(handler, BaseServerHandler):
             return handler().handle
@@ -1589,7 +1830,7 @@ async def start_kx_n_server(
             server_pair, psk=psk, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(
-            machine, loop, client_handler=wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
+            machine, loop, client_handler=_wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
         )
 
     try:
@@ -1654,7 +1895,7 @@ async def start_kx_kk_server(
             server_pair, client_public_key, sent_msg_max_size=sent_msg_max_size, received_msg_max_size=received_msg_max_size
         )
         return KXProtocol(
-            machine, loop, client_handler=wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
+            machine, loop, client_handler=_wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
         )
 
     try:
@@ -1728,7 +1969,7 @@ async def start_kx_xx_server(
             validate_peer_key=validate_client_key,
         )
         return KXProtocol(
-            machine, loop, client_handler=wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
+            machine, loop, client_handler=_wrap_handler(handler), limit=limit, executor=executor, rekey_grace_secs=rekey_grace_secs
         )
 
     try:
