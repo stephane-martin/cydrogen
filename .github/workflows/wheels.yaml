@@ -46,7 +46,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false

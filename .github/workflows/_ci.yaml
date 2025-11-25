@@ -20,7 +20,7 @@ jobs:
       actions: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           show-progress: false
@@ -38,7 +38,7 @@ jobs:
         shell: bash
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
@@ -83,7 +83,7 @@ jobs:
         python-version: [3.12, 3.13, 3.14]
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
         python-version: [3.12, 3.13, 3.14]
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
@@ -147,7 +147,7 @@ jobs:
         shell: bash
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
@@ -183,7 +183,7 @@ jobs:
         python-version: [3.12, 3.13, 3.14]
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
@@ -216,7 +216,7 @@ jobs:
         shell: bash
     steps:
       - name: checkout cydrogen repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           show-progress: false
           persist-credentials: false
