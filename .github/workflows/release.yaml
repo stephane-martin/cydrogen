@@ -62,7 +62,7 @@ jobs:
         run: |
           nox -s "build_sdist-3.13"
       - name: Gather wheels   # wheels were built in the build_wheels job and uploaded as artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: wheels-*
           merge-multiple: true
