@@ -68,7 +68,7 @@ jobs:
           merge-multiple: true
           path: ./dist
       - name: Generate attestations for Github
-        uses: actions/attest-build-provenance@v3.0.0
+        uses: actions/attest-build-provenance@v3.1.0
         with:
           subject-path: 'dist/*'
       - name: Publish to PyPI # this also generates attestations for PyPI
