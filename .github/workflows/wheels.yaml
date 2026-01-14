@@ -38,7 +38,7 @@ jobs:
             cibw_build: "cp{312,313}-macosx_arm64"
             cibw_archs: "arm64"
             os: "macos"
-          - runner: "macos-13"
+          - runner: "macos-15-intel"
             cibw_build: "cp{312,313}-macosx_x86_64"
             cibw_archs: "x86_64"
             os: "macos"
