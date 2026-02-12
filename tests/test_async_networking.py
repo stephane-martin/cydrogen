@@ -37,7 +37,7 @@ MESSAGES = [
 ]
 
 
-logger = get_logger("cydrogen.tests")
+logger = get_logger()
 
 
 class H(RequestResponseHandler):
@@ -47,44 +47,42 @@ class H(RequestResponseHandler):
 
 @pytest.mark.asyncio
 async def test_async_client_async_server_kx_xx() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-    logger.info("server started")
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
 
-    try:
         async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
             logger.info("client connected")
             for msg in MESSAGES:
                 response = await client.request(msg)
                 assert response == msg.upper()
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_async_client_async_server_kx_kk() -> None:
-    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
-    await server.start_serving()
-
-    try:
+    server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY) as client:
             for msg in MESSAGES:
                 response = await client.request(msg)
                 assert response == msg.upper()
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_two_async_clients_async_server_kx_n() -> None:
-    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-
     responses_client1 = {}
     responses_client2 = {}
-    try:
+
+    server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
+
         async with (
             KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client1,
             KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK) as client2,
@@ -97,9 +95,7 @@ async def test_two_async_clients_async_server_kx_n() -> None:
             assert await t == msg.upper()
         for msg, t in responses_client2.items():
             assert await t == msg.upper()
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
@@ -109,16 +105,18 @@ async def test_client_without_server() -> None:
             pass
 
 
+async def create_delayed_server(delay: int) -> asyncio.Server:
+    logger.info("delaying server start by %s seconds", delay)
+    await asyncio.sleep(delay)
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    await server.start_serving()
+    logger.info("server started")
+    return server
+
+
 @pytest.mark.asyncio
 async def test_client_delayed_server() -> None:
-    async def delayed_server() -> asyncio.Server:
-        await asyncio.sleep(2)
-        server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-        await server.start_serving()
-        return server
-
-    server_task = asyncio.create_task(delayed_server())
-
+    server_task = asyncio.create_task(create_delayed_server(2))
     try:
         async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=3, connect_retry_wait=1) as client:
             for msg in MESSAGES:
@@ -128,18 +126,12 @@ async def test_client_delayed_server() -> None:
         server = await server_task
         server.close()
         await server.wait_closed()
+        logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_too_late_server() -> None:
-    async def delayed_server() -> asyncio.Server:
-        await asyncio.sleep(10)
-        server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-        await server.start_serving()
-        return server
-
-    server_task = asyncio.create_task(delayed_server())
-
+    server_task = asyncio.create_task(create_delayed_server(10))
     try:
         with pytest.raises(ConnectionRefusedError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, connect_retry=1, connect_retry_wait=1):
@@ -148,71 +140,67 @@ async def test_client_too_late_server() -> None:
         server = await server_task
         server.close()
         await server.wait_closed()
+        logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_server_kx_n_with_wrong_psk() -> None:
     server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-    try:
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=WRONG_PSK):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_server_kx_xx_with_wrong_psk() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-    try:
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=WRONG_PSK):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_server_kx_n_with_wrong_server_pubkey() -> None:
-    server: asyncio.Server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR_WRONG, psk=PSK)
-    await server.start_serving()
-    try:
+    server = await start_kx_n_server(H, HOST, PORT, SERVER_PAIR_WRONG, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_N_AsyncRequestResponseClient(HOST, PORT, SERVER_PUBKEY, psk=PSK):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_server_kx_kk_with_wrong_server_pubkey() -> None:
-    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR_WRONG, CLIENT_PUBKEY)
-    await server.start_serving()
-    try:
+    server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR_WRONG, CLIENT_PUBKEY)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, SERVER_PUBKEY):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_server_kx_kk_with_wrong_client_pubkey() -> None:
-    server: asyncio.Server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
-    await server.start_serving()
-    try:
+    server = await start_kx_kk_server(H, HOST, PORT, SERVER_PAIR, CLIENT_PUBKEY)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_KK_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR_WRONG, SERVER_PUBKEY):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
@@ -221,58 +209,51 @@ def failing_validation(pub: KxPublicKey) -> None:  # noqa: ARG001
 
 @pytest.mark.asyncio
 async def test_fail_validate_server_pubkey() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR)
-    await server.start_serving()
-
-    try:
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, validate_server_key=failing_validation):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_fail_validate_client_pubkey() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, validate_client_key=failing_validation)
-    await server.start_serving()
-
-    try:
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, validate_client_key=failing_validation)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(KeyExchangeException):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR):
                 pass
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_sends_too_big_message() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-
-    try:
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, sent_msg_max_size=10000) as client:
             await client.request(b"x" * 10000)  # This should succeed
             with pytest.raises(MessageTooBigException):  # this should fail client side
                 await client.request(b"x" * 10001)
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_server_receives_too_big_message() -> None:
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, received_msg_max_size=10000)
-    await server.start_serving()
-    try:
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, received_msg_max_size=10000)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(EOFError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
                 await client.request(b"x" * 10001)  # This should fail server side
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 class SendTooBigHandler(RequestResponseHandler):
@@ -283,31 +264,29 @@ class SendTooBigHandler(RequestResponseHandler):
 @pytest.mark.asyncio
 async def test_server_sends_too_big_message() -> None:
     # constrain the server to send messages of max size 10000, but instruct it to send a message bigger than that
-    server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
-    await server.start_serving()
-    try:
+    server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK, sent_msg_max_size=10000)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         # the MessageTooBigException is raised server side, and it will appear in server logs.
         # but on the client side, we will just get an EOFError when trying to read the response because the server closes the connection.
         with pytest.raises(EOFError):
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK) as client:
                 await client.request(b"test")  # This should fail server side
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
 async def test_client_receives_too_big_message() -> None:
-    server: asyncio.Server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK)
-    await server.start_serving()
-    try:
+    server = await start_kx_xx_server(SendTooBigHandler, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
         with pytest.raises(MessageTooBigException):
             # constrain the client to refuse to receive messages bigger than 10000 bytes
             async with KX_XX_AsyncRequestResponseClient(HOST, PORT, CLIENT_PAIR, psk=PSK, received_msg_max_size=10000) as client:
                 await client.request(b"test")  # This should fail client side
-    finally:
-        server.close()
-        await server.wait_closed()
+    logger.info("server stopped")
 
 
 @pytest.mark.asyncio
@@ -319,11 +298,11 @@ async def test_client_server_kx_xx_rekeying() -> None:
         logger.info("telling the client to stop")
         stopping.set()
 
-    server: asyncio.Server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, limit=128000)
-    await server.start_serving()
-    logger.info("server started")
+    server = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK, limit=128000)
+    async with server:
+        await server.start_serving()
+        logger.info("server started")
 
-    try:
         # rekey every 2 seconds, and we will take more than that to send all messages
         async with KX_XX_AsyncRequestResponseClient(
             HOST, PORT, CLIENT_PAIR, psk=PSK, rekey_secs=2, request_timeout_secs=120, limit=128000
@@ -339,8 +318,30 @@ async def test_client_server_kx_xx_rekeying() -> None:
             logger.info("client has finished")
             assert client.key_material_idx >= 1
         logger.info("client disconnected")
+    logger.info("server stopped")
 
-    finally:
-        server.close()
-        await server.wait_closed()
-        logger.info("server closed")
+
+@pytest.mark.asyncio
+async def test_server_already_running() -> None:
+    server1 = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server1:
+        await server1.start_serving()
+        logger.info("first server started")
+        with pytest.raises(OSError):
+            await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    logger.info("first server stopped")
+
+
+@pytest.mark.asyncio
+async def test_start_server_successive() -> None:
+    server1 = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server1:
+        await server1.start_serving()
+        logger.info("first server started")
+    logger.info("first server stopped")
+    # should work directly after the first server is closed because we use SO_REUSEADDR
+    server2 = await start_kx_xx_server(H, HOST, PORT, SERVER_PAIR, psk=PSK)
+    async with server2:
+        await server2.start_serving()
+        logger.info("second server started")
+    logger.info("second server stopped")

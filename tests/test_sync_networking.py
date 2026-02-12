@@ -42,7 +42,7 @@ MESSAGES = [
     b"ten",
 ]
 
-logger = get_logger("cydrogen.tests")
+logger = get_logger()
 
 
 class H_Mixin(BaseTCPHandler):

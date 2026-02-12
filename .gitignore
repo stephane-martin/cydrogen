@@ -78,4 +78,9 @@ cython_debug/
 /compile_commands.json
 
 # Gemini config files
-/.gemini/
+.gemini/
+gha-creds-*.json
+
+# crush config files
+/.crush/
+/.crush.json

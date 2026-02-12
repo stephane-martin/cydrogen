@@ -6,7 +6,7 @@ import pytest
 from cydrogen import get_logger
 from cydrogen._networking import MsgQueue, RWLock
 
-logger = get_logger("cydrogen.tests")
+logger = get_logger()
 
 
 @pytest.mark.asyncio

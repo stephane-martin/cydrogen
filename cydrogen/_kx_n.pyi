@@ -35,7 +35,14 @@ class Psk(BaseKey):
 
     Pre-shared keys are used optionally by the key exchange algorithms.
     """
-    def __init__(self, data: str | bytes | None) -> None: ...
+    def __init__(self, data: Self | str | bytes | None) -> None:
+        """
+        Initializes a Psk instance.
+
+        Args:
+            data: The pre-shared key data to initialize the Psk instance with. If None, an empty key is created.
+        """
+        ...
     def __eq__(self, other: object) -> bool: ...
 
 class SessionPair:
@@ -50,7 +57,7 @@ class SessionPair:
     rx: SecretBoxKey
     tx: SecretBoxKey
 
-    def __init__(self, rx: SecretBoxKey, tx: SecretBoxKey) -> None:
+    def __init__(self, rx: bytes | str | SecretBoxKey | Buffer, tx: bytes | str | SecretBoxKey | Buffer) -> None:
         """
         Initializes a SessionPair instance.
 

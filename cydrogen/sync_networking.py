@@ -29,7 +29,7 @@ from .networking import (
     ReceivedEncryptedMessage,
 )
 
-logger = get_logger("cydrogen")
+logger = get_logger()
 
 
 class Protocol:

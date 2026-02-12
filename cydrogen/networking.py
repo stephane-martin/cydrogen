@@ -33,7 +33,7 @@ from ._secretbox import SecretBox
 from .exceptions import CyException, InvalidPeerKeyException, KeyExchangeException
 from .logs import get_logger
 
-logger = get_logger("cydrogen")
+logger = get_logger()
 
 CANCEL_MESSAGE_ID: int = 0
 """
@@ -422,8 +422,8 @@ class BaseMachine:
             sent_msg_max_size: The maximum size of messages that can be sent, in bytes.
             received_msg_max_size: The maximum size of messages that can be received, in bytes.
         """
-        self.sent_msg_max_size: int = sent_msg_max_size
-        self.received_msg_max_size: int = received_msg_max_size
+        self.sent_msg_max_size: int = int(sent_msg_max_size)
+        self.received_msg_max_size: int = int(received_msg_max_size)
 
         self._transitions = Transitions()
 
@@ -521,7 +521,7 @@ class BaseMachine:
 
         self.exception: Exception | None = None
 
-        self.blogger = logger.bind()
+        self.blogger = logger.bind(cls="machine")
 
     @property
     def key_material_idx(self) -> int | None:
@@ -824,9 +824,9 @@ class KX_N_ClientStateMachine(BaseMachine):
 
     def __init__(
         self,
-        server_public_key: KxPublicKey,
+        server_public_key: bytes | str | Buffer | KxPublicKey,
         *,
-        psk: Psk | None = None,
+        psk: Psk | str | bytes | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -870,9 +870,9 @@ class KX_N_ClientStateMachine(BaseMachine):
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._server_public_key: KxPublicKey = server_public_key
-        self._psk = psk
-        self.blogger = self.blogger.bind(role="client_machine")
+        self._server_public_key: KxPublicKey = KxPublicKey(server_public_key)
+        self._psk: Psk = Psk(psk)
+        self.blogger = self.blogger.bind(role="client")
 
     def _receive_server_ack(self) -> MachineProducedEvent | None:
         if self._candidate_pair is None:
@@ -929,9 +929,9 @@ class KX_N_ServerStateMachine(BaseMachine):
 
     def __init__(
         self,
-        server_pair: KxPair,
+        server_pair: bytes | str | Buffer | KxPair,
         *,
-        psk: Psk | None = None,
+        psk: Psk | str | bytes | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -955,9 +955,9 @@ class KX_N_ServerStateMachine(BaseMachine):
         self._transitions.add_one(ExternalEvent.RECEIVE_PACKET1, MachineState.CONNECTED, MachineState.CONNECTED, self._receive_packet1)
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._server_pair: KxPair = server_pair
-        self._psk: Psk | None = psk
-        self.blogger = self.blogger.bind(role="server_machine")
+        self._server_pair: KxPair = KxPair(server_pair)
+        self._psk: Psk = Psk(psk)
+        self.blogger = self.blogger.bind(role="server")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         # we expect to receive packet1 from the client, length KX_N_PACKET1BYTES
@@ -1000,8 +1000,8 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
     def __init__(
         self,
-        client_pair: KxPair,
-        server_public_key: KxPublicKey,
+        client_pair: bytes | str | Buffer | KxPair,
+        server_public_key: bytes | str | Buffer | KxPublicKey,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -1027,10 +1027,10 @@ class KX_KK_ClientStateMachine(BaseMachine):
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._client_pair: KxPair = client_pair
-        self._server_public_key: KxPublicKey = server_public_key
+        self._client_pair: KxPair = KxPair(client_pair)
+        self._server_public_key: KxPublicKey = KxPublicKey(server_public_key)
         self._kx_state: KxKkClientState | None = None
-        self.blogger = self.blogger.bind(role="client_machine")
+        self.blogger = self.blogger.bind(role="client")
 
     def _receive_packet2(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1093,8 +1093,8 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
     def __init__(
         self,
-        server_pair: KxPair,
-        client_public_key: KxPublicKey,
+        server_pair: bytes | str | Buffer | KxPair,
+        client_public_key: bytes | str | Buffer | KxPublicKey,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
     ) -> None:
@@ -1119,9 +1119,9 @@ class KX_KK_ServerStateMachine(BaseMachine):
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._server_pair: KxPair = server_pair
-        self._client_public_key: KxPublicKey = client_public_key
-        self.blogger = self.blogger.bind(role="server_machine")
+        self._server_pair: KxPair = KxPair(server_pair)
+        self._client_public_key: KxPublicKey = KxPublicKey(client_public_key)
+        self.blogger = self.blogger.bind(role="server")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         # we expect to receive packet1 from the client, length KX_KK_PACKET1BYTES
@@ -1168,9 +1168,9 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
     def __init__(
         self,
-        client_pair: KxPair,
+        client_pair: bytes | str | Buffer | KxPair,
         *,
-        psk: Psk | None = None,
+        psk: Psk | str | bytes | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
         validate_peer_key: Callable[[KxPublicKey], None] | None = None,
@@ -1210,11 +1210,11 @@ class KX_XX_ClientStateMachine(BaseMachine):
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._client_pair: KxPair = client_pair
-        self._psk: Psk | None = psk
+        self._client_pair: KxPair = KxPair(client_pair)
+        self._psk: Psk = Psk(psk)
         self._server_public_key: KxPublicKey | None = None  # will be set after receiving packet2 from the server
         self._kx_state: KxXxClientState | None = None
-        self.blogger = self.blogger.bind(role="client_machine")
+        self.blogger = self.blogger.bind(role="client")
 
     def _receive_packet2(self) -> MachineProducedEvent | None:
         if self._kx_state is None:
@@ -1303,9 +1303,9 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
     def __init__(
         self,
-        server_pair: KxPair,
+        server_pair: bytes | str | Buffer | KxPair,
         *,
-        psk: Psk | None = None,
+        psk: Psk | str | bytes | None = None,
         received_msg_max_size: int = 2**20,
         sent_msg_max_size: int = 2**20,
         validate_peer_key: Callable[[KxPublicKey], None] | None = None,
@@ -1346,11 +1346,11 @@ class KX_XX_ServerStateMachine(BaseMachine):
 
         self._transitions.keep_only_valid_states(self._valid_states)
 
-        self._server_pair: KxPair = server_pair
-        self._psk: Psk | None = psk
+        self._server_pair: KxPair = KxPair(server_pair)
+        self._psk: Psk = Psk(psk)
         self._client_public_key: KxPublicKey | None = None  # will be set after receiving packet1 from the client
         self._kx_state: KxXxServerState | None = None
-        self.blogger = self.blogger.bind(role="server_machine")
+        self.blogger = self.blogger.bind(role="server")
 
     def _receive_packet1(self) -> MachineProducedEvent | None:
         if self._kx_state is not None:
