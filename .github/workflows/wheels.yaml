@@ -55,7 +55,7 @@ jobs:
         env:
           CIBW_BUILD: "${{ matrix.cibw_build }}"
           CIBW_ARCHS: "${{ matrix.cibw_archs }}"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: "wheels-${{ matrix.os }}-${{ matrix.cibw_archs }}"
           path: ./wheelhouse/*.whl
